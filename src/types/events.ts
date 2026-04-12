@@ -1,0 +1,139 @@
+// TypeScript mirror of the Rust event payloads in src-tauri/src/events.rs.
+// Keep these in sync — the event name constants in particular must match
+// exactly or the frontend will silently miss updates.
+
+export const EVENT_NAMES = {
+  SCAN_PROGRESS: 'scan_progress',
+  SCAN_COMPLETE: 'scan_complete',
+  WS_STATUS: 'ws_status',
+  QUERY_STARTED: 'query_started',
+  QUERY_COMPLETED: 'query_completed',
+  HISTORY_UPDATED: 'history_updated',
+  AUTH_EXPIRED: 'auth_expired',
+  SYNC_COMPLETED: 'sync_completed',
+  SYNC_FAILED: 'sync_failed',
+  STATS_UPDATED: 'stats_updated',
+} as const;
+
+export interface ScanProgress {
+  folder: string;
+  current: number;
+  total: number;
+  current_file: string;
+}
+
+export interface ScanComplete {
+  folder: string;
+  datasets: number;
+  columns: number;
+  errors: number;
+  total_bytes: number;
+  duration_ms: number;
+}
+
+export interface WsStatus {
+  status: 'online' | 'connecting' | 'offline' | 'error';
+  detail: string | null;
+}
+
+export interface QueryStarted {
+  query_id: string;
+  file_path: string;
+}
+
+export interface QueryCompleted {
+  query_id: string;
+  file_path: string;
+  status: 'success' | 'error';
+  row_count: number | null;
+  duration_ms: number;
+  error: string | null;
+}
+
+export interface SyncCompletedPayload {
+  folder: string;
+  datasets: number;
+}
+
+export interface SyncFailedPayload {
+  folder: string;
+  error: string;
+}
+
+export interface AgentStats {
+  total_queries: number;
+  queries_today: number;
+  queries_today_date: string | null;
+  successful_queries: number;
+  failed_queries: number;
+  total_bytes_read: number;
+  last_query_at: string | null;
+  uptime_started_at: string | null;
+}
+
+export interface AuditEntry {
+  timestamp: string;
+  folder: string;
+  dataset_count: number;
+  column_count: number;
+  total_bytes: number;
+  status: 'success' | 'error';
+  error: string | null;
+}
+
+export interface ScanStats {
+  datasets: number;
+  columns: number;
+  errors: number;
+  total_bytes: number;
+  duration_ms: number;
+}
+
+// Extended config types matching the new Rust schema.
+export interface WatchedFolder {
+  path: string;
+  recursive: boolean;
+  exclude_patterns: string[];
+  max_file_size_mb: number;
+  last_scan_at: string | null;
+  last_scan_stats: ScanStats | null;
+}
+
+export interface AgentConfig {
+  agent: {
+    name: string;
+    platform: string;
+    hostname: string;
+    agent_id: string | null;
+  };
+  watched_folders: WatchedFolder[];
+  cloud: {
+    api_url: string;
+    websocket_url: string;
+    web_url: string;
+  };
+  sync: {
+    interval_seconds: number;
+    auto_sync_on_change: boolean;
+    fallback_scan_interval_seconds: number;
+  };
+  app: {
+    theme: 'light' | 'dark' | 'system';
+    launch_at_login: boolean;
+    auto_update: boolean;
+    notifications_enabled: boolean;
+    first_run_completed: boolean;
+    window_hide_notified: boolean;
+  };
+}
+
+export interface QueryHistoryEntry {
+  query_id: string | null;
+  timestamp: string;
+  file_path: string;
+  sql: string;
+  status: 'success' | 'error';
+  row_count: number | null;
+  duration_ms: number;
+  error: string | null;
+}

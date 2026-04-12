@@ -1,0 +1,558 @@
+//! Tauri commands — the RPC surface exposed to the frontend via `invoke()`.
+//!
+//! Conventions:
+//!   * All commands return `Result<T, String>` so errors serialize cleanly to
+//!     JavaScript. Rich `AgentError` variants are flattened with `.to_string()`.
+//!   * Long-running work (scans, zip exports, HTTP calls) is kept off the UI
+//!     thread via `tokio::task::spawn_blocking` or `async` + reqwest.
+//!   * Commands that mutate config always go through `Config::load → mutate →
+//!     save` so every change is durable.
+
+use crate::audit;
+use crate::auth::{self, AgentToken};
+use crate::config::Config;
+use crate::events;
+use crate::history::{self, QueryHistoryEntry};
+use crate::keyring_store;
+use crate::scanner::{self, DatasetMetadata};
+use crate::stats::{self, Stats};
+use crate::watcher::{self, WatcherHandle};
+use crate::websocket::WebSocketClient;
+use serde_json::Value;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, Runtime};
+use tokio::sync::RwLock;
+
+// ---------------------------------------------------------------------------
+// Global handles
+// ---------------------------------------------------------------------------
+
+static WS_CLIENT: once_cell::sync::Lazy<Arc<RwLock<Option<WebSocketClient>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
+
+static WATCHER: once_cell::sync::Lazy<Arc<RwLock<Option<WatcherHandle>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
+
+// ---------------------------------------------------------------------------
+// Auth + config
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<AgentToken, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    auth::start_oauth_flow(agent_name, platform, config.cloud.api_url)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_config() -> Result<Config, String> {
+    Config::load().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_config(config: Config) -> Result<(), String> {
+    config.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_watched_folder(path: String) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.add_watched_folder(path, true);
+    config.save().map_err(|e| e.to_string())?;
+    let _ = restart_file_watcher().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_watched_folder(path: String) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.remove_watched_folder(&path);
+    config.save().map_err(|e| e.to_string())?;
+    let _ = restart_file_watcher().await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Scan + sync
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn scan_folder(folder_path: String) -> Result<Vec<DatasetMetadata>, String> {
+    scanner::scan_folder(&folder_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Rescan a folder and sync its metadata to the cloud in one shot. Emits
+/// scan_progress / scan_complete events and records an audit entry so the
+/// Privacy tab can show what was uploaded.
+#[tauri::command]
+pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -> Result<Value, String> {
+    let started = std::time::Instant::now();
+
+    // Flip tray to "syncing" so users see the work kick off.
+    crate::tray::set_state(&app, "syncing");
+
+    // 1. Scan the folder locally with progress events. The callback runs on
+    // the blocking scan thread so the UI stays smooth even for huge folders.
+    let folder_for_cb = folder_path.clone();
+    let app_for_cb = app.clone();
+    let progress_cb: scanner::ProgressCb = Box::new(move |current, total, current_file| {
+        events::emit_scan_progress(
+            &app_for_cb,
+            events::ScanProgress {
+                folder: folder_for_cb.clone(),
+                current,
+                total,
+                current_file: current_file.to_string(),
+            },
+        );
+    });
+
+    let datasets = scanner::scan_folder_with_progress(&folder_path, progress_cb)
+        .await
+        .map_err(|e| {
+            audit::record(&folder_path, 0, 0, 0, Some(e.to_string()));
+            events::emit_sync_failed(&app, &folder_path, &e.to_string());
+            crate::tray::set_state(&app, "online");
+            e.to_string()
+        })?;
+
+    let column_count: u64 = datasets.iter().map(|d| d.schema.len() as u64).sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let dataset_count = datasets.len() as u64;
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    // 2. Sync to cloud (if we have a token).
+    let result = if keyring_store::has_token() {
+        let config = Config::load().map_err(|e| e.to_string())?;
+        let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets.clone())
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(serde_json::json!({ "skipped": true, "reason": "no token" }))
+    };
+
+    match result {
+        Ok(resp) => {
+            // 3. Persist scan stats on the folder so the UI card can show them.
+            let mut config = Config::load().map_err(|e| e.to_string())?;
+            config.update_folder_scan_stats(
+                &folder_path,
+                crate::config::ScanStats {
+                    datasets: dataset_count,
+                    columns: column_count,
+                    errors: 0,
+                    total_bytes,
+                    duration_ms,
+                },
+                chrono::Utc::now().to_rfc3339(),
+            );
+            let _ = config.save();
+
+            // 4. Audit + events.
+            audit::record(&folder_path, dataset_count, column_count, total_bytes, None);
+            events::emit_scan_complete(
+                &app,
+                events::ScanComplete {
+                    folder: folder_path.clone(),
+                    datasets: dataset_count,
+                    columns: column_count,
+                    errors: 0,
+                    total_bytes,
+                    duration_ms,
+                },
+            );
+            events::emit_sync_completed(&app, &folder_path, dataset_count);
+            crate::tray::set_state(&app, "online");
+            Ok(resp)
+        }
+        Err(e) => {
+            audit::record(&folder_path, 0, 0, 0, Some(e.clone()));
+            events::emit_sync_failed(&app, &folder_path, &e);
+            crate::tray::set_state(&app, "online");
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn sync_metadata(datasets: Vec<DatasetMetadata>) -> Result<Value, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Token / session
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn has_token() -> Result<bool, String> {
+    Ok(keyring_store::has_token())
+}
+
+#[tauri::command]
+pub async fn get_agent_info() -> Result<Option<AgentToken>, String> {
+    if !keyring_store::has_token() {
+        return Ok(None);
+    }
+
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(format!("{}/v1/agent/info", config.cloud.api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if response.status().is_success() {
+        let agent_token: AgentToken = response.json().await.map_err(|e| e.to_string())?;
+        Ok(Some(agent_token))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn logout() -> Result<(), String> {
+    // Close websocket + watcher before clearing credentials so we don't leave
+    // a connected client trying to authenticate with a dead token.
+    let mut ws_guard = WS_CLIENT.write().await;
+    *ws_guard = None;
+    drop(ws_guard);
+
+    let mut watcher_guard = WATCHER.write().await;
+    *watcher_guard = None;
+    drop(watcher_guard);
+
+    keyring_store::delete_token().map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// File watcher
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_file_watcher() -> Result<(), String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    if config.watched_folders.is_empty() {
+        let mut guard = WATCHER.write().await;
+        *guard = None;
+        return Ok(());
+    }
+
+    if !config.sync.auto_sync_on_change {
+        let mut guard = WATCHER.write().await;
+        *guard = None;
+        return Ok(());
+    }
+
+    let folder_paths: Vec<String> = config
+        .watched_folders
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
+
+    let handle = watcher::start_watcher(folder_paths)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut guard = WATCHER.write().await;
+    *guard = Some(handle);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_file_watcher() -> Result<(), String> {
+    let mut guard = WATCHER.write().await;
+    *guard = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn restart_file_watcher() -> Result<(), String> {
+    stop_file_watcher().await?;
+    start_file_watcher().await
+}
+
+// ---------------------------------------------------------------------------
+// Query history + stats
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_query_history(limit: Option<usize>) -> Result<Vec<QueryHistoryEntry>, String> {
+    history::load_history(limit.unwrap_or(100)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_query_history() -> Result<(), String> {
+    history::clear_history().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_stats() -> Result<Stats, String> {
+    stats::load().map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Privacy / audit
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_sync_audit() -> Result<Vec<audit::AuditEntry>, String> {
+    audit::latest_by_folder().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_sync_audit() -> Result<(), String> {
+    audit::clear().map_err(|e| e.to_string())
+}
+
+/// Delete metadata for this agent from the cloud. Keeps local files untouched.
+///
+/// The backend exposes per-dataset DELETE only (`/v1/agent/datasets/{id}`),
+/// scoped server-side to the bearer token's agent_id, so this command lists
+/// then iterates. "Clear all" is rarely clicked, so an N+1 call pattern is
+/// acceptable and avoids adding a bulk endpoint.
+#[tauri::command]
+pub async fn clear_cloud_metadata() -> Result<Value, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    let base = &config.cloud.api_url;
+
+    // 1. List every dataset this agent has synced.
+    let list_resp = client
+        .get(format!("{}/v1/agent/datasets", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !list_resp.status().is_success() {
+        let body = list_resp.text().await.unwrap_or_default();
+        return Err(format!("List datasets failed: {}", body));
+    }
+
+    let payload: Value = list_resp.json().await.map_err(|e| e.to_string())?;
+    let datasets = payload["datasets"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let total = datasets.len();
+
+    // 2. Delete each by id. We tolerate individual failures and report the
+    //    deleted count so the UI can surface partial success.
+    let mut deleted = 0usize;
+    let mut last_error: Option<String> = None;
+    for ds in datasets {
+        let Some(id) = ds["id"].as_str() else { continue };
+        match client
+            .delete(format!("{}/v1/agent/datasets/{}", base, id))
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => deleted += 1,
+            Ok(r) => {
+                last_error = Some(format!(
+                    "delete {} returned {}",
+                    id,
+                    r.status().as_u16()
+                ));
+            }
+            Err(e) => last_error = Some(e.to_string()),
+        }
+    }
+
+    // If we couldn't delete anything but there was something to delete, bubble
+    // the last error up so the user sees a real failure in the toast.
+    if deleted == 0 && total > 0 {
+        return Err(last_error.unwrap_or_else(|| "No datasets were deleted".into()));
+    }
+
+    // Wipe the local audit log so the Privacy tab reflects the new state.
+    let _ = audit::clear();
+    Ok(serde_json::json!({
+        "cleared": true,
+        "deleted": deleted,
+        "total": total,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket tunnel
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_websocket_tunnel<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+
+    let client = WebSocketClient::new(config);
+    client.start_with_app(token, app).await;
+
+    let mut ws_guard = WS_CLIENT.write().await;
+    *ws_guard = Some(client);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_websocket_status() -> Result<String, String> {
+    let ws_guard = WS_CLIENT.read().await;
+    if let Some(client) = ws_guard.as_ref() {
+        Ok(format!("{:?}", client.get_status().await))
+    } else {
+        Ok("Offline".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics bundle
+// ---------------------------------------------------------------------------
+
+/// Zip up a redacted diagnostic bundle: config (with token fields removed),
+/// recent history, stats, audit log, and the agent version. Dropped on the
+/// desktop so users can attach it to support tickets.
+#[tauri::command]
+pub async fn export_diagnostic_bundle() -> Result<String, String> {
+    tokio::task::spawn_blocking(build_diagnostic_bundle)
+        .await
+        .map_err(|e| format!("diagnostic task failed: {}", e))?
+}
+
+fn build_diagnostic_bundle() -> Result<String, String> {
+    use zip::write::FileOptions;
+
+    let desktop = dirs::desktop_dir()
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| "no desktop dir".to_string())?;
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let out_path = desktop.join(format!("seryai-agent-diagnostic-{}.zip", timestamp));
+
+    let file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    // --- config.json (redacted) ---
+    if let Ok(config) = Config::load() {
+        let redacted = serde_json::to_string_pretty(&config).unwrap_or_default();
+        zip.start_file("config.json", opts).map_err(|e| e.to_string())?;
+        zip.write_all(redacted.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    // --- stats.json ---
+    if let Ok(s) = stats::load() {
+        let body = serde_json::to_string_pretty(&s).unwrap_or_default();
+        zip.start_file("stats.json", opts).map_err(|e| e.to_string())?;
+        zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    // --- query_history.jsonl (last 500 entries) ---
+    if let Ok(entries) = history::load_history(500) {
+        let body = serde_json::to_string_pretty(&entries).unwrap_or_default();
+        zip.start_file("query_history.json", opts).map_err(|e| e.to_string())?;
+        zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    // --- sync_audit.json ---
+    if let Ok(entries) = audit::load(usize::MAX) {
+        let body = serde_json::to_string_pretty(&entries).unwrap_or_default();
+        zip.start_file("sync_audit.json", opts).map_err(|e| e.to_string())?;
+        zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    }
+
+    // --- meta.json ---
+    let meta = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    });
+    zip.start_file("meta.json", opts).map_err(|e| e.to_string())?;
+    zip.write_all(serde_json::to_string_pretty(&meta).unwrap_or_default().as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(out_path.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Deep links + window management
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn open_in_sery_cloud() -> Result<(), String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let url = if let Some(agent_id) = &config.agent.agent_id {
+        format!("{}/agents/{}", config.cloud.web_url, agent_id)
+    } else {
+        config.cloud.web_url.clone()
+    };
+    open::that(url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn complete_first_run() -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.app.first_run_completed = true;
+    config.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    // Open the containing directory so the file is highlighted (OS-native
+    // behaviour). If the path is already a directory, just open it.
+    let target = if p.is_file() {
+        p.parent().map(|x| x.to_path_buf()).unwrap_or(p)
+    } else {
+        p
+    };
+    open::that(target).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn show_main_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::ActivationPolicy;
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_launch_at_login<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())?;
+    } else {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+
+    // Persist in config so next launch reflects the choice.
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.app.launch_at_login = enabled;
+    config.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
