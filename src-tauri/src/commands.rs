@@ -49,6 +49,14 @@ pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<Age
 }
 
 #[tauri::command]
+pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    auth::auth_with_workspace_key(key, display_name, config.cloud.api_url)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_config() -> Result<Config, String> {
     Config::load().map_err(|e| e.to_string())
 }

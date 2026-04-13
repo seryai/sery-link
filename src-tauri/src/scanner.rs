@@ -270,26 +270,30 @@ fn extract_schema(
         }
     };
 
-    let schema_sql = format!("SELECT * FROM {}('{}') LIMIT 1", read_func, path_str);
+    let schema_sql = format!("DESCRIBE SELECT * FROM {}('{}')", read_func, path_str);
 
-    let stmt = conn
+    let mut columns = Vec::new();
+    let mut stmt = conn
         .prepare(&schema_sql)
         .map_err(|e| AgentError::Database(format!("Failed to read schema: {}", e)))?;
 
-    let column_count = stmt.column_count();
-    let mut columns = Vec::new();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // column_name
+                row.get::<_, String>(1)?,  // column_type
+            ))
+        })
+        .map_err(|e| AgentError::Database(format!("Failed to read schema: {}", e)))?;
 
-    for i in 0..column_count {
-        let name = stmt
-            .column_name(i)
-            .map_err(|e| AgentError::Database(format!("Failed to get column name: {}", e)))?
-            .to_string();
-        let col_type = format!("{:?}", stmt.column_type(i));
-        columns.push(ColumnSchema {
-            name,
-            col_type,
-            nullable: true,
-        });
+    for row in rows {
+        if let Ok((name, col_type)) = row {
+            columns.push(ColumnSchema {
+                name,
+                col_type,
+                nullable: true,
+            });
+        }
     }
 
     let row_count: i64 = match conn.query_row(&count_sql, [], |row| row.get(0)) {

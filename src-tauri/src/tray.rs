@@ -14,6 +14,7 @@ use crate::stats;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 use tauri::{
+    image::Image,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
@@ -59,9 +60,13 @@ static TRAY_STATE: Lazy<Arc<RwLock<TrayState>>> = Lazy::new(|| {
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = build_menu(app, &TrayState::default())?;
 
+    let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-44x44.png"))
+        .expect("failed to load tray icon");
+
     let _tray = TrayIconBuilder::with_id("main")
         .tooltip("Sery Link — starting…")
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(tray_icon)
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| on_menu_event(app, event))

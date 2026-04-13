@@ -48,7 +48,7 @@ export function FolderList() {
       toast.success('Folder added');
 
       // Kick off an initial scan in the background
-      invoke('rescan_folder', { folder: selected }).catch((err) => {
+      invoke('rescan_folder', { folderPath: selected }).catch((err) => {
         console.error('Initial scan failed:', err);
       });
     } catch (err) {
@@ -172,7 +172,7 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
   const rescan = async () => {
     setRescanning(true);
     try {
-      await invoke('rescan_folder', { folder: folder.path });
+      await invoke('rescan_folder', { folderPath: folder.path });
       // Toast is fired by the sync_completed event listener; no need to
       // duplicate here.
     } catch (err) {

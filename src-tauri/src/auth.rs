@@ -148,6 +148,44 @@ async fn start_callback_server() -> Result<String> {
     Ok(code)
 }
 
+pub async fn auth_with_workspace_key(
+    key: String,
+    display_name: String,
+    api_url: String,
+) -> Result<AgentToken> {
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let platform = std::env::consts::OS;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/agent/auth/key", api_url))
+        .json(&serde_json::json!({
+            "key": key,
+            "display_name": display_name,
+            "platform": platform,
+            "hostname": hostname,
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        // Parse {"detail": "..."} from FastAPI error responses
+        let message = serde_json::from_str::<serde_json::Value>(&error_text)
+            .ok()
+            .and_then(|v| v["detail"].as_str().map(String::from))
+            .unwrap_or(error_text);
+        return Err(AgentError::Auth(message));
+    }
+
+    let token: AgentToken = response.json().await?;
+    keyring_store::save_token(&token.access_token)?;
+    Ok(token)
+}
+
 async fn exchange_token(code: String, api_url: String) -> Result<AgentToken> {
     let client = reqwest::Client::new();
 
