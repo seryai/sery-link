@@ -20,14 +20,16 @@ import {
   Database,
   Eye,
   Folder as FolderIcon,
+  Key,
   Loader2,
   Lock,
-  LogIn,
+
   Shield,
-  Sparkles,
+
   Zap,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from '../stores/agentStore';
+import seryLogo from '../assets/sery-logo.svg';
 import { useToast } from './Toast';
 import type { AgentConfig } from '../types/events';
 
@@ -88,9 +90,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   return (
     <Card>
       <div className="mb-6 flex items-center justify-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-purple-100 dark:bg-purple-900/40">
-          <Sparkles className="h-8 w-8 text-purple-600 dark:text-purple-300" />
-        </div>
+        <img src={seryLogo} alt="Sery" className="h-16 w-16" />
       </div>
 
       <h1 className="mb-2 text-center text-3xl font-bold text-slate-900 dark:text-slate-50">
@@ -138,11 +138,16 @@ function ConnectStep({
   toast: ReturnType<typeof useToast>;
 }) {
   const [agentName, setAgentName] = useState(() => defaultAgentName());
+  const [workspaceKey, setWorkspaceKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { setAuthenticated, setAgentInfo, setConfig } = useAgentStore();
 
   const handleConnect = async () => {
+    if (!workspaceKey.trim()) {
+      setError('Please enter a workspace key.');
+      return;
+    }
     if (!agentName.trim()) {
       setError('Please enter a name for this agent.');
       return;
@@ -150,9 +155,9 @@ function ConnectStep({
     setLoading(true);
     setError(null);
     try {
-      const token = await invoke<AgentToken>('start_auth_flow', {
-        agentName: agentName.trim(),
-        platform: detectPlatform(),
+      const token = await invoke<AgentToken>('auth_with_key', {
+        key: workspaceKey.trim(),
+        displayName: agentName.trim(),
       });
       setAgentInfo(token);
       setAuthenticated(true);
@@ -184,9 +189,26 @@ function ConnectStep({
   return (
     <Card>
       <StepHeader
-        icon={<LogIn className="h-6 w-6" />}
-        title="Connect your account"
-        subtitle="We'll open your browser to sign in. No credentials are stored here."
+        icon={<Key className="h-6 w-6" />}
+        title="Connect your workspace"
+        subtitle="Paste a workspace key from your Sery dashboard settings."
+      />
+
+      <label
+        htmlFor="workspaceKey"
+        className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200"
+      >
+        Workspace key
+      </label>
+      <input
+        id="workspaceKey"
+        type="text"
+        value={workspaceKey}
+        onChange={(e) => setWorkspaceKey(e.target.value)}
+        placeholder="sery_k_..."
+        disabled={loading}
+        autoComplete="off"
+        className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
       />
 
       <label
@@ -219,12 +241,12 @@ function ConnectStep({
           {loading ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Opening browser…
+              Connecting…
             </>
           ) : (
             <>
-              <LogIn className="h-4 w-4" />
-              Sign in to Sery
+              <Key className="h-4 w-4" />
+              Connect
             </>
           )}
         </PrimaryButton>
@@ -274,7 +296,7 @@ function FolderStep({
 
       // Kick off the initial scan (fire-and-forget — event stream will
       // surface progress on the dashboard).
-      invoke('rescan_folder', { folder: selected }).catch((err) => {
+      invoke('rescan_folder', { folderPath: selected }).catch((err) => {
         console.error('Initial scan failed:', err);
       });
 

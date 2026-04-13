@@ -14,7 +14,7 @@ mod tray;
 mod watcher;
 mod websocket;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{image::Image, Manager, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +29,16 @@ pub fn run() {
             Some(vec![]),
         ))
         .setup(|app| {
+            // Set the window icon explicitly so it shows in dev mode too.
+            // On macOS, the dock icon comes from the bundle .icns file, but
+            // setting window.set_icon() ensures the icon shows in dev mode
+            // and on minimize badges.
+            if let Some(window) = app.get_webview_window("main") {
+                let icon = Image::from_bytes(include_bytes!("../icons/window-icon.png"))
+                    .expect("failed to load app icon");
+                let _ = window.set_icon(icon);
+            }
+
             // Stash a global AppHandle so background tasks (watcher, periodic
             // rescan) can emit events without us threading it through every
             // layer of the call graph.
@@ -88,6 +98,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::start_auth_flow,
+            commands::auth_with_key,
             commands::get_config,
             commands::save_config,
             commands::add_watched_folder,

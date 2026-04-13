@@ -119,7 +119,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: default_theme(),
-            launch_at_login: false,
+            launch_at_login: true,
             auto_update: true,
             notifications_enabled: true,
             first_run_completed: false,
