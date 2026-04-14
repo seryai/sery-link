@@ -127,8 +127,9 @@ function AppInner() {
     );
   }
 
-  // Not authenticated OR first-run not complete → show onboarding
-  if (!authenticated || !onboardingComplete) {
+  // Not authenticated → show onboarding
+  // (Once authenticated, user can access the app regardless of onboarding completion)
+  if (!authenticated) {
     return <OnboardingWizard />;
   }
 
