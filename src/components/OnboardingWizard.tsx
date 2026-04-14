@@ -141,7 +141,7 @@ function ConnectStep({
   const [workspaceKey, setWorkspaceKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { setAuthenticated, setAgentInfo, setConfig } = useAgentStore();
+  const { setAuthenticated, setAgentInfo, setConfig, setOnboardingComplete } = useAgentStore();
 
   const handleConnect = async () => {
     if (!workspaceKey.trim()) {
@@ -161,6 +161,14 @@ function ConnectStep({
       });
       setAgentInfo(token);
       setAuthenticated(true);
+
+      // Mark onboarding as complete so user doesn't see wizard again
+      try {
+        await invoke('complete_first_run');
+        setOnboardingComplete(true);
+      } catch (err) {
+        console.warn('Failed to mark onboarding complete:', err);
+      }
 
       // Refresh config so downstream steps see `authenticated` state
       try {

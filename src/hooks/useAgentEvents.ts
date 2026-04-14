@@ -27,6 +27,7 @@ export function useAgentEvents() {
   const {
     setConnectionStatus,
     setStats,
+    setConfig,
     applyScanProgress,
     clearScanProgress,
     prependHistory,
@@ -122,13 +123,14 @@ export function useAgentEvents() {
       }),
     );
 
-    // Sync results — toast + audit refresh
+    // Sync results — toast + audit refresh + config reload
     unsubs.push(
       listen<SyncCompletedPayload>(EVENT_NAMES.SYNC_COMPLETED, (event) => {
         toast.success(
           `Synced ${event.payload.datasets} dataset${event.payload.datasets === 1 ? '' : 's'} from ${folderLabel(event.payload.folder)}`,
         );
         refreshAudit();
+        refreshConfig(setConfig);
       }),
     );
 
@@ -136,6 +138,7 @@ export function useAgentEvents() {
       listen<SyncFailedPayload>(EVENT_NAMES.SYNC_FAILED, (event) => {
         toast.error(`Sync failed: ${event.payload.error}`);
         refreshAudit();
+        refreshConfig(setConfig);
       }),
     );
 
@@ -158,5 +161,14 @@ async function refreshAudit() {
     useAgentStore.getState().setAudit(audit as never);
   } catch (err) {
     console.error('Failed to refresh audit:', err);
+  }
+}
+
+async function refreshConfig(setConfig: (config: unknown) => void) {
+  try {
+    const config = await invoke('get_config');
+    setConfig(config);
+  } catch (err) {
+    console.error('Failed to refresh config:', err);
   }
 }
