@@ -12,6 +12,7 @@ import { useAgentStore } from '../stores/agentStore';
 import { useToast } from '../components/Toast';
 import {
   EVENT_NAMES,
+  type AgentConfig,
   type AgentStats,
   type QueryCompleted,
   type QueryHistoryEntry,
@@ -164,9 +165,9 @@ async function refreshAudit() {
   }
 }
 
-async function refreshConfig(setConfig: (config: unknown) => void) {
+async function refreshConfig(setConfig: (config: AgentConfig) => void) {
   try {
-    const config = await invoke('get_config');
+    const config = await invoke<AgentConfig>('get_config');
     setConfig(config);
   } catch (err) {
     console.error('Failed to refresh config:', err);

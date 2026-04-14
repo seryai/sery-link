@@ -2,6 +2,7 @@ mod audit;
 mod auth;
 mod commands;
 mod config;
+mod csv;
 mod duckdb_engine;
 mod error;
 mod events;
