@@ -30,10 +30,17 @@ pub struct DatasetMetadata {
     pub relative_path: String,
     pub file_format: String,
     pub size_bytes: u64,
-    pub row_count_estimate: i64,
+    pub row_count_estimate: Option<i64>,
     pub schema: Vec<ColumnSchema>,
     pub last_modified: String,
+    /// Extracted markdown text for document files (DOCX, PPTX, HTML, etc.).
+    /// `None` for tabular files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_markdown: Option<String>,
 }
+
+/// File extensions classified as document (non-tabular) types.
+const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnSchema {
@@ -177,7 +184,12 @@ fn is_supported(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()).unwrap_or(""),
         "parquet" | "csv" | "xlsx" | "xls"
+        | "docx" | "pptx" | "html" | "htm" | "ipynb"
     )
+}
+
+fn is_document_ext(ext: &str) -> bool {
+    DOCUMENT_EXTENSIONS.contains(&ext)
 }
 
 fn is_excluded(path: &Path, base: &str, patterns: &[Pattern]) -> bool {
@@ -220,22 +232,72 @@ fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
-
     let last_modified = file_metadata
         .modified()
         .ok()
         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    Ok(DatasetMetadata {
-        relative_path,
-        file_format: ext.to_string(),
-        size_bytes: file_metadata.len(),
-        row_count_estimate: row_count,
-        schema,
-        last_modified,
-    })
+    if is_document_ext(ext) {
+        // Document files — extract markdown via anytomd
+        let document_markdown = extract_document_markdown(file_path, ext);
+        Ok(DatasetMetadata {
+            relative_path,
+            file_format: ext.to_string(),
+            size_bytes: file_metadata.len(),
+            row_count_estimate: None,
+            schema: vec![],
+            last_modified,
+            document_markdown,
+        })
+    } else {
+        // Tabular files — DuckDB schema extraction
+        let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
+        Ok(DatasetMetadata {
+            relative_path,
+            file_format: ext.to_string(),
+            size_bytes: file_metadata.len(),
+            row_count_estimate: Some(row_count),
+            schema,
+            last_modified,
+            document_markdown: None,
+        })
+    }
+}
+
+/// Convert a document file to markdown using anytomd.
+/// Returns `Some(markdown)` on success, `None` on error (logged and skipped).
+fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
+    let bytes = match fs::read(file_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "[scanner] failed to read document {:?}: {}",
+                file_path, e
+            );
+            return None;
+        }
+    };
+
+    // Cap at 50 MB (anytomd default max_input_bytes)
+    if bytes.len() > 50 * 1024 * 1024 {
+        eprintln!(
+            "[scanner] document {:?} exceeds 50 MB, skipping conversion",
+            file_path
+        );
+        return None;
+    }
+
+    match anytomd::convert_bytes(&bytes, ext, &anytomd::ConversionOptions::default()) {
+        Ok(result) => Some(result.markdown),
+        Err(e) => {
+            eprintln!(
+                "[scanner] anytomd conversion failed for {:?}: {}",
+                file_path, e
+            );
+            None
+        }
+    }
 }
 
 fn extract_schema(
