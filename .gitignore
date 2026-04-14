@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Sidecar build artifacts (PyInstaller)
+sidecar/build/
+sidecar/dist/
+sidecar/*.spec

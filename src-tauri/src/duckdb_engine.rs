@@ -56,16 +56,22 @@ fn
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    // For xlsx we transparently convert to a cached CSV so the rest of the
-    // query pipeline is uniform. The original file_path is kept for error
-    // reporting but the effective read target is the cached CSV.
-    let (effective_path, effective_ext): (Cow<str>, &str) =
-        if file_ext == "xlsx" || file_ext == "xls" {
+    // For xlsx we transparently convert to cached CSV, then to Parquet.
+    // For csv we transparently convert to cached Parquet for 10-100x faster queries.
+    // The original file_path is kept for error reporting but the effective read
+    // target is the cached Parquet file.
+    let (effective_path, effective_ext): (Cow<str>, &str) = match file_ext {
+        "xlsx" | "xls" => {
             let csv = excel::xlsx_to_csv(Path::new(file_path))?;
-            (Cow::Owned(csv.to_string_lossy().to_string()), "csv")
-        } else {
-            (Cow::Borrowed(file_path), file_ext)
-        };
+            let parquet = crate::csv::csv_to_parquet(&csv)?;
+            (Cow::Owned(parquet.to_string_lossy().to_string()), "parquet")
+        },
+        "csv" => {
+            let parquet = crate::csv::csv_to_parquet(Path::new(file_path))?;
+            (Cow::Owned(parquet.to_string_lossy().to_string()), "parquet")
+        },
+        _ => (Cow::Borrowed(file_path), file_ext)
+    };
 
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
