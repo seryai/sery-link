@@ -6,7 +6,7 @@ The Sery.ai Desktop Agent is a **production-ready Tauri application** that conne
 
 **Status**: ✅ **Feature Complete** - All core components implemented
 
-**Last Updated**: April 10, 2026
+**Last Updated**: April 14, 2026
 
 ---
 
@@ -50,7 +50,8 @@ The Sery.ai Desktop Agent is a **production-ready Tauri application** that conne
 
 ### 4. Metadata Scanner (100%)
 - ✅ Recursive folder scanning
-- ✅ Parquet and CSV file detection
+- ✅ Parquet, CSV, and Excel file detection
+- ✅ Document file detection (DOCX, PPTX, HTML, PDF, IPYNB)
 - ✅ Schema extraction using DuckDB
 - ✅ Row count estimation
 - ✅ File size and last modified tracking
@@ -59,6 +60,24 @@ The Sery.ai Desktop Agent is a **production-ready Tauri application** that conne
 **Files**:
 - `src-tauri/src/scanner.rs` - File scanning and metadata extraction
 - `src/components/FolderList.tsx` - Sync UI
+
+### 4.5. Document Processing (100%) 🆕
+- ✅ MarkItDown sidecar integration (PyInstaller-compiled Python binary)
+- ✅ Support for DOCX, PPTX, HTML, PDF, Jupyter notebooks
+- ✅ Automatic conversion to Markdown on file detection
+- ✅ Privacy-first: raw files never leave user's machine
+- ✅ Fallback to anytomd (Rust-native) if sidecar fails
+- ✅ Zero external dependencies (Python bundled)
+
+**Files**:
+- `sidecar/markitdown_worker.py` - Python worker script
+- `sidecar/build.py` - Build script (PyInstaller)
+- `sidecar/dist/markitdown-sidecar-aarch64-apple-darwin` - Compiled binary (180 MB)
+- `src-tauri/src/scanner.rs` - Sidecar integration (try_sidecar_conversion)
+- `src-tauri/tauri.conf.json` - Sidecar bundle configuration
+
+**Architecture**:
+See [SIDECAR_IMPLEMENTATION.md](./SIDECAR_IMPLEMENTATION.md) for full details.
 
 ### 5. Configuration Management (100%)
 - ✅ JSON-based config file (`~/.seryai/config.json`)

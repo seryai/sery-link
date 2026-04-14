@@ -45,7 +45,6 @@ function AppInner() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const {
     authenticated,
-    onboardingComplete,
     setAuthenticated,
     setAgentInfo,
     setConfig,
