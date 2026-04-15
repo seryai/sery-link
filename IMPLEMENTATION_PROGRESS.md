@@ -67,6 +67,25 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Commits:**
 - `a095ffb` - feat: Phase 2 - Local Metadata Cache (DuckDB-based offline search)
 
+### Cache Integration with Command Palette ✅ DONE
+**Status:** Complete
+**Effort:** ~1-2 hours
+**Implementation:**
+- ✅ Integrated useMetadataCache hook into CommandPalette component
+- ✅ Added workspaceId prop from agentInfo to CommandPalette
+- ✅ Dataset search triggered on queries 2+ characters
+- ✅ Search results appear in 'Datasets' section of command palette
+- ✅ Click dataset to reveal in Finder
+- ✅ Fixed TypeScript compilation errors (imports, types)
+
+**Files modified:**
+- `src/App.tsx` - Added agentInfo/config destructuring, passed workspaceId to CommandPalette
+- `src/components/CommandPalette.tsx` - Integrated cache search, dataset commands
+- `src/hooks/useMetadataCache.ts` - Fixed import bug (was 'use', now 'react')
+
+**Commits:**
+- `fdc66c2` - feat: integrate metadata cache with command palette for dataset search
+
 ### Dataset Relationship Graph ⏳ TODO
 **Status:** Not started
 **Effort:** ~3-4 days (data analysis + visualization)
@@ -129,14 +148,14 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ## Implementation Statistics
 
-- **Total Tasks:** 16
-- **Completed:** 7 (43.75%)
+- **Total Tasks:** 17
+- **Completed:** 8 (47.06%)
 - **In Progress:** 0 (0%)
-- **Not Started:** 9 (56.25%)
+- **Not Started:** 9 (52.94%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
-- Phase 2: 50% complete (2/4 features) 🚧
+- Phase 2: 75% complete (3/4 features) 🚧
 - Phase 3: 0% complete
 - Phase 4: 0% complete
 
@@ -144,10 +163,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ## Next Steps (Priority Order)
 
-1. **Integrate cache with Command Palette** - Add dataset search to Cmd+K
-2. **Dataset Relationship Graph** (Phase 2) - Visual discovery of data connections
-3. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX
-4. **MCP Plugin System** (Phase 3) - Enable community extensibility
+1. **Dataset Relationship Graph** (Phase 2) - Visual discovery of data connections
+2. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX
+3. **MCP Plugin System** (Phase 3) - Enable community extensibility
 
 ---
 
@@ -167,15 +185,17 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Local metadata cache: DuckDB integration was smooth (already a dependency)
 - Cache fuzzy search uses simple LIKE patterns - could upgrade to FTS later
 - Need to add Recent/MRU tracking for better UX
+- Cache + Command Palette integration was seamless - React hooks made it trivial
+- Dataset search in Cmd+K works well with 2-char minimum to avoid noise
 
 ### Technical Debt
 
-- Command palette should integrate with metadata cache for dataset search (next step)
 - Add folder action from command palette doesn't trigger FolderList picker (need event system)
 - Missing tests for keyboard shortcuts, command palette, and metadata cache
 - No analytics tracking for command palette usage (consider adding)
 - Metadata cache sync from backend not yet implemented (manual upsert only)
+- Dataset actions in command palette currently only "Reveal in Finder" - could add more
 
 ---
 
-Last updated: 2024-01-XX (Phase 2: Command Palette + Metadata Cache shipped)
+Last updated: 2024-01-XX (Phase 2: 75% complete - Cache integration with Command Palette shipped)
