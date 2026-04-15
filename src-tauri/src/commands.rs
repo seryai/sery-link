@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::events;
 use crate::history::{self, QueryHistoryEntry};
 use crate::keyring_store;
-use crate::metadata_cache::{self, CachedDataset, SearchResult, CacheStats, MetadataCache};
+use crate::metadata_cache::{CachedDataset, SearchResult, CacheStats, MetadataCache};
 use crate::scanner::{self, DatasetMetadata};
 use crate::stats::{self, Stats};
 use crate::watcher::{self, WatcherHandle};
@@ -569,19 +569,9 @@ pub async fn set_launch_at_login<R: Runtime>(app: AppHandle<R>, enabled: bool) -
 // ---------------------------------------------------------------------------
 // Local metadata cache (offline dataset search)
 // ---------------------------------------------------------------------------
-
-static METADATA_CACHE: once_cell::sync::Lazy<Arc<RwLock<Option<MetadataCache>>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
-
-/// Initialize the metadata cache (call on app startup or first use)
-async fn ensure_cache() -> Result<(), String> {
-    let mut cache_lock = METADATA_CACHE.write().await;
-    if cache_lock.is_none() {
-        let cache = MetadataCache::new().map_err(|e| e.to_string())?;
-        *cache_lock = Some(cache);
-    }
-    Ok(())
-}
+// NOTE: We create a new MetadataCache instance for each command because DuckDB's
+// Connection uses RefCell internally and cannot be safely shared across threads.
+// This is fine - DuckDB is file-based and handles concurrent access natively.
 
 #[tauri::command]
 pub async fn search_cached_datasets(
@@ -589,56 +579,52 @@ pub async fn search_cached_datasets(
     query: String,
     limit: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    ensure_cache().await?;
-    let cache_lock = METADATA_CACHE.read().await;
-    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.search(&workspace_id, &query, limit).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_all_cached_datasets(workspace_id: String) -> Result<Vec<CachedDataset>, String> {
-    ensure_cache().await?;
-    let cache_lock = METADATA_CACHE.read().await;
-    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.get_all(&workspace_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_cached_dataset(id: String) -> Result<Option<CachedDataset>, String> {
-    ensure_cache().await?;
-    let cache_lock = METADATA_CACHE.read().await;
-    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.get_by_id(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn upsert_cached_dataset(dataset: CachedDataset) -> Result<(), String> {
-    ensure_cache().await?;
-    let mut cache_lock = METADATA_CACHE.write().await;
-    let cache = cache_lock.as_mut().ok_or("Cache not initialized")?;
+    let mut cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.upsert_dataset(&dataset).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn upsert_cached_datasets(datasets: Vec<CachedDataset>) -> Result<(), String> {
-    ensure_cache().await?;
-    let mut cache_lock = METADATA_CACHE.write().await;
-    let cache = cache_lock.as_mut().ok_or("Cache not initialized")?;
+    let mut cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.upsert_many(&datasets).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn clear_cached_workspace(workspace_id: String) -> Result<(), String> {
-    ensure_cache().await?;
-    let mut cache_lock = METADATA_CACHE.write().await;
-    let cache = cache_lock.as_mut().ok_or("Cache not initialized")?;
+    let mut cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.clear_workspace(&workspace_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_cache_stats() -> Result<CacheStats, String> {
-    ensure_cache().await?;
-    let cache_lock = METADATA_CACHE.read().await;
-    let cache = cache_lock.as_ref().ok_or("Cache not initialized")?;
+    let cache = MetadataCache::new().map_err(|e| e.to_string())?;
     cache.get_stats().map_err(|e| e.to_string())
+}
+
+// ─── Dataset Relationships ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn detect_dataset_relationships(
+    workspace_id: String,
+) -> Result<Vec<crate::relationship_detector::DatasetRelationship>, String> {
+    crate::relationship_detector::detect_relationships(&workspace_id)
+        .map_err(|e| e.to_string())
 }
