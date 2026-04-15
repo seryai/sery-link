@@ -877,13 +877,92 @@ pub async fn install_marketplace_plugin(plugin_id: String) -> Result<(), String>
     } else {
         return Err("Marketplace not loaded".to_string());
     };
-    
+
     let plugins_dir = dirs::home_dir()
         .ok_or_else(|| "Could not find home directory".to_string())?
         .join(".sery")
         .join("plugins");
-    
+
     let installer = PluginInstaller::new(plugins_dir);
     installer.install(&entry).await
+        .map_err(|e| e.to_string())
+}
+
+// ─── SQL Recipe Executor ───────────────────────────────────────────────────
+
+use crate::recipe_executor::{Recipe, RecipeExecutor};
+use std::collections::HashMap;
+
+static RECIPE_EXECUTOR: Lazy<Arc<RwLock<RecipeExecutor>>> =
+    Lazy::new(|| Arc::new(RwLock::new(RecipeExecutor::new())));
+
+#[tauri::command]
+pub async fn load_recipes_from_dir(dir_path: String) -> Result<Vec<Recipe>, String> {
+    let path = PathBuf::from(dir_path);
+    let mut executor = RECIPE_EXECUTOR.write().await;
+
+    executor.load_recipes_from_dir(&path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_recipe(file_path: String) -> Result<Recipe, String> {
+    let path = PathBuf::from(file_path);
+    let mut executor = RECIPE_EXECUTOR.write().await;
+
+    executor.load_recipe(&path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_recipes(query: String) -> Result<Vec<Recipe>, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+    let results = executor.search_recipes(&query);
+    Ok(results.into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn get_recipe(recipe_id: String) -> Result<Option<Recipe>, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+    Ok(executor.get_recipe(&recipe_id).cloned())
+}
+
+#[tauri::command]
+pub async fn list_recipes() -> Result<Vec<Recipe>, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+    Ok(executor.list_recipes().into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn filter_recipes_by_data_source(data_source: String) -> Result<Vec<Recipe>, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+    Ok(executor.filter_by_data_source(&data_source).into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn render_recipe_sql(
+    recipe_id: String,
+    params: HashMap<String, serde_json::Value>
+) -> Result<String, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+
+    let recipe = executor.get_recipe(&recipe_id)
+        .ok_or_else(|| format!("Recipe not found: {}", recipe_id))?;
+
+    executor.render_sql(recipe, &params)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn validate_recipe_tables(
+    recipe_id: String,
+    available_tables: HashMap<String, Vec<String>>
+) -> Result<(), String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+
+    let recipe = executor.get_recipe(&recipe_id)
+        .ok_or_else(|| format!("Recipe not found: {}", recipe_id))?;
+
+    executor.validate_tables(recipe, &available_tables)
         .map_err(|e| e.to_string())
 }
