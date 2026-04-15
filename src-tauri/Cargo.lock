@@ -5482,6 +5482,7 @@ dependencies = [
  "notify",
  "once_cell",
  "open",
+ "regex",
  "reqwest 0.11.27",
  "serde",
  "serde_json",

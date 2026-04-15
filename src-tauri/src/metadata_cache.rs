@@ -11,7 +11,6 @@
 
 use duckdb::{Connection, params};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use crate::error::{AgentError, Result};
 
