@@ -194,14 +194,34 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-## 🎯 Phase 4: Future — NOT STARTED
+## 🎯 Phase 4: Future — IN PROGRESS
 
 **Goal:** Advanced workflow automation
 
-### Local-First Query History ⏳ TODO
-- Store query history in local SQLite
-- Offline access to past queries
-- Export query history
+### Local-First Query History ✅ DONE
+**Status:** Complete
+**Effort:** ~1 day (Frontend enhancements)
+**Implementation:**
+- ✅ JSONL persistence at `~/.seryai/query_history.jsonl` (already existed)
+- ✅ Automatic rotation (keeps last 1000 entries)
+- ✅ Offline access - no cloud dependency
+- ✅ Export to CSV with proper quote escaping
+- ✅ Statistics dashboard:
+  - Total queries (success/error breakdown)
+  - Success rate with progress bar
+  - Average query duration
+  - Total rows processed
+  - Top 5 most queried files
+- ✅ Search by file path, SQL, or error
+- ✅ Filter by status (all/success/error)
+- ✅ Real-time updates via WebSocket events
+- ✅ Expandable rows with SQL and error details
+
+**Files modified:**
+- `src/components/History.tsx` - Added export and statistics features
+
+**Commits:**
+- `3c95b4e` - feat: enhance Local-First Query History with export and statistics
 
 ### Pricing Model Revision ⏳ TODO
 **Recommendation:** Free forever core + paid cloud
@@ -214,15 +234,15 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 ## Implementation Statistics
 
 - **Total Tasks:** 17
-- **Completed:** 11 (64.71%)
+- **Completed:** 12 (70.59%)
 - **In Progress:** 0 (0%)
-- **Not Started:** 6 (35.29%)
+- **Not Started:** 5 (29.41%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
 - Phase 2: 100% complete ✅
 - Phase 3: 100% complete ✅
-- Phase 4: 0% complete
+- Phase 4: 50% complete (1/2 features done)
 
 ---
 
@@ -231,8 +251,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 1. ~~**Quick Actions Menu** (Phase 2)~~ - REMOVED (feature was already in FolderCard dropdown)
 2. ~~**Export/Import Metadata** (Phase 3)~~ - ✅ COMPLETE
 3. ~~**MCP Plugin System** (Phase 3)~~ - ✅ COMPLETE
-4. **Local-First Query History** (Phase 4) - Offline query access and export
+4. ~~**Local-First Query History** (Phase 4)~~ - ✅ COMPLETE
 5. **Plugin Execution Layer** (Phase 4) - WebAssembly runtime for plugin code
+6. **Pricing Model Revision** (Future) - Free core + paid cloud tiers
 
 ---
 
@@ -277,6 +298,16 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Empty state UI teaches users where to install plugins (~/.sery/plugins/)
 - Toggle switches + uninstall buttons provide expected plugin management UX
 
+**Phase 4:**
+- Local-First Query History: JSONL format was already implemented, just needed UI polish
+- useMemo for statistics prevents recalculation on every render
+- CSV export: proper quote escaping (replace " with "") prevents CSV injection
+- Statistics show value immediately (success rate, top files) without complex analysis
+- Toggle stats visibility keeps UI clean for users who don't need it
+- Blob + createObjectURL pattern works well for client-side file downloads
+- Real-time updates via WebSocket events make history feel "live"
+- Top N queries useful for identifying hot paths in data access
+
 ### Technical Debt
 
 - Add folder action from command palette doesn't trigger FolderList picker (need event system)
@@ -287,4 +318,4 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-Last updated: 2024-01-XX (Phase 3: 100% complete ✅ - MCP Plugin System shipped)
+Last updated: 2024-01-XX (Phase 4: 50% complete - Local-First Query History enhanced)
