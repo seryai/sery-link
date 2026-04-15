@@ -337,6 +337,7 @@ mod tests {
             entry_point: "plugin.wasm".to_string(),
             icon: None,
             homepage: None,
+            functions: None,
         }
     }
 

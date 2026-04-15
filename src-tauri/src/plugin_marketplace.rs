@@ -308,7 +308,7 @@ mod tests {
                 entry_point: "plugin.wasm".to_string(),
                 icon: None,
                 homepage: None,
-                functions: vec![],
+                functions: None,
             },
             source: PluginSource::Local {
                 path: format!("/plugins/{}", id),
