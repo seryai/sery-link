@@ -25,9 +25,10 @@ import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { PluginsPanel } from './PluginsPanel';
 import { MarketplacePanel } from './MarketplacePanel';
+import { RecipePanel } from './RecipePanel';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'plugins' | 'marketplace' | 'about';
+type Tab = 'general' | 'sync' | 'app' | 'plugins' | 'marketplace' | 'recipes' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
@@ -217,6 +218,9 @@ export function Settings() {
         <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')}>
           Marketplace
         </TabButton>
+        <TabButton active={tab === 'recipes'} onClick={() => setTab('recipes')}>
+          Recipes
+        </TabButton>
         <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
           About
         </TabButton>
@@ -230,6 +234,7 @@ export function Settings() {
       {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
       {tab === 'plugins' && <PluginsPanel />}
       {tab === 'marketplace' && <MarketplacePanel />}
+      {tab === 'recipes' && <RecipePanel />}
       {tab === 'about' && (
         <AboutPanel
           draft={draft}
