@@ -14,17 +14,16 @@ import {
   Monitor,
   Moon,
   Power,
-  Puzzle,
   RefreshCw,
   Save,
   Settings as SettingsIcon,
   Sun,
-  Trash2,
   Upload,
   Zap,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { PluginsPanel } from './PluginsPanel';
 import type { AgentConfig } from '../types/events';
 
 type Tab = 'general' | 'sync' | 'app' | 'plugins' | 'about';
@@ -467,192 +466,6 @@ function AppPanel({
           })
         }
       />
-    </Panel>
-  );
-}
-
-// ─── Plugins ────────────────────────────────────────────────────────────────
-
-interface Plugin {
-  manifest: {
-    id: string;
-    name: string;
-    version: string;
-    author: string;
-    description: string;
-    capabilities: string[];
-    permissions: string[];
-    homepage?: string;
-  };
-  enabled: boolean;
-}
-
-function PluginsPanel() {
-  const toast = useToast();
-  const [plugins, setPlugins] = useState<Plugin[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPlugins();
-  }, []);
-
-  const loadPlugins = async () => {
-    try {
-      const list = await invoke<[[Plugin['manifest'], boolean]]>('list_plugins');
-      setPlugins(
-        list.map(([manifest, enabled]) => ({ manifest, enabled }))
-      );
-    } catch (err) {
-      toast.error(`Failed to load plugins: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const togglePlugin = async (pluginId: string, currentlyEnabled: boolean) => {
-    try {
-      if (currentlyEnabled) {
-        await invoke('disable_plugin', { pluginId });
-        toast.info('Plugin disabled');
-      } else {
-        await invoke('enable_plugin', { pluginId });
-        toast.success('Plugin enabled');
-      }
-      await loadPlugins();
-    } catch (err) {
-      toast.error(`Failed to toggle plugin: ${err}`);
-    }
-  };
-
-  const uninstallPlugin = async (pluginId: string, name: string) => {
-    if (
-      !window.confirm(`Uninstall "${name}"? This will remove the plugin from disk.`)
-    ) {
-      return;
-    }
-    try {
-      await invoke('uninstall_plugin', { pluginId });
-      toast.success('Plugin uninstalled');
-      await loadPlugins();
-    } catch (err) {
-      toast.error(`Failed to uninstall plugin: ${err}`);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <RefreshCw className="h-6 w-6 animate-spin text-slate-400" />
-      </div>
-    );
-  }
-
-  if (plugins.length === 0) {
-    return (
-      <Panel>
-        <div className="rounded-lg border-2 border-dashed border-slate-200 p-12 text-center dark:border-slate-800">
-          <Puzzle className="mx-auto mb-4 h-12 w-12 text-slate-400 dark:text-slate-600" />
-          <h3 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
-            No plugins installed
-          </h3>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Plugins extend Sery Link with custom data sources, transformations,
-            and visualizations.
-          </p>
-          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            Install plugins by placing them in{' '}
-            <code className="rounded bg-slate-100 px-1 text-xs dark:bg-slate-900">
-              ~/.sery/plugins/
-            </code>
-          </p>
-        </div>
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel>
-      <div className="space-y-3">
-        {plugins.map((plugin) => (
-          <div
-            key={plugin.manifest.id}
-            className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"
-          >
-            <div className="flex items-start justify-between">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Puzzle className="h-5 w-5 shrink-0 text-purple-600 dark:text-purple-400" />
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    {plugin.manifest.name}
-                  </h3>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    v{plugin.manifest.version}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                  {plugin.manifest.description}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {plugin.manifest.capabilities.map((cap) => (
-                    <span
-                      key={cap}
-                      className="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
-                    >
-                      {cap}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  by {plugin.manifest.author}
-                  {plugin.manifest.homepage && (
-                    <>
-                      {' '}
-                      •{' '}
-                      <a
-                        href={plugin.manifest.homepage}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:underline"
-                      >
-                        website
-                      </a>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  onClick={() =>
-                    togglePlugin(plugin.manifest.id, plugin.enabled)
-                  }
-                  role="switch"
-                  aria-checked={plugin.enabled}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    plugin.enabled
-                      ? 'bg-purple-600'
-                      : 'bg-slate-300 dark:bg-slate-700'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                      plugin.enabled ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-                <button
-                  onClick={() =>
-                    uninstallPlugin(plugin.manifest.id, plugin.manifest.name)
-                  }
-                  className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800 dark:hover:text-rose-400"
-                  title="Uninstall plugin"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
     </Panel>
   );
 }
