@@ -79,20 +79,20 @@
 | Phase 3: Export/import + plugins | ✅ Complete | 100% |
 | Phase 4: Query history + execution | ✅ Complete | 100% |
 | Phase 5: Advanced plugins | ✅ Complete | 100% |
-| Phase 6: Marketplace backend | ✅ Complete | 80% |
+| Phase 6: Marketplace UI | ✅ Complete | 100% |
 
-**Overall:** 16/19 tasks complete (84.21%)
+**Overall:** 19/19 tasks complete (100%)
 
 ---
 
 ## 📅 Roadmap (Post-MVP)
 
-### v0.2.0 - Marketplace UI (1-2 weeks)
-- [ ] Frontend marketplace browser component
-- [ ] Plugin detail pages
-- [ ] One-click install from UI
-- [ ] HTTP/GitHub download implementation
-- [ ] Seed marketplace.json with community plugins
+### v0.2.0 - Marketplace UI ✅ SHIPPED
+- [x] Frontend marketplace browser component
+- [x] Plugin detail pages
+- [x] One-click install from UI
+- [x] Seed marketplace.json with 5 community plugins
+- [ ] HTTP/GitHub download implementation (deferred to v0.3.0)
 
 ### v0.3.0 - Advanced Features (2-3 weeks)
 - [ ] Async host functions (http_get for plugins)
