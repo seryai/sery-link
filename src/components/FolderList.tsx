@@ -18,15 +18,18 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Network,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { RelationshipGraph } from './RelationshipGraph';
 import type { AgentConfig, WatchedFolder } from '../types/events';
 
 export function FolderList() {
-  const { config, setConfig, scansInFlight } = useAgentStore();
+  const { config, setConfig, scansInFlight, agentInfo } = useAgentStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
 
   const reloadConfig = async () => {
     try {
@@ -91,15 +94,27 @@ export function FolderList() {
               : `${folders.length} folder${folders.length === 1 ? '' : 's'} · ${totalDatasets} dataset${totalDatasets === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`}
           </p>
         </div>
-        <button
-          onClick={addFolder}
-          disabled={busy}
-          className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
-          title="Read-only access — your files are never modified"
-        >
-          <Plus className="h-4 w-4" />
-          Watch Folder
-        </button>
+        <div className="flex items-center gap-2">
+          {totalDatasets > 0 && (
+            <button
+              onClick={() => setShowGraph(true)}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              title="Visualize dataset relationships"
+            >
+              <Network className="h-4 w-4" />
+              Show Relationships
+            </button>
+          )}
+          <button
+            onClick={addFolder}
+            disabled={busy}
+            className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+            title="Read-only access — your files are never modified"
+          >
+            <Plus className="h-4 w-4" />
+            Watch Folder
+          </button>
+        </div>
       </div>
 
       {folders.length === 0 ? (
@@ -115,6 +130,14 @@ export function FolderList() {
             />
           ))}
         </div>
+      )}
+
+      {/* Relationship Graph Modal */}
+      {showGraph && (
+        <RelationshipGraph
+          workspaceId={agentInfo?.workspace_id ?? null}
+          onClose={() => setShowGraph(false)}
+        />
       )}
     </div>
   );
