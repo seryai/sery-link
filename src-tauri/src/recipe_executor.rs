@@ -490,3 +490,24 @@ mod tests {
         assert!(executor.validate_tables(&recipe, &empty_tables).is_err());
     }
 }
+
+#[test]
+fn test_load_all_example_recipes() {
+    use std::path::PathBuf;
+    let mut executor = RecipeExecutor::new();
+    let recipes_dir = PathBuf::from("../examples/recipes");
+    
+    let recipes = executor.load_recipes_from_dir(&recipes_dir)
+        .expect("Failed to load example recipes");
+    
+    assert!(recipes.len() >= 9, "Expected at least 9 recipes, found {}", recipes.len());
+    
+    // Verify we have both FREE and PRO recipes
+    let free_count = recipes.iter().filter(|r| matches!(r.tier, RecipeTier::Free)).count();
+    let pro_count = recipes.iter().filter(|r| matches!(r.tier, RecipeTier::Pro)).count();
+    
+    assert!(free_count >= 5, "Expected at least 5 FREE recipes, found {}", free_count);
+    assert!(pro_count >= 4, "Expected at least 4 PRO recipes, found {}", pro_count);
+    
+    println!("✅ Loaded {} recipes ({} FREE, {} PRO)", recipes.len(), free_count, pro_count);
+}
