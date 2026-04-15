@@ -1,0 +1,73 @@
+{
+  "id": "com.sery.text-analyzer",
+  "name": "Text Analyzer",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "Advanced text analysis: statistics, readability, sentiment",
+  "capabilities": ["data-source", "transform"],
+  "permissions": ["read-files"],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null,
+  "functions": [
+    {
+      "name": "parse_text_from_memory",
+      "description": "Load text file for analysis",
+      "parameters": [
+        { "name": "data_ptr", "type": "i32" },
+        { "name": "data_len", "type": "i32" }
+      ],
+      "returns": "i32",
+      "requires_file": true
+    },
+    {
+      "name": "get_text_stats",
+      "description": "Get word, sentence, paragraph counts (packed i32)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_unique_words",
+      "description": "Count unique words (estimated)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_avg_word_length",
+      "description": "Average word length × 10 (e.g., 45 = 4.5 chars)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_readability_score",
+      "description": "Flesch reading ease (0-100, higher = easier)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_sentiment",
+      "description": "Sentiment score (-100 negative to +100 positive)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_char_count",
+      "description": "Total character count",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_version",
+      "description": "Get plugin version",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    }
+  ]
+}
