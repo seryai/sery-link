@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use wasmer::{imports, Function, Instance, Memory, Module, Store, Value};
+use wasmer::{imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, Module, Store, StoreMut, Value};
 
 /// Global registry mapping plugin IDs to their WASM memory
 /// This allows host functions to access memory for string reading/writing
@@ -229,6 +229,9 @@ impl PluginRuntime {
     fn build_imports(&mut self, manifest: &PluginManifest) -> wasmer::Imports {
         let mut imports = imports! {};
 
+        // Create function environment for host functions with Store access
+        let env = FunctionEnv::new(&mut self.store, self.env.clone());
+
         // Always provide basic logging
         let log_fn = Function::new_typed(&mut self.store, |msg: i32| {
             println!("[plugin] log: {}", msg);
@@ -239,40 +242,96 @@ impl PluginRuntime {
         for permission in &manifest.permissions {
             match permission {
                 PluginPermission::ReadFiles => {
-                    // Expose file reading function (stub for Phase 4)
-                    // Phase 4: Full WASM-callable read_file requires wasmer FunctionEnv pattern
-                    // For now, use execute_plugin_with_file command (host reads, passes to plugin)
-                    let read_file_fn = Function::new_typed(
+                    // Expose file reading function with FunctionEnvMut for Store access
+                    // Signature: read_file(path_ptr, path_len, output_ptr, output_max_len) -> bytes_read or -1
+                    let read_file_fn = Function::new_typed_with_env(
                         &mut self.store,
-                        |_path_ptr: i32, _path_len: i32, _output_ptr: i32, _output_max_len: i32| -> i32 {
-                            // TODO Phase 5: Implement with FunctionEnvMut for Store access
-                            // Signature: read_file(path_ptr, path_len, output_ptr, output_max) -> bytes or -1
-                            // Current workaround: use execute_plugin_with_file Tauri command
-                            -1 // Not yet implemented
+                        &env,
+                        |mut env: FunctionEnvMut<HostEnv>,
+                         path_ptr: i32,
+                         path_len: i32,
+                         output_ptr: i32,
+                         output_max_len: i32| -> i32 {
+                            // Get plugin ID from environment
+                            let plugin_id = {
+                                let host_env = env.data();
+                                host_env.get_plugin_id()
+                            };
+
+                            let plugin_id = match plugin_id {
+                                Some(id) => id,
+                                None => return -1,
+                            };
+
+                            // Get memory from global registry
+                            let memory = {
+                                let registry = PLUGIN_MEMORY.read().unwrap();
+                                registry.get(&plugin_id).cloned()
+                            };
+
+                            let memory = match memory {
+                                Some(m) => m,
+                                None => return -1,
+                            };
+
+                            // Read path from plugin memory
+                            let view = memory.view(&env);
+                            let mut path_bytes = vec![0u8; path_len as usize];
+                            for i in 0..path_len as usize {
+                                path_bytes[i] = view.read_u8((path_ptr as u64) + (i as u64)).unwrap_or(0);
+                            }
+
+                            let path_str = match String::from_utf8(path_bytes) {
+                                Ok(s) => s,
+                                Err(_) => return -1,
+                            };
+
+                            // Read file if allowed
+                            let file_bytes = {
+                                let host_env = env.data();
+                                let path = PathBuf::from(&path_str);
+                                match host_env.read_file_if_allowed(&path) {
+                                    Ok(bytes) => bytes,
+                                    Err(_) => return -1,
+                                }
+                            };
+
+                            // Write file contents to output buffer
+                            let bytes_to_write = file_bytes.len().min(output_max_len as usize);
+                            let view = memory.view(&env);
+                            for (i, byte) in file_bytes.iter().take(bytes_to_write).enumerate() {
+                                if view.write_u8((output_ptr as u64) + (i as u64), *byte).is_err() {
+                                    return -1;
+                                }
+                            }
+
+                            bytes_to_write as i32
                         },
                     );
                     imports.define("env", "read_file", read_file_fn);
                 }
                 PluginPermission::Network => {
-                    // Expose HTTP functions
-                    let http_get_fn = Function::new_typed(&mut self.store, |url: i32| -> i32 {
-                        // TODO: Implement sandboxed HTTP
+                    // Expose HTTP functions (stub - full implementation would require async runtime)
+                    let http_get_fn = Function::new_typed(&mut self.store, |_url: i32| -> i32 {
+                        // TODO Phase 6: Implement sandboxed HTTP with async runtime
+                        // For now, return -1 to signal not implemented
                         -1
                     });
                     imports.define("env", "http_get", http_get_fn);
                 }
                 PluginPermission::ExecuteCommands => {
-                    // Expose command execution (highly restricted)
-                    let exec_fn = Function::new_typed(&mut self.store, |cmd: i32| -> i32 {
-                        // TODO: Implement sandboxed command execution
+                    // Expose command execution (highly restricted, stub for security)
+                    let exec_fn = Function::new_typed(&mut self.store, |_cmd: i32| -> i32 {
+                        // TODO Phase 6: Implement sandboxed command execution
+                        // This is intentionally not implemented for security reasons
                         -1
                     });
                     imports.define("env", "exec", exec_fn);
                 }
                 PluginPermission::Clipboard => {
-                    // Expose clipboard functions
+                    // Expose clipboard functions (stub - would need platform-specific code)
                     let get_clipboard_fn = Function::new_typed(&mut self.store, || -> i32 {
-                        // TODO: Implement clipboard access
+                        // TODO Phase 6: Implement clipboard access via Tauri clipboard plugin
                         -1
                     });
                     imports.define("env", "get_clipboard", get_clipboard_fn);
