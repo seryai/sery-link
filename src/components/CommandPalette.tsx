@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import type { AgentConfig } from '../types/events';
+import { useMetadataCache, type CachedDataset } from '../hooks/useMetadataCache';
 
 interface Command {
   id: string;
@@ -26,11 +27,12 @@ interface Command {
   icon: React.ReactNode;
   keywords: string[];
   action: () => void | Promise<void>;
-  section: 'navigation' | 'folders' | 'actions' | 'recent';
+  section: 'navigation' | 'folders' | 'actions' | 'datasets' | 'recent';
 }
 
 interface CommandPaletteProps {
   config: AgentConfig | null;
+  workspaceId: string | null;
   onNavigate: (tab: 'folders' | 'history' | 'privacy' | 'settings') => void;
   onAddFolder: () => void;
   onRescanFolder?: (path: string) => void;
@@ -39,6 +41,7 @@ interface CommandPaletteProps {
 
 export function CommandPalette({
   config,
+  workspaceId,
   onNavigate,
   onAddFolder,
   onRescanFolder,
@@ -47,6 +50,9 @@ export function CommandPalette({
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [datasetResults, setDatasetResults] = useState<CachedDataset[]>([]);
+
+  const cache = useMetadataCache(workspaceId);
 
   // Build command list from available actions
   const commands = useMemo<Command[]>(() => {
@@ -152,6 +158,41 @@ export function CommandPalette({
     return baseCommands;
   }, [config, onNavigate, onAddFolder, onRescanFolder, onRemoveFolder]);
 
+  // Search datasets from cache when query changes
+  useEffect(() => {
+    if (!query.trim() || !workspaceId) {
+      setDatasetResults([]);
+      return;
+    }
+
+    // Debounce dataset search (only search if query is 2+ chars)
+    if (query.length < 2) {
+      setDatasetResults([]);
+      return;
+    }
+
+    cache.search(query, 10).then((results) => {
+      setDatasetResults(results.map((r) => r.dataset));
+    });
+  }, [query, workspaceId, cache]);
+
+  // Build dataset commands from search results
+  const datasetCommands = useMemo<Command[]>(() => {
+    return datasetResults.map((dataset) => ({
+      id: `dataset-${dataset.id}`,
+      label: dataset.name,
+      description: dataset.path,
+      icon: <Database className="h-4 w-4" />,
+      keywords: [dataset.name.toLowerCase(), dataset.path.toLowerCase()],
+      action: async () => {
+        // Copy path to clipboard
+        await invoke('reveal_in_finder', { path: dataset.path });
+        setIsOpen(false);
+      },
+      section: 'datasets' as const,
+    }));
+  }, [datasetResults]);
+
   // Fuzzy filter commands based on query
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return commands;
@@ -167,10 +208,15 @@ export function CommandPalette({
     });
   }, [commands, query]);
 
-  // Reset selection when filtered list changes
+  // Combine filtered commands with dataset commands
+  const allCommands = useMemo(() => {
+    return [...filteredCommands, ...datasetCommands];
+  }, [filteredCommands, datasetCommands]);
+
+  // Reset selection when combined list changes
   useEffect(() => {
     setSelectedIndex(0);
-  }, [filteredCommands]);
+  }, [allCommands]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -196,7 +242,7 @@ export function CommandPalette({
         case 'ArrowDown':
           e.preventDefault();
           setSelectedIndex((i) =>
-            i < filteredCommands.length - 1 ? i + 1 : i,
+            i < allCommands.length - 1 ? i + 1 : i,
           );
           break;
 
@@ -207,8 +253,8 @@ export function CommandPalette({
 
         case 'Enter':
           e.preventDefault();
-          if (filteredCommands[selectedIndex]) {
-            filteredCommands[selectedIndex].action();
+          if (allCommands[selectedIndex]) {
+            allCommands[selectedIndex].action();
           }
           break;
       }
@@ -216,18 +262,19 @@ export function CommandPalette({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filteredCommands, selectedIndex]);
+  }, [isOpen, allCommands, selectedIndex]);
 
   if (!isOpen) return null;
 
   const sections = Array.from(
-    new Set(filteredCommands.map((c) => c.section)),
-  ) as Array<'navigation' | 'folders' | 'actions' | 'recent'>;
+    new Set(allCommands.map((c) => c.section)),
+  ) as Array<'navigation' | 'folders' | 'actions' | 'datasets' | 'recent'>;
 
   const sectionLabels: Record<string, string> = {
     navigation: 'Navigation',
     folders: 'Folders',
     actions: 'Actions',
+    datasets: 'Datasets',
     recent: 'Recent',
   };
 
@@ -258,13 +305,13 @@ export function CommandPalette({
 
         {/* Command List */}
         <div className="max-h-96 overflow-y-auto">
-          {filteredCommands.length === 0 ? (
+          {allCommands.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-              No commands found for "{query}"
+              No commands or datasets found for "{query}"
             </div>
           ) : (
             sections.map((section) => {
-              const sectionCommands = filteredCommands.filter(
+              const sectionCommands = allCommands.filter(
                 (c) => c.section === section,
               );
               if (sectionCommands.length === 0) return null;
@@ -274,8 +321,8 @@ export function CommandPalette({
                   <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                     {sectionLabels[section]}
                   </div>
-                  {sectionCommands.map((cmd, idx) => {
-                    const globalIndex = filteredCommands.indexOf(cmd);
+                  {sectionCommands.map((cmd) => {
+                    const globalIndex = allCommands.indexOf(cmd);
                     const isSelected = globalIndex === selectedIndex;
 
                     return (

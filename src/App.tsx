@@ -47,6 +47,8 @@ function AppInner() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const {
     authenticated,
+    agentInfo,
+    config,
     setAuthenticated,
     setAgentInfo,
     setConfig,
@@ -195,6 +197,7 @@ function AppInner() {
       <KeyboardShortcuts />
       <CommandPalette
         config={config}
+        workspaceId={agentInfo?.workspace_id ?? null}
         onNavigate={(tab) => setActiveTab(tab)}
         onAddFolder={() => {
           // Switch to folders tab and trigger add folder action
