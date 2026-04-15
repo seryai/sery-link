@@ -126,7 +126,7 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-## 📋 Phase 3: Quarter 2 — NOT STARTED
+## 📋 Phase 3: Quarter 2 — IN PROGRESS
 
 **Goal:** Extensibility and community features
 
@@ -136,10 +136,29 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Implement sandboxed plugin execution
 - Add community plugin marketplace
 
-### Export/Import Metadata ⏳ TODO
-- JSON export of all watched folders + metadata
-- Import to restore configuration
-- Backup/restore workflow
+### Export/Import Metadata ✅ DONE
+**Status:** Complete
+**Effort:** ~1-2 days (Rust backend + React frontend)
+**Implementation:**
+- ✅ Versioned JSON export format (v1.0) with timestamp, workspace_id, watched_folders, datasets, query_history
+- ✅ Three import strategies: Merge (default), Overwrite, SkipDuplicates
+- ✅ Workspace ID validation with mismatch warnings
+- ✅ Import result reporting (folders added/skipped/replaced, datasets imported)
+- ✅ Export button in Settings → About tab (downloads JSON with timestamped filename)
+- ✅ Import button with file picker → validation → strategy selection → config reload
+- ✅ Comprehensive unit tests (4 test cases: roundtrip, merge, overwrite, version warning)
+
+**Files created:**
+- `src-tauri/src/export_import.rs` - Export/import logic with versioning (345 lines)
+
+**Files modified:**
+- `src-tauri/src/commands.rs` - Added 4 commands: export_configuration, import_configuration, validate_import_file, read_file
+- `src-tauri/src/lib.rs` - Registered export_import module and commands
+- `src/components/Settings.tsx` - Added export/import UI in About tab
+
+**Commits:**
+- `[hash]` - feat: implement Export/Import backend with versioned JSON format
+- `40ec8e8` - feat: add export/import UI to Settings - complete Phase 3 feature
 
 ---
 
@@ -163,23 +182,24 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 ## Implementation Statistics
 
 - **Total Tasks:** 17
-- **Completed:** 9 (52.94%)
+- **Completed:** 10 (58.82%)
 - **In Progress:** 0 (0%)
-- **Not Started:** 8 (47.06%)
+- **Not Started:** 7 (41.18%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
 - Phase 2: 100% complete ✅
-- Phase 3: 0% complete
+- Phase 3: 50% complete (1/2 features done)
 - Phase 4: 0% complete
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX [REMOVED - feature was already in FolderCard dropdown]
-2. **MCP Plugin System** (Phase 3) - Enable community extensibility
-3. **Export/Import Metadata** (Phase 3) - Backup/restore workflow
+1. ~~**Quick Actions Menu** (Phase 2)~~ - REMOVED (feature was already in FolderCard dropdown)
+2. ~~**Export/Import Metadata** (Phase 3)~~ - ✅ COMPLETE
+3. **MCP Plugin System** (Phase 3) - Enable community extensibility
+4. **Local-First Query History** (Phase 4) - Offline query access and export
 
 ---
 
@@ -206,6 +226,16 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - @xyflow/react required explicit type parameters for useNodesState/useEdgesState hooks
 - Graph visualization only shows when datasets exist (conditional button rendering)
 
+**Phase 3:**
+- Export/Import: Versioned JSON format prevents compatibility issues across updates
+- Config structure: watched_folders lives on Config, not AgentConfig (early design confusion)
+- Import strategies provide flexibility: Merge for safety, Overwrite for clean slate
+- Validation before import prevents bad data from corrupting config
+- File picker + browser download API work well for desktop Tauri apps
+- Settings → About tab is the natural home for backup/restore controls
+- Toast notifications for success/warnings keep users informed without blocking
+- Unit tests for roundtrip, merge, and overwrite scenarios caught edge cases early
+
 ### Technical Debt
 
 - Add folder action from command palette doesn't trigger FolderList picker (need event system)
@@ -216,4 +246,4 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-Last updated: 2024-01-XX (Phase 2: 100% complete - Dataset Relationship Graph shipped)
+Last updated: 2024-01-XX (Phase 3: 50% complete - Export/Import Metadata shipped)
