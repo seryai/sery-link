@@ -2,7 +2,7 @@
 // Enables offline fuzzy search over all dataset metadata
 
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'use';
+import { useEffect, useState } from 'react';
 
 export interface CachedDataset {
   id: string;
