@@ -46,19 +46,26 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Commits:**
 - `85e74be` - feat: Phase 2 - implement Command Palette (Cmd+K)
 
-### Local Metadata Cache ⏳ TODO
-**Status:** Not started
+### Local Metadata Cache ✅ DONE
+**Status:** Complete
 **Effort:** ~2-3 days (Rust + DuckDB integration)
-**Plan:**
-- Create `LocalMetadataIndex` struct in Rust
-- Use DuckDB to store dataset metadata locally
-- Enable offline fuzzy search
-- Sync from backend on metadata updates
-- Load from local cache on app startup
+**Implementation:**
+- ✅ Created `MetadataCache` struct in Rust with DuckDB storage
+- ✅ Persistent database: `~/.sery/metadata_cache.db`
+- ✅ Fuzzy search across name, path, description, tags with relevance scoring
+- ✅ Upsert/bulk operations for syncing from backend
+- ✅ Workspace isolation and multi-tenant safety
+- ✅ TypeScript hook `useMetadataCache` for frontend integration
+- ✅ 7 Tauri commands: search, get_all, get_by_id, upsert, upsert_many, clear, stats
 
-**Files to create:**
-- `src-tauri/src/metadata_cache.rs` - DuckDB-based local index
-- `src-tauri/Cargo.toml` - Add `duckdb` crate dependency
+**Files created:**
+- `src-tauri/src/metadata_cache.rs` - DuckDB-based local index (520 lines)
+- `src/hooks/useMetadataCache.ts` - Frontend hook (98 lines)
+- Updated `src-tauri/src/commands.rs` with 7 cache commands
+- Updated `src-tauri/src/lib.rs` module registration
+
+**Commits:**
+- `a095ffb` - feat: Phase 2 - Local Metadata Cache (DuckDB-based offline search)
 
 ### Dataset Relationship Graph ⏳ TODO
 **Status:** Not started
@@ -123,13 +130,13 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 ## Implementation Statistics
 
 - **Total Tasks:** 16
-- **Completed:** 6 (37.5%)
-- **In Progress:** 1 (6.25%)
+- **Completed:** 7 (43.75%)
+- **In Progress:** 0 (0%)
 - **Not Started:** 9 (56.25%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
-- Phase 2: 25% complete (1/4 features) 🚧
+- Phase 2: 50% complete (2/4 features) 🚧
 - Phase 3: 0% complete
 - Phase 4: 0% complete
 
@@ -137,7 +144,7 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ## Next Steps (Priority Order)
 
-1. **Local Metadata Cache** (Phase 2) - Foundation for offline-first experience
+1. **Integrate cache with Command Palette** - Add dataset search to Cmd+K
 2. **Dataset Relationship Graph** (Phase 2) - Visual discovery of data connections
 3. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX
 4. **MCP Plugin System** (Phase 3) - Enable community extensibility
@@ -157,15 +164,18 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Command palette implementation was straightforward with React hooks
 - Fuzzy search could be improved with better scoring algorithm (TODO)
 - Dynamic command generation based on config worked well
+- Local metadata cache: DuckDB integration was smooth (already a dependency)
+- Cache fuzzy search uses simple LIKE patterns - could upgrade to FTS later
 - Need to add Recent/MRU tracking for better UX
 
 ### Technical Debt
 
-- Command palette currently doesn't integrate with local metadata cache (not built yet)
+- Command palette should integrate with metadata cache for dataset search (next step)
 - Add folder action from command palette doesn't trigger FolderList picker (need event system)
-- Missing tests for keyboard shortcuts and command palette
+- Missing tests for keyboard shortcuts, command palette, and metadata cache
 - No analytics tracking for command palette usage (consider adding)
+- Metadata cache sync from backend not yet implemented (manual upsert only)
 
 ---
 
-Last updated: 2024-01-XX (Phase 2 Command Palette shipped)
+Last updated: 2024-01-XX (Phase 2: Command Palette + Metadata Cache shipped)
