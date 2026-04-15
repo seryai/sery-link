@@ -27,6 +27,24 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Plugin function parameter
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFunctionParameter {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub param_type: String,
+}
+
+/// Plugin function metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: Vec<PluginFunctionParameter>,
+    pub returns: String,
+    pub requires_file: bool,
+}
+
 /// Plugin manifest schema (plugin.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
@@ -52,6 +70,9 @@ pub struct PluginManifest {
     /// Optional website/repository URL
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Available functions exposed by this plugin
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub functions: Option<Vec<PluginFunction>>,
 }
 
 /// Plugin capabilities (what the plugin can do)
