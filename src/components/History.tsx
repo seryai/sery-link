@@ -9,10 +9,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   AlertCircle,
+  BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
+  Download,
   Search,
   Trash2,
   XCircle,
@@ -29,6 +31,7 @@ export function History() {
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showStats, setShowStats] = useState(false);
 
   // Initial load — the event listener keeps it fresh afterwards
   useEffect(() => {
@@ -89,6 +92,43 @@ export function History() {
     }
   };
 
+  const handleExport = () => {
+    // Convert history to CSV
+    const headers = [
+      'Timestamp',
+      'File Path',
+      'SQL',
+      'Status',
+      'Row Count',
+      'Duration (ms)',
+      'Error',
+    ];
+    const rows = filtered.map((e) => [
+      e.timestamp,
+      e.file_path,
+      e.sql.replace(/"/g, '""'), // Escape quotes
+      e.status,
+      e.row_count?.toString() ?? '',
+      e.duration_ms.toString(),
+      (e.error ?? '').replace(/"/g, '""'),
+    ]);
+
+    const csv = [
+      headers.map((h) => `"${h}"`).join(','),
+      ...rows.map((r) => r.map((c) => `"${c}"`).join(',')),
+    ].join('\n');
+
+    // Download
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `query-history-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filtered.length} queries to CSV`);
+  };
+
   return (
     <div className="mx-auto max-w-5xl p-8">
       {/* Header */}
@@ -101,15 +141,36 @@ export function History() {
             Every SQL the cloud has asked this agent to run locally.
           </p>
         </div>
-        <button
-          onClick={handleClear}
-          disabled={history.length === 0}
-          className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-        >
-          <Trash2 className="h-4 w-4" />
-          Clear
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowStats(!showStats)}
+            disabled={history.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <BarChart3 className="h-4 w-4" />
+            {showStats ? 'Hide' : 'Stats'}
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+          <button
+            onClick={handleClear}
+            disabled={history.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <Trash2 className="h-4 w-4" />
+            Clear
+          </button>
+        </div>
       </div>
+
+      {/* Statistics */}
+      {showStats && <Statistics history={history} />}
 
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -304,6 +365,129 @@ function EmptyState({ hasAny }: { hasAny: boolean }) {
           ? 'Try clearing the search or switching tabs.'
           : 'When Sery runs queries against your local files, they will show up here.'}
       </p>
+    </div>
+  );
+}
+
+function Statistics({ history }: { history: QueryHistoryEntry[] }) {
+  const stats = useMemo(() => {
+    let totalSuccess = 0;
+    let totalError = 0;
+    let totalDuration = 0;
+    let totalRows = 0;
+    const filesMap = new Map<string, number>();
+
+    for (const entry of history) {
+      if (entry.status === 'success') {
+        totalSuccess++;
+        if (entry.row_count) totalRows += entry.row_count;
+      } else {
+        totalError++;
+      }
+      totalDuration += entry.duration_ms;
+
+      // Track queries per file
+      const count = filesMap.get(entry.file_path) || 0;
+      filesMap.set(entry.file_path, count + 1);
+    }
+
+    // Top 5 most queried files
+    const topFiles = Array.from(filesMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    return {
+      total: history.length,
+      success: totalSuccess,
+      error: totalError,
+      avgDuration: history.length > 0 ? Math.round(totalDuration / history.length) : 0,
+      totalRows,
+      topFiles,
+    };
+  }, [history]);
+
+  return (
+    <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Total Queries */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Total Queries
+        </div>
+        <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+          {stats.total.toLocaleString()}
+        </div>
+        <div className="mt-1 flex gap-4 text-xs">
+          <span className="text-emerald-600 dark:text-emerald-400">
+            ✓ {stats.success}
+          </span>
+          <span className="text-rose-600 dark:text-rose-400">
+            ✗ {stats.error}
+          </span>
+        </div>
+      </div>
+
+      {/* Success Rate */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Success Rate
+        </div>
+        <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+          {stats.total > 0
+            ? Math.round((stats.success / stats.total) * 100)
+            : 0}
+          %
+        </div>
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+          <div
+            className="h-full bg-emerald-500"
+            style={{
+              width: `${stats.total > 0 ? (stats.success / stats.total) * 100 : 0}%`,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Avg Duration */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Avg Duration
+        </div>
+        <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+          {stats.avgDuration}
+          <span className="ml-1 text-sm font-normal text-slate-500">ms</span>
+        </div>
+      </div>
+
+      {/* Total Rows */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          Total Rows
+        </div>
+        <div className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+          {stats.totalRows.toLocaleString()}
+        </div>
+      </div>
+
+      {/* Top Files */}
+      {stats.topFiles.length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 sm:col-span-2 lg:col-span-4">
+          <div className="mb-3 text-xs font-medium text-slate-500 dark:text-slate-400">
+            Most Queried Files
+          </div>
+          <div className="space-y-2">
+            {stats.topFiles.map(([file, count]) => (
+              <div key={file} className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1 truncate font-mono text-xs text-slate-700 dark:text-slate-300" title={file}>
+                  {file}
+                </div>
+                <div className="shrink-0 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  {count} {count === 1 ? 'query' : 'queries'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
