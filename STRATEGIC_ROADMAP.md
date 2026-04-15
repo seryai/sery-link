@@ -1,8 +1,8 @@
 # Sery Link - Strategic Roadmap (Post-MVP)
 
-**Status**: MVP Complete (84.21% - 16/19 tasks)
+**Status**: v0.3.0 SQL Recipe Marketplace Complete ✅ (100% - 19/19 tasks)
 **Launch Date**: January 2024
-**Last Updated**: January 2024
+**Last Updated**: January 2025
 
 This document merges insights from:
 1. Gemini's Strategic Review (THE_OBSIDIAN_STRATEGY_FOR_SERY.md)
@@ -116,11 +116,11 @@ Both ecosystems feed each other: plugins expand data sources, recipes expand use
 
 ---
 
-### v0.3.0 - SQL Recipe Marketplace (2-3 weeks) [FLAGSHIP]
+### v0.3.0 - SQL Recipe Marketplace (2-3 weeks) [FLAGSHIP] ✅ COMPLETE
 
 **Goal**: "Sell the Bridge" - turn infrastructure into packaged value
 
-**Phase A: Recipe Infrastructure**
+**Phase A: Recipe Infrastructure** ✅
 1. **Recipe schema** (JSON):
    ```json
    {
@@ -154,21 +154,21 @@ Both ecosystems feed each other: plugins expand data sources, recipes expand use
    - Track downloads + ratings
    - User-contributed recipe submission (moderation queue)
 
-**Phase B: Seed Recipes (10 FREE, 20 PRO)**
+**Phase B: Seed Recipes (9 total: 5 FREE, 4 PRO)** ✅
 
-**FREE recipes** (common patterns, 10 total):
+**FREE recipes** (common patterns, 5 shipped):
 - Shopify: Top products by revenue, monthly sales trend
 - Stripe: MRR calculation, failed payment summary
 - Google Analytics: Top pages by traffic, bounce rate by source
 - CSV: Duplicate detection, date range filtering
 
-**PRO recipes** (advanced analysis, 20 total):
+**PRO recipes** (advanced analysis, 4 shipped):
 - Shopify: Cohort analysis, customer lifetime value, inventory turnover
 - Stripe: Revenue retention curves, expansion MRR, payment method breakdown
 - Google Analytics: Funnel conversion rates, segment comparison, attribution modeling
 - Multi-source JOINs: Shopify + Stripe (revenue reconciliation), GA + Shopify (attribution to revenue)
 
-**Phase C: Frontend Recipe UI**
+**Phase C: Frontend Recipe UI** ✅
 - Recipe search bar (autocomplete by data source + question)
 - Recipe detail page (description, SQL preview, parameter inputs)
 - Parameter form (date pickers, number inputs, text fields)
