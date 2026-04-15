@@ -86,18 +86,32 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Commits:**
 - `fdc66c2` - feat: integrate metadata cache with command palette for dataset search
 
-### Dataset Relationship Graph ⏳ TODO
-**Status:** Not started
+### Dataset Relationship Graph ✅ DONE
+**Status:** Complete
 **Effort:** ~3-4 days (data analysis + visualization)
-**Plan:**
-- Analyze JOIN patterns from query history
-- Detect foreign key relationships by scanning column names
-- Create React component with graph visualization (use react-flow or similar)
-- Add "Show Relationships" button to dataset cards
+**Implementation:**
+- ✅ Dual detection strategy: schema-based (FK patterns) + query-based (JOIN analysis)
+- ✅ Confidence scoring 40-100 (query-based: 80, schema FK: 60, weak: 40)
+- ✅ Rust relationship detector with regex-based JOIN pattern extraction
+- ✅ Interactive graph visualization with @xyflow/react
+- ✅ Node highlighting on click to explore connections
+- ✅ Color-coded edges: purple (query-based), blue (schema-based)
+- ✅ Animated edges for 80%+ confidence relationships
+- ✅ "Show Relationships" button in FolderList header (only visible when datasets exist)
 
-**Files to create:**
-- `src/components/RelationshipGraph.tsx` - Graph visualization
-- `src-tauri/src/relationship_detector.rs` - FK detection logic
+**Files created:**
+- `src-tauri/src/relationship_detector.rs` - FK/JOIN detection logic (284 lines)
+- `src/components/RelationshipGraph.tsx` - Interactive graph UI (338 lines)
+
+**Files modified:**
+- `src/components/FolderList.tsx` - Added graph button and modal
+- `src-tauri/src/commands.rs` - Added detect_dataset_relationships command
+- `src-tauri/src/lib.rs` - Registered relationship_detector module
+- `src-tauri/Cargo.toml` - Added regex dependency
+
+**Commits:**
+- `8afb3c6` - feat: Phase 2 - implement Dataset Relationship Graph backend
+- `138a7d5` - feat: add Dataset Relationship Graph visualization
 
 ### Quick Actions Menu ⏳ TODO
 **Status:** Not started
@@ -149,13 +163,13 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 ## Implementation Statistics
 
 - **Total Tasks:** 17
-- **Completed:** 8 (47.06%)
+- **Completed:** 9 (52.94%)
 - **In Progress:** 0 (0%)
-- **Not Started:** 9 (52.94%)
+- **Not Started:** 8 (47.06%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
-- Phase 2: 75% complete (3/4 features) 🚧
+- Phase 2: 100% complete ✅
 - Phase 3: 0% complete
 - Phase 4: 0% complete
 
@@ -163,9 +177,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ## Next Steps (Priority Order)
 
-1. **Dataset Relationship Graph** (Phase 2) - Visual discovery of data connections
-2. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX
-3. **MCP Plugin System** (Phase 3) - Enable community extensibility
+1. **Quick Actions Menu** (Phase 2) - Complete the keyboard-first UX [REMOVED - feature was already in FolderCard dropdown]
+2. **MCP Plugin System** (Phase 3) - Enable community extensibility
+3. **Export/Import Metadata** (Phase 3) - Backup/restore workflow
 
 ---
 
@@ -187,6 +201,10 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Need to add Recent/MRU tracking for better UX
 - Cache + Command Palette integration was seamless - React hooks made it trivial
 - Dataset search in Cmd+K works well with 2-char minimum to avoid noise
+- Relationship graph: Dual detection (schema + query history) provides good coverage
+- Thread safety issue with DuckDB Connection (uses RefCell) → use per-command instances
+- @xyflow/react required explicit type parameters for useNodesState/useEdgesState hooks
+- Graph visualization only shows when datasets exist (conditional button rendering)
 
 ### Technical Debt
 
@@ -198,4 +216,4 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-Last updated: 2024-01-XX (Phase 2: 75% complete - Cache integration with Command Palette shipped)
+Last updated: 2024-01-XX (Phase 2: 100% complete - Dataset Relationship Graph shipped)
