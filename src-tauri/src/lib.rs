@@ -7,6 +7,7 @@ mod duckdb_engine;
 mod error;
 mod events;
 mod excel;
+mod export_import;
 mod history;
 mod keyring_store;
 mod metadata_cache;
@@ -137,6 +138,9 @@ pub fn run() {
             commands::clear_cached_workspace,
             commands::get_cache_stats,
             commands::detect_dataset_relationships,
+            commands::export_configuration,
+            commands::import_configuration,
+            commands::validate_import_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
