@@ -1,0 +1,66 @@
+{
+  "id": "com.sery.clipboard-util",
+  "name": "Clipboard Utility",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "Read, write, and transform clipboard content",
+  "capabilities": ["transform", "ui-component"],
+  "permissions": ["clipboard"],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null,
+  "functions": [
+    {
+      "name": "read_clipboard",
+      "description": "Read clipboard content into buffer",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "write_clipboard",
+      "description": "Write text to clipboard",
+      "parameters": [
+        { "name": "text_ptr", "type": "i32" },
+        { "name": "text_len", "type": "i32" }
+      ],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "to_uppercase",
+      "description": "Convert clipboard to uppercase",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "to_lowercase",
+      "description": "Convert clipboard to lowercase",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "reverse_text",
+      "description": "Reverse clipboard text",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_clipboard_length",
+      "description": "Get clipboard content length",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_version",
+      "description": "Get plugin version",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    }
+  ]
+}
