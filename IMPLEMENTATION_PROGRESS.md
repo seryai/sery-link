@@ -299,14 +299,38 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - `54e9bdd` - feat: Phase 3 Plugin Execution - file reading with sandboxing
 - `[pending]` - feat: Phase 4 - memory registry infrastructure for host functions
 
-**Phase 5 (Future):**
-The infrastructure is ready for WASM-callable host functions. Future work:
+**Phase 5 - Frontend UI for Plugin Execution ✅ DONE (Partial)**
+**Status:** First iteration complete
+**Effort:** ~2-3 hours (React component + integration)
+**Completion:** Frontend execution UI shipped
+
+**What works:**
+- ✅ New PluginsPanel component extracted to separate file (src/components/PluginsPanel.tsx)
+- ✅ "Run" button for enabled plugins opens execution panel
+- ✅ File picker with dialog for selecting CSV files (or any file type)
+- ✅ Execute button loads plugin into runtime and calls `parse_csv_from_memory`
+- ✅ Result display with unpacked CSV analysis (columns, rows, valid status)
+- ✅ File size display and formatted result output
+- ✅ Loading states for execution (spinner + disabled button)
+- ✅ Clean collapsible UI that doesn't clutter plugin management
+- ✅ Added test-data.csv in examples/ for easy testing
+
+**Files modified/created:**
+- `src/components/PluginsPanel.tsx` - New component with execution capabilities (334 lines)
+- `src/components/Settings.tsx` - Removed inline PluginsPanel, imported from dedicated file
+- `examples/test-data.csv` - Test CSV file with 5 rows for plugin testing
+
+**Commits:**
+- `850bacb` - feat: add plugin execution UI with file selection and result display
+
+**Phase 5 (Future - Remaining Work):**
+The frontend execution UI is working. Future work:
 - Implement WASM-callable read_file using FunctionEnvMut pattern (wasmer 7.x Store access)
 - Implement WASM-callable http_get, exec, clipboard with same pattern
 - Add WASI support for standard interfaces (filesystem, environment variables)
 - Create more production-ready example plugins (JSON transformer, HTML viewer, HTTP fetcher)
 - Update CSV parser to call read_file host function directly from WASM
-- Add frontend UI for executing plugins (trigger plugin functions from Settings → Plugins)
+- Add function selector UI for multi-function plugins (currently hardcoded to parse_csv_from_memory)
 - Add plugin marketplace/discovery (community plugin registry)
 - Performance optimization (lazy loading, caching compiled modules)
 
@@ -320,16 +344,17 @@ The infrastructure is ready for WASM-callable host functions. Future work:
 
 ## Implementation Statistics
 
-- **Total Tasks:** 17
-- **Completed:** 13 (76.47%)
-- **In Progress:** 0 (0%)
-- **Not Started:** 4 (23.53%)
+- **Total Tasks:** 18
+- **Completed:** 14 (77.78%)
+- **In Progress:** 1 (5.56%) - Phase 5 Frontend UI (first iteration done, advanced features remaining)
+- **Not Started:** 3 (16.67%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
 - Phase 2: 100% complete ✅
 - Phase 3: 100% complete ✅
 - Phase 4: 100% complete ✅ (Foundation - both features done)
+- Phase 5: ~40% complete 🚧 (Frontend execution UI shipped, host functions + advanced features remaining)
 
 ---
 
@@ -340,8 +365,9 @@ The infrastructure is ready for WASM-callable host functions. Future work:
 3. ~~**MCP Plugin System** (Phase 3)~~ - ✅ COMPLETE
 4. ~~**Local-First Query History** (Phase 4)~~ - ✅ COMPLETE
 5. ~~**Plugin Execution Layer** (Phase 4)~~ - ✅ COMPLETE (Foundation)
-6. **Plugin Execution Phase 2** (Future) - Complete WASM memory management, implement host functions, create example plugins
-7. **Pricing Model Revision** (Future) - Free core + paid cloud tiers
+6. ~~**Frontend Plugin Execution UI** (Phase 5 - Part 1)~~ - ✅ COMPLETE (Basic execution with file picker)
+7. **Plugin Execution Phase 2** (Phase 5 - Part 2) - Implement WASM-callable host functions, multi-function UI, more example plugins
+8. **Pricing Model Revision** (Future) - Free core + paid cloud tiers
 
 ---
 
@@ -412,6 +438,20 @@ The infrastructure is ready for WASM-callable host functions. Future work:
 - End-to-end test verifies: load → execute → verify result → unload in <30ms
 - Plugin directory structure: plugin.json + plugin.wasm + optional src/ for reference
 - Example plugins in examples/plugins/ can be copied to ~/.sery/plugins/ for installation
+
+**Phase 5:**
+- Extracting PluginsPanel to separate component improved code organization (Settings.tsx dropped 188 lines)
+- Expandable execution panel per plugin keeps UI clean - only show controls when user wants to run something
+- File picker with multiple filter options (CSV-specific + All Files) provides good UX
+- Loading plugin into runtime before execution ensures it's ready without manual load step
+- Unpacking packed i32 results in frontend (bitshift operations) works well for multiple return values
+- ExecutionResult interface typed correctly prevents runtime errors from malformed JSON
+- useState for expandedPlugin enables only one execution panel open at a time (clean UX)
+- Toast notifications for execution success/failure keep user informed of async operations
+- Test CSV file (examples/test-data.csv) makes plugin testing immediate without user needing external files
+- Result formatting function (formatResult) decouples display logic from execution logic
+- Auto-load plugin before execution removes friction - user doesn't need to understand "loaded vs installed"
+- Component still hardcodes function name (parse_csv_from_memory) - multi-function UI needed in Phase 5 Part 2
 
 ### Technical Debt
 
