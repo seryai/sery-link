@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Search, Filter, Database, TrendingUp, Users, DollarSign, BarChart3, FileSpreadsheet, Award } from 'lucide-react';
+import { RecipeExecutor } from './RecipeExecutor';
 
 interface Recipe {
   id: string;
@@ -41,6 +42,7 @@ export function RecipePanel() {
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [dataSource, setDataSource] = useState<DataSource>('all');
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [executingRecipe, setExecutingRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -280,6 +282,18 @@ export function RecipePanel() {
         <RecipeDetailModal
           recipe={selectedRecipe}
           onClose={() => setSelectedRecipe(null)}
+          onExecute={(recipe) => {
+            setSelectedRecipe(null);
+            setExecutingRecipe(recipe);
+          }}
+        />
+      )}
+
+      {/* Recipe Executor */}
+      {executingRecipe && (
+        <RecipeExecutor
+          recipe={executingRecipe}
+          onClose={() => setExecutingRecipe(null)}
         />
       )}
     </div>
@@ -289,9 +303,10 @@ export function RecipePanel() {
 interface RecipeDetailModalProps {
   recipe: Recipe;
   onClose: () => void;
+  onExecute: (recipe: Recipe) => void;
 }
 
-function RecipeDetailModal({ recipe, onClose }: RecipeDetailModalProps) {
+function RecipeDetailModal({ recipe, onClose, onExecute }: RecipeDetailModalProps) {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
@@ -416,10 +431,7 @@ function RecipeDetailModal({ recipe, onClose }: RecipeDetailModalProps) {
               Close
             </button>
             <button
-              onClick={() => {
-                // TODO: Navigate to recipe execution page
-                console.log('Execute recipe:', recipe.id);
-              }}
+              onClick={() => onExecute(recipe)}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
               Run Recipe →
