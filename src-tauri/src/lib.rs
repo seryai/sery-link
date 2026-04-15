@@ -9,6 +9,7 @@ mod events;
 mod excel;
 mod history;
 mod keyring_store;
+mod metadata_cache;
 mod scanner;
 mod stats;
 mod tray;
@@ -127,6 +128,13 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::show_main_window,
             commands::set_launch_at_login,
+            commands::search_cached_datasets,
+            commands::get_all_cached_datasets,
+            commands::get_cached_dataset,
+            commands::upsert_cached_dataset,
+            commands::upsert_cached_datasets,
+            commands::clear_cached_workspace,
+            commands::get_cache_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
