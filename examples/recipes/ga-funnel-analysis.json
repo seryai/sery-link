@@ -1,0 +1,88 @@
+{
+  "id": "com.sery.ga.funnel-conversion",
+  "name": "Funnel Conversion Analysis",
+  "description": "Tracks user progression through a multi-step conversion funnel to identify drop-off points and optimization opportunities. Calculates step-by-step conversion rates, time between steps, and cohort-based funnel performance. Essential for CRO and understanding where users abandon your flow.",
+  "data_source": "Google Analytics",
+  "required_tables": [
+    {
+      "name": "events",
+      "required_columns": ["user_id", "event_name", "event_timestamp", "session_id"]
+    }
+  ],
+  "sql_template": "WITH funnel_steps AS (\n  SELECT \n    user_id,\n    session_id,\n    event_name,\n    event_timestamp,\n    ROW_NUMBER() OVER (PARTITION BY user_id, session_id, event_name ORDER BY event_timestamp) AS event_rank\n  FROM events\n  WHERE event_timestamp >= '{{start_date}}'\n    AND event_timestamp < '{{end_date}}'\n    AND event_name IN ({{funnel_events}})\n),\nfirst_occurrences AS (\n  SELECT \n    user_id,\n    session_id,\n    event_name,\n    event_timestamp\n  FROM funnel_steps\n  WHERE event_rank = 1\n),\nstep_1_users AS (\n  SELECT DISTINCT user_id, session_id, event_timestamp AS step_1_time\n  FROM first_occurrences\n  WHERE event_name = {{step_1_event}}\n),\nstep_2_users AS (\n  SELECT s1.user_id, s1.session_id, s1.step_1_time, fo.event_timestamp AS step_2_time\n  FROM step_1_users s1\n  JOIN first_occurrences fo ON fo.user_id = s1.user_id \n    AND fo.session_id = s1.session_id\n    AND fo.event_name = {{step_2_event}}\n    AND fo.event_timestamp > s1.step_1_time\n),\nstep_3_users AS (\n  SELECT s2.user_id, s2.session_id, s2.step_2_time, fo.event_timestamp AS step_3_time\n  FROM step_2_users s2\n  JOIN first_occurrences fo ON fo.user_id = s2.user_id\n    AND fo.session_id = s2.session_id\n    AND fo.event_name = {{step_3_event}}\n    AND fo.event_timestamp > s2.step_2_time\n),\nstep_4_users AS (\n  SELECT s3.user_id, s3.session_id, s3.step_3_time, fo.event_timestamp AS step_4_time\n  FROM step_3_users s3\n  JOIN first_occurrences fo ON fo.user_id = s3.user_id\n    AND fo.session_id = s3.session_id\n    AND fo.event_name = {{step_4_event}}\n    AND fo.event_timestamp > s3.step_3_time\n),\nfunnel_summary AS (\n  SELECT \n    1 AS step_number,\n    {{step_1_event}} AS step_name,\n    COUNT(DISTINCT user_id) AS users,\n    NULL::FLOAT AS avg_time_from_prev_sec,\n    NULL::FLOAT AS conversion_from_prev_pct\n  FROM step_1_users\n  \n  UNION ALL\n  \n  SELECT \n    2 AS step_number,\n    {{step_2_event}} AS step_name,\n    COUNT(DISTINCT user_id) AS users,\n    AVG(DATEDIFF('second', step_1_time, step_2_time)) AS avg_time_from_prev_sec,\n    100.0 * COUNT(DISTINCT user_id) / (SELECT COUNT(DISTINCT user_id) FROM step_1_users) AS conversion_from_prev_pct\n  FROM step_2_users\n  \n  UNION ALL\n  \n  SELECT \n    3 AS step_number,\n    {{step_3_event}} AS step_name,\n    COUNT(DISTINCT user_id) AS users,\n    AVG(DATEDIFF('second', step_2_time, step_3_time)) AS avg_time_from_prev_sec,\n    100.0 * COUNT(DISTINCT user_id) / (SELECT COUNT(DISTINCT user_id) FROM step_2_users) AS conversion_from_prev_pct\n  FROM step_3_users\n  \n  UNION ALL\n  \n  SELECT \n    4 AS step_number,\n    {{step_4_event}} AS step_name,\n    COUNT(DISTINCT user_id) AS users,\n    AVG(DATEDIFF('second', step_3_time, step_4_time)) AS avg_time_from_prev_sec,\n    100.0 * COUNT(DISTINCT user_id) / (SELECT COUNT(DISTINCT user_id) FROM step_3_users) AS conversion_from_prev_pct\n  FROM step_4_users\n)\nSELECT \n  step_number,\n  step_name,\n  users,\n  ROUND(100.0 * users / (SELECT users FROM funnel_summary WHERE step_number = 1), 2) AS pct_of_top,\n  ROUND(conversion_from_prev_pct, 2) AS conversion_from_prev,\n  users - LEAD(users) OVER (ORDER BY step_number) AS drop_off,\n  ROUND(avg_time_from_prev_sec, 1) AS avg_time_sec\nFROM funnel_summary\nORDER BY step_number",
+  "parameters": [
+    {
+      "name": "start_date",
+      "type": "date",
+      "label": "Start Date",
+      "description": "Beginning of analysis period (YYYY-MM-DD)",
+      "default": "2024-01-01",
+      "validation": {
+        "max": "today"
+      }
+    },
+    {
+      "name": "end_date",
+      "type": "date",
+      "label": "End Date",
+      "description": "End of analysis period (YYYY-MM-DD)",
+      "default": "today",
+      "validation": {
+        "max": "today"
+      }
+    },
+    {
+      "name": "funnel_events",
+      "type": "string",
+      "label": "Funnel Events",
+      "description": "Comma-separated list of event names (4 steps max)",
+      "default": "'page_view','add_to_cart','begin_checkout','purchase'",
+      "validation": {
+        "pattern": "^'[^']+','[^']+','[^']+','[^']+'$"
+      }
+    },
+    {
+      "name": "step_1_event",
+      "type": "string",
+      "label": "Step 1 Event",
+      "description": "First funnel step event name",
+      "default": "'page_view'"
+    },
+    {
+      "name": "step_2_event",
+      "type": "string",
+      "label": "Step 2 Event",
+      "description": "Second funnel step event name",
+      "default": "'add_to_cart'"
+    },
+    {
+      "name": "step_3_event",
+      "type": "string",
+      "label": "Step 3 Event",
+      "description": "Third funnel step event name",
+      "default": "'begin_checkout'"
+    },
+    {
+      "name": "step_4_event",
+      "type": "string",
+      "label": "Step 4 Event",
+      "description": "Fourth funnel step event name",
+      "default": "'purchase'"
+    }
+  ],
+  "tier": "PRO",
+  "category": "Marketing",
+  "tags": ["funnel", "conversion", "google-analytics", "cro", "drop-off", "optimization"],
+  "author": "Sery Team",
+  "version": "1.0.0",
+  "created_at": "2024-01-15T00:00:00Z",
+  "updated_at": "2024-01-15T00:00:00Z",
+  "metrics": {
+    "downloads": 1543,
+    "runs": 5432,
+    "rating": 4.9,
+    "review_count": 91
+  },
+  "example_output": "Returns a table with columns:\n- `step_number`: Funnel step position (1-4)\n- `step_name`: Event name for this step\n- `users`: Number of users reaching this step\n- `pct_of_top`: Percentage of step 1 users (cumulative conversion)\n- `conversion_from_prev`: Conversion rate from previous step (0-100)\n- `drop_off`: Number of users who don't proceed to next step\n- `avg_time_sec`: Average seconds from previous step\n\nInterpretation:\n- Focus optimization on steps with lowest conversion_from_prev\n- Long avg_time_sec may indicate confusion or friction\n- Largest drop_off indicates biggest opportunity for improvement",
+  "documentation_url": "https://sery.ai/recipes/ga-funnel-conversion"
+}
