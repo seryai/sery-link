@@ -87,6 +87,8 @@ pub struct PluginRuntime {
     store: Store,
     instances: HashMap<String, PluginInstance>,
     env: HostEnv,
+    /// Cache of compiled WASM modules to avoid recompilation
+    module_cache: HashMap<String, Module>,
 }
 
 /// A loaded plugin instance
@@ -102,6 +104,7 @@ impl PluginRuntime {
             store: Store::default(),
             instances: HashMap::new(),
             env: HostEnv::new(),
+            module_cache: HashMap::new(),
         }
     }
 
@@ -114,16 +117,26 @@ impl PluginRuntime {
 
     /// Load a plugin from disk
     pub fn load_plugin(&mut self, plugin_dir: &Path, manifest: PluginManifest) -> Result<()> {
-        // Read the WASM binary
-        let wasm_path = plugin_dir.join(&manifest.entry_point);
-        let wasm_bytes = fs::read(&wasm_path).map_err(|e| {
-            AgentError::FileSystem(format!("Failed to read WASM file: {}", e))
-        })?;
+        // Check if module is already cached
+        let module = if let Some(cached_module) = self.module_cache.get(&manifest.id) {
+            // Reuse cached module (avoids recompilation)
+            cached_module.clone()
+        } else {
+            // Read the WASM binary
+            let wasm_path = plugin_dir.join(&manifest.entry_point);
+            let wasm_bytes = fs::read(&wasm_path).map_err(|e| {
+                AgentError::FileSystem(format!("Failed to read WASM file: {}", e))
+            })?;
 
-        // Compile the module
-        let module = Module::new(&self.store, wasm_bytes).map_err(|e| {
-            AgentError::Validation(format!("Failed to compile WASM module: {}", e))
-        })?;
+            // Compile the module
+            let module = Module::new(&self.store, wasm_bytes).map_err(|e| {
+                AgentError::Validation(format!("Failed to compile WASM module: {}", e))
+            })?;
+
+            // Cache the compiled module
+            self.module_cache.insert(manifest.id.clone(), module.clone());
+            module
+        };
 
         // Set the plugin ID in HostEnv so host functions know which plugin is calling
         self.env.set_plugin_id(manifest.id.clone());
@@ -329,12 +342,176 @@ impl PluginRuntime {
                     imports.define("env", "exec", exec_fn);
                 }
                 PluginPermission::Clipboard => {
-                    // Expose clipboard functions (stub - would need platform-specific code)
-                    let get_clipboard_fn = Function::new_typed(&mut self.store, || -> i32 {
-                        // TODO Phase 6: Implement clipboard access via Tauri clipboard plugin
-                        -1
-                    });
+                    // Expose clipboard read function with FunctionEnvMut
+                    let get_clipboard_fn = Function::new_typed_with_env(
+                        &mut self.store,
+                        &env,
+                        |mut env: FunctionEnvMut<HostEnv>, output_ptr: i32, output_max_len: i32| -> i32 {
+                            // Get plugin ID from environment
+                            let plugin_id = {
+                                let host_env = env.data();
+                                host_env.get_plugin_id()
+                            };
+
+                            let plugin_id = match plugin_id {
+                                Some(id) => id,
+                                None => return -1,
+                            };
+
+                            // Get memory from global registry
+                            let memory = {
+                                let registry = PLUGIN_MEMORY.read().unwrap();
+                                registry.get(&plugin_id).cloned()
+                            };
+
+                            let memory = match memory {
+                                Some(m) => m,
+                                None => return -1,
+                            };
+
+                            // Read clipboard content (synchronous read from system clipboard)
+                            // Note: This is a simplified implementation. In production, you'd want
+                            // to use Tauri's clipboard plugin or a cross-platform crate like arboard
+                            #[cfg(target_os = "macos")]
+                            let clipboard_text = {
+                                use std::process::Command;
+                                match Command::new("pbpaste").output() {
+                                    Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+                                    Err(_) => return -1,
+                                }
+                            };
+
+                            #[cfg(target_os = "linux")]
+                            let clipboard_text = {
+                                use std::process::Command;
+                                match Command::new("xclip")
+                                    .args(["-selection", "clipboard", "-o"])
+                                    .output()
+                                {
+                                    Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+                                    Err(_) => return -1,
+                                }
+                            };
+
+                            #[cfg(target_os = "windows")]
+                            let clipboard_text = {
+                                // For Windows, would use win32 clipboard API or arboard crate
+                                // Simplified stub for now
+                                return -1;
+                            };
+
+                            // Write clipboard content to output buffer
+                            let bytes_to_write = clipboard_text.len().min(output_max_len as usize);
+                            let view = memory.view(&env);
+                            for (i, byte) in clipboard_text.as_bytes().iter().take(bytes_to_write).enumerate() {
+                                if view.write_u8((output_ptr as u64) + (i as u64), *byte).is_err() {
+                                    return -1;
+                                }
+                            }
+
+                            bytes_to_write as i32
+                        },
+                    );
                     imports.define("env", "get_clipboard", get_clipboard_fn);
+
+                    // Expose clipboard write function
+                    let set_clipboard_fn = Function::new_typed_with_env(
+                        &mut self.store,
+                        &env,
+                        |env: FunctionEnvMut<HostEnv>, text_ptr: i32, text_len: i32| -> i32 {
+                            // Get plugin ID from environment
+                            let plugin_id = {
+                                let host_env = env.data();
+                                host_env.get_plugin_id()
+                            };
+
+                            let plugin_id = match plugin_id {
+                                Some(id) => id,
+                                None => return -1,
+                            };
+
+                            // Get memory from global registry
+                            let memory = {
+                                let registry = PLUGIN_MEMORY.read().unwrap();
+                                registry.get(&plugin_id).cloned()
+                            };
+
+                            let memory = match memory {
+                                Some(m) => m,
+                                None => return -1,
+                            };
+
+                            // Read text from plugin memory
+                            let view = memory.view(&env);
+                            let mut text_bytes = vec![0u8; text_len as usize];
+                            for i in 0..text_len as usize {
+                                text_bytes[i] = view.read_u8((text_ptr as u64) + (i as u64)).unwrap_or(0);
+                            }
+
+                            let text = match String::from_utf8(text_bytes) {
+                                Ok(s) => s,
+                                Err(_) => return -1,
+                            };
+
+                            // Write to clipboard (synchronous write to system clipboard)
+                            #[cfg(target_os = "macos")]
+                            {
+                                use std::process::{Command, Stdio};
+                                use std::io::Write;
+
+                                match Command::new("pbcopy")
+                                    .stdin(Stdio::piped())
+                                    .spawn()
+                                {
+                                    Ok(mut child) => {
+                                        if let Some(mut stdin) = child.stdin.take() {
+                                            if stdin.write_all(text.as_bytes()).is_ok() {
+                                                drop(stdin);
+                                                if child.wait().is_ok() {
+                                                    return text.len() as i32;
+                                                }
+                                            }
+                                        }
+                                        -1
+                                    }
+                                    Err(_) => -1,
+                                }
+                            }
+
+                            #[cfg(target_os = "linux")]
+                            {
+                                use std::process::{Command, Stdio};
+                                use std::io::Write;
+
+                                match Command::new("xclip")
+                                    .args(["-selection", "clipboard"])
+                                    .stdin(Stdio::piped())
+                                    .spawn()
+                                {
+                                    Ok(mut child) => {
+                                        if let Some(mut stdin) = child.stdin.take() {
+                                            if stdin.write_all(text.as_bytes()).is_ok() {
+                                                drop(stdin);
+                                                if child.wait().is_ok() {
+                                                    return text.len() as i32;
+                                                }
+                                            }
+                                        }
+                                        -1
+                                    }
+                                    Err(_) => -1,
+                                }
+                            }
+
+                            #[cfg(target_os = "windows")]
+                            {
+                                // For Windows, would use win32 clipboard API or arboard crate
+                                // Simplified stub for now
+                                -1
+                            }
+                        },
+                    );
+                    imports.define("env", "set_clipboard", set_clipboard_fn);
                 }
             }
         }
@@ -387,6 +564,22 @@ impl PluginRuntime {
     /// Get list of loaded plugin IDs
     pub fn loaded_plugins(&self) -> Vec<String> {
         self.instances.keys().cloned().collect()
+    }
+
+    /// Clear the module cache (force recompilation on next load)
+    /// Useful after plugin updates or for memory management
+    pub fn clear_module_cache(&mut self) {
+        self.module_cache.clear();
+    }
+
+    /// Clear cached module for a specific plugin
+    pub fn clear_plugin_cache(&mut self, plugin_id: &str) {
+        self.module_cache.remove(plugin_id);
+    }
+
+    /// Get cache statistics
+    pub fn cache_stats(&self) -> (usize, usize) {
+        (self.module_cache.len(), self.instances.len())
     }
 }
 
