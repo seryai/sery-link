@@ -299,10 +299,10 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - `54e9bdd` - feat: Phase 3 Plugin Execution - file reading with sandboxing
 - `[pending]` - feat: Phase 4 - memory registry infrastructure for host functions
 
-**Phase 5 - Advanced Plugin Features ✅ MOSTLY COMPLETE**
-**Status:** Core features complete, optimizations deferred
-**Effort:** ~1-2 days (Frontend UI + host functions + example plugins)
-**Completion:** ~80% complete
+**Phase 5 - Advanced Plugin Features ✅ COMPLETE**
+**Status:** All core features implemented
+**Effort:** ~2 days (Frontend UI + host functions + example plugins + clipboard + text analysis)
+**Completion:** 100% complete (5 example plugins shipped)
 
 **What works:**
 - ✅ New PluginsPanel component extracted to separate file (src/components/PluginsPanel.tsx)
@@ -317,17 +317,21 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - ✅ Clean collapsible UI that doesn't clutter plugin management
 - ✅ WASM-callable host functions implemented with FunctionEnvMut pattern
 - ✅ read_file host function fully functional (Store/Memory access via FunctionEnvMut)
+- ✅ get_clipboard / set_clipboard host functions (platform-specific: pbpaste/pbcopy on macOS, xclip on Linux)
 - ✅ Sandboxed file reading with path validation (allowed directories enforced)
-- ✅ Three production example plugins:
-  - CSV Parser (data-source, 5 functions, 2.4KB WASM)
+- ✅ Module caching for performance (HashMap prevents recompilation on reload)
+- ✅ Five production example plugins:
+  - CSV Parser (data-source, 5 functions, 2.4KB WASM - parse, validate, count)
   - JSON Transformer (transform, 6 functions, 5.7KB WASM - pretty-print, minify, validate)
   - HTML Viewer (viewer, 6 functions, 9.8KB WASM - text extraction, tag counting, structure validation)
-- ✅ Test data files: test-data.csv, test-data.json, test-data.html
+  - Clipboard Utility (ui-component, 7 functions, 4.2KB WASM - read, write, transform clipboard content)
+  - Text Analyzer (data-source/transform, 8 functions, 9.9KB WASM - readability, sentiment, statistics)
+- ✅ Test data files: test-data.csv, test-data.json, test-data.html, test-data.txt
 
 **Files created/modified:**
 - `src/components/PluginsPanel.tsx` - Multi-function selector UI (390 lines, function dropdown + conditional file picker)
 - `src/components/Settings.tsx` - Removed inline PluginsPanel (saved 188 lines)
-- `src-tauri/src/plugin_runtime.rs` - FunctionEnvMut-based host functions (563 lines, read_file fully functional)
+- `src-tauri/src/plugin_runtime.rs` - FunctionEnvMut-based host functions + module caching (612 lines, read_file + clipboard fully functional)
 - `src-tauri/src/plugin.rs` - Added PluginFunction and PluginFunctionParameter structs
 - `examples/plugins/csv-parser/plugin.json` - Added functions metadata array (5 functions)
 - `examples/plugins/json-transformer/` - New plugin directory:
@@ -340,8 +344,19 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
   - `src/lib.rs` - HTML analyzer with text extraction, tag counting (273 lines no_std)
   - `plugin.wasm` - Compiled WASM (9.8KB)
   - `Cargo.toml` - Build configuration
+- `examples/plugins/clipboard-util/` - New plugin directory:
+  - `plugin.json` - Manifest with ui-component capability, clipboard permission
+  - `src/lib.rs` - Clipboard utilities (read, write, transform) (151 lines no_std)
+  - `plugin.wasm` - Compiled WASM (4.2KB)
+  - `Cargo.toml` - Build configuration
+- `examples/plugins/text-analyzer/` - New plugin directory:
+  - `plugin.json` - Manifest with data-source and transform capabilities
+  - `src/lib.rs` - Advanced text analysis (readability, sentiment, stats) (259 lines no_std)
+  - `plugin.wasm` - Compiled WASM (9.9KB)
+  - `Cargo.toml` - Build configuration
 - `examples/test-data.json` - Test JSON file for transformer plugin
 - `examples/test-data.html` - Test HTML file for viewer plugin
+- `examples/test-data.txt` - Test text file for analyzer plugin
 
 **Commits:**
 - `850bacb` - feat: add plugin execution UI with file selection and result display
@@ -350,6 +365,8 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - `fe9ece8` - feat: add JSON Transformer plugin with pretty-print, minify, validate functions
 - `76fd117` - feat: add HTML Viewer plugin with text extraction, tag counting, structure validation
 - `940d190` - feat: implement WASM-callable host functions with FunctionEnvMut pattern
+- `9ea1d35` - feat: add clipboard host functions and Clipboard Utility plugin
+- `4db4b81` - feat: add text-analyzer plugin with advanced text analysis
 
 **Deferred to Phase 6 (Post-MVP):**
 - WASM-callable http_get (requires async runtime integration)
@@ -380,7 +397,7 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - Phase 2: 100% complete ✅
 - Phase 3: 100% complete ✅
 - Phase 4: 100% complete ✅
-- Phase 5: ~80% complete ✅ (Core features shipped: multi-function UI, host functions, 3 example plugins. Marketplace + optimizations deferred to Phase 6)
+- Phase 5: 100% complete ✅ (All features shipped: multi-function UI, host functions, module caching, 5 production example plugins. Marketplace deferred to Phase 6)
 
 ---
 
@@ -492,7 +509,14 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - Host function stubs (http_get, exec, clipboard) return -1 to signal "not implemented" rather than crashing
 - http_get implementation deferred - would need async runtime integration with wasmer (non-trivial)
 - exec intentionally restricted for security - plugins shouldn't execute arbitrary commands
-- Performance optimizations (lazy loading, module caching) deferred to Phase 6 - current performance acceptable for MVP
+- Module caching implemented - HashMap<String, Module> prevents recompilation on reload (significant performance win)
+- Clipboard host functions: platform-specific (pbpaste/pbcopy on macOS, xclip on Linux) using std::process::Command
+- Clipboard Utility plugin demonstrates host function calls from WASM (read_clipboard, write_clipboard)
+- Text Analyzer plugin: no_std lifetime issues with to_lowercase() - need binding to extend lifetime beyond temporary
+- String comparison in no_std: iterator returns &str, need dereference (*w) to compare with str
+- Packed i32 return values useful for multi-value outputs (get_text_stats packs word/sentence/paragraph counts)
+- Global allocator + panic handler boilerplate required for every no_std WASM plugin
+- Ambiguous integer types in no_std require explicit type annotations (i32, not just integer literal)
 
 ### Technical Debt
 
