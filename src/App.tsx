@@ -29,6 +29,7 @@ import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
+import { CommandPalette } from './components/CommandPalette';
 import type { AgentConfig, AgentStats } from './types/events';
 
 type Tab = 'folders' | 'history' | 'privacy' | 'settings';
@@ -192,6 +193,16 @@ function AppInner() {
       {/* Global overlays */}
       <ReAuthModal />
       <KeyboardShortcuts />
+      <CommandPalette
+        config={config}
+        onNavigate={(tab) => setActiveTab(tab)}
+        onAddFolder={() => {
+          // Switch to folders tab and trigger add folder action
+          // The FolderList component will handle the actual folder picker
+          setActiveTab('folders');
+          // TODO: Emit event to trigger folder picker in FolderList
+        }}
+      />
     </div>
   );
 }

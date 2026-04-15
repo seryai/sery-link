@@ -18,6 +18,7 @@ const shortcuts: Shortcut[] = [
   { keys: ['4'], description: 'Go to Settings', section: 'Navigation' },
 
   // Actions
+  { keys: ['Cmd', 'K'], description: 'Open command palette', section: 'Actions' },
   { keys: ['Cmd', 'N'], description: 'Watch new folder', section: 'Actions' },
   { keys: ['Cmd', 'R'], description: 'Rescan current folder', section: 'Actions' },
   { keys: ['Cmd', 'W'], description: 'Close window', section: 'Actions' },
