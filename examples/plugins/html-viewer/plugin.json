@@ -1,0 +1,59 @@
+{
+  "id": "com.sery.html-viewer",
+  "name": "HTML Viewer",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "Analyze HTML files (extract text, count tags, validate structure)",
+  "capabilities": ["viewer", "data-source"],
+  "permissions": ["read-files"],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null,
+  "functions": [
+    {
+      "name": "parse_html_from_memory",
+      "description": "Load HTML file for analysis",
+      "parameters": [
+        { "name": "data_ptr", "type": "i32" },
+        { "name": "data_len", "type": "i32" }
+      ],
+      "returns": "i32",
+      "requires_file": true
+    },
+    {
+      "name": "extract_text",
+      "description": "Strip tags and extract plain text (returns: has_content, word_count, paragraph_count)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "count_tags",
+      "description": "Count HTML tags (returns: total_tags, unique_tags, depth)",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "validate_structure",
+      "description": "Check if HTML tags are balanced",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_html_length",
+      "description": "Get character count of HTML",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_version",
+      "description": "Get plugin version",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    }
+  ]
+}
