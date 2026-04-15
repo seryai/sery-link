@@ -141,6 +141,7 @@ pub fn run() {
             commands::export_configuration,
             commands::import_configuration,
             commands::validate_import_file,
+            commands::read_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -665,3 +665,9 @@ pub async fn import_configuration(
 pub async fn validate_import_file(json: String) -> Result<crate::export_import::ExportData, String> {
     crate::export_import::validate_export(&json).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read file {}: {}", path, e))
+}
