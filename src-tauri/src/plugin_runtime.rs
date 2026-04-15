@@ -13,11 +13,17 @@
 
 use crate::error::{AgentError, Result};
 use crate::plugin::{PluginManifest, PluginPermission};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use wasmer::{imports, Function, Instance, Module, Store, Value};
+use std::sync::{Arc, Mutex, RwLock};
+use wasmer::{imports, Function, Instance, Memory, Module, Store, Value};
+
+/// Global registry mapping plugin IDs to their WASM memory
+/// This allows host functions to access memory for string reading/writing
+static PLUGIN_MEMORY: Lazy<Arc<RwLock<HashMap<String, Memory>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(HashMap::new())));
 
 /// Environment passed to host functions
 /// Contains sandboxing constraints and shared state
@@ -26,13 +32,26 @@ struct HostEnv {
     /// Allowed file paths (for read_file sandboxing)
     /// Plugins with ReadFiles permission can only read from these paths
     allowed_paths: Arc<Mutex<Vec<PathBuf>>>,
+    /// Current plugin ID (for memory access from host functions)
+    plugin_id: Arc<Mutex<Option<String>>>,
 }
 
 impl HostEnv {
     fn new() -> Self {
         Self {
-            allowed_paths: Arc::new(Mutex::new(vec![]))
+            allowed_paths: Arc::new(Mutex::new(vec![])),
+            plugin_id: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn set_plugin_id(&self, id: String) {
+        let mut plugin_id = self.plugin_id.lock().unwrap();
+        *plugin_id = Some(id);
+    }
+
+    fn get_plugin_id(&self) -> Option<String> {
+        let plugin_id = self.plugin_id.lock().unwrap();
+        plugin_id.clone()
     }
 
     /// Check if a path is allowed to be read
@@ -106,6 +125,9 @@ impl PluginRuntime {
             AgentError::Validation(format!("Failed to compile WASM module: {}", e))
         })?;
 
+        // Set the plugin ID in HostEnv so host functions know which plugin is calling
+        self.env.set_plugin_id(manifest.id.clone());
+
         // Build imports based on permissions
         let import_object = self.build_imports(&manifest);
 
@@ -113,6 +135,12 @@ impl PluginRuntime {
         let instance = Instance::new(&mut self.store, &module, &import_object).map_err(|e| {
             AgentError::Validation(format!("Failed to instantiate WASM module: {}", e))
         })?;
+
+        // Store the memory in the global registry so host functions can access it
+        if let Ok(memory) = instance.exports.get_memory("memory") {
+            let mut registry = PLUGIN_MEMORY.write().unwrap();
+            registry.insert(manifest.id.clone(), memory.clone());
+        }
 
         // Call _initialize if it exists
         if let Ok(init_fn) = instance.exports.get_function("_initialize") {
@@ -211,12 +239,18 @@ impl PluginRuntime {
         for permission in &manifest.permissions {
             match permission {
                 PluginPermission::ReadFiles => {
-                    // Expose file reading functions
-                    let read_file_fn = Function::new_typed(&mut self.store, |path: i32| -> i32 {
-                        // TODO: Implement sandboxed file reading
-                        // For now, return -1 (not implemented)
-                        -1
-                    });
+                    // Expose file reading function (stub for Phase 4)
+                    // Phase 4: Full WASM-callable read_file requires wasmer FunctionEnv pattern
+                    // For now, use execute_plugin_with_file command (host reads, passes to plugin)
+                    let read_file_fn = Function::new_typed(
+                        &mut self.store,
+                        |_path_ptr: i32, _path_len: i32, _output_ptr: i32, _output_max_len: i32| -> i32 {
+                            // TODO Phase 5: Implement with FunctionEnvMut for Store access
+                            // Signature: read_file(path_ptr, path_len, output_ptr, output_max) -> bytes or -1
+                            // Current workaround: use execute_plugin_with_file Tauri command
+                            -1 // Not yet implemented
+                        },
+                    );
                     imports.define("env", "read_file", read_file_fn);
                 }
                 PluginPermission::Network => {

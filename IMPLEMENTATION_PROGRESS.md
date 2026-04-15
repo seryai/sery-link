@@ -223,9 +223,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Commits:**
 - `3c95b4e` - feat: enhance Local-First Query History with export and statistics
 
-### Plugin Execution Layer ✅ DONE (Phase 3 - File Reading Working)
-**Status:** Complete (Phase 3 - Host Function Foundation + Sandboxing)
-**Effort:** ~4 days (Rust runtime + memory management + example plugins + testing + file I/O)
+### Plugin Execution Layer ✅ DONE (Phase 4 - Host Function Infrastructure)
+**Status:** Complete (Phase 4 - Memory Registry + Sandboxing Infrastructure)
+**Effort:** ~4.5 days (Rust runtime + memory management + example plugins + testing + file I/O + infrastructure)
 **Implementation:**
 - ✅ WebAssembly runtime infrastructure using wasmer v7.1.0
 - ✅ PluginRuntime struct with load/unload/execute methods
@@ -244,9 +244,14 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - ✅ File reading with sandboxing: read_file_for_plugin() validates paths against allowed directories
 - ✅ Sandboxing test: allowed path ✓, denied path blocked ✓
 - ✅ execute_plugin_with_file command: reads file, passes to plugin
-- ⏸️ WASM-callable host functions (full memory-based read_file, http_get, exec, clipboard) - deferred to Phase 4
-- ⏸️ Frontend UI for plugin execution - deferred to Phase 4
-- ⏸️ Plugin marketplace/discovery - deferred to Phase 4
+- ✅ Global memory registry: PLUGIN_MEMORY for host function access to WASM memory
+- ✅ Plugin ID tracking: HostEnv stores current plugin ID for context
+- ✅ Memory registration: load_plugin stores Memory in global registry
+- ✅ Infrastructure for WASM-callable host functions (FunctionEnv pattern researched)
+- ⏸️ WASM-callable read_file (requires FunctionEnvMut for Store access) - deferred to Phase 5
+- ⏸️ Other WASM-callable host functions (http_get, exec, clipboard) - deferred to Phase 5
+- ⏸️ Frontend UI for plugin execution - deferred to Phase 5
+- ⏸️ Plugin marketplace/discovery - deferred to Phase 5
 
 **Files created:**
 - `src-tauri/src/plugin_runtime.rs` - WebAssembly runtime core (460 lines, 2 tests passing)
@@ -269,9 +274,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Files modified:**
 - `src-tauri/src/commands.rs` - Added 5 plugin runtime commands (load, unload, is_loaded, get_loaded, execute_with_file) + PLUGIN_RUNTIME global handle
 - `src-tauri/src/lib.rs` - Registered plugin_runtime module and commands
-- `src-tauri/Cargo.toml` - Added wasmer v7.1.0 (97 new packages) + tempfile dev-dependency
+- `src-tauri/Cargo.toml` - Added wasmer v7.1.0 (97 new packages) + tempfile + once_cell dev-dependencies
 - `src-tauri/src/export_import.rs` - Fixed test fixtures for new Config schema fields
-- `src-tauri/src/plugin_runtime.rs` - Added read_file_for_plugin() method, HostEnv::read_file_if_allowed(), sandboxing test
+- `src-tauri/src/plugin_runtime.rs` - Added read_file_for_plugin(), HostEnv extensions (plugin_id, read_file_if_allowed), PLUGIN_MEMORY registry, memory registration in load_plugin(), sandboxing test
 
 **Test Results:**
 ```
@@ -284,13 +289,16 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 
 **Commits:**
 - `8b68097` - feat: Phase 2 Plugin Execution - memory management + production CSV parser
-- `[pending]` - feat: Phase 3 - implement file reading with sandboxing
+- `54e9bdd` - feat: Phase 3 Plugin Execution - file reading with sandboxing
+- `[pending]` - feat: Phase 4 - memory registry infrastructure for host functions
 
-**Phase 4 (Future):**
-The host function foundation is working. Future work includes:
-- Implement full WASM-callable host functions with memory passing (complex read_file, http_get, exec, clipboard)
+**Phase 5 (Future):**
+The infrastructure is ready for WASM-callable host functions. Future work:
+- Implement WASM-callable read_file using FunctionEnvMut pattern (wasmer 7.x Store access)
+- Implement WASM-callable http_get, exec, clipboard with same pattern
 - Add WASI support for standard interfaces (filesystem, environment variables)
 - Create more production-ready example plugins (JSON transformer, HTML viewer, HTTP fetcher)
+- Update CSV parser to call read_file host function directly from WASM
 - Add frontend UI for executing plugins (trigger plugin functions from Settings → Plugins)
 - Add plugin marketplace/discovery (community plugin registry)
 - Performance optimization (lazy loading, caching compiled modules)
