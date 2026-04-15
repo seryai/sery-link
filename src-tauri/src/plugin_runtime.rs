@@ -167,7 +167,7 @@ impl PluginRuntime {
 
     /// Write a string to WASM memory (allocates memory in plugin)
     /// Returns pointer to the string in WASM memory
-    fn write_string_to_memory(&mut self, plugin_id: &str, s: &str) -> Result<i32> {
+    pub fn write_string_to_memory(&mut self, plugin_id: &str, s: &str) -> Result<i32> {
         let instance_data = self.instances.get(plugin_id)
             .ok_or_else(|| AgentError::NotFound(format!("Plugin not loaded: {}", plugin_id)))?;
 
@@ -606,5 +606,81 @@ mod tests {
         println!("File reading sandboxing test passed!");
         println!("  - Allowed path readable ✓");
         println!("  - Denied path blocked ✓");
+    }
+
+    #[test]
+    #[ignore] // Requires csv-parser plugin to be present
+    fn test_end_to_end_csv_parsing() {
+        let mut runtime = PluginRuntime::new();
+
+        // Path to the CSV parser plugin
+        let plugin_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/csv-parser");
+
+        if !plugin_dir.exists() {
+            println!("Skipping test - csv-parser plugin not found");
+            return;
+        }
+
+        // Load the plugin
+        let manifest_path = plugin_dir.join("plugin.json");
+        let manifest_str = std::fs::read_to_string(&manifest_path)
+            .expect("Failed to read manifest");
+        let manifest: PluginManifest = serde_json::from_str(&manifest_str)
+            .expect("Failed to parse manifest");
+
+        runtime.load_plugin(&plugin_dir, manifest.clone())
+            .expect("Failed to load plugin");
+
+        // Create a test CSV file
+        let test_dir = std::env::temp_dir().join("sery_csv_test");
+        std::fs::create_dir_all(&test_dir).expect("Failed to create test dir");
+        let test_file = test_dir.join("test.csv");
+        std::fs::write(&test_file, "name,age,city\nAlice,30,NYC\nBob,25,SF\nCarol,35,LA")
+            .expect("Failed to write test CSV");
+
+        // Set allowed paths
+        runtime.set_allowed_paths(vec![test_dir.clone()]);
+
+        // Read the file
+        let file_bytes = runtime.read_file_for_plugin(
+            &manifest.id,
+            test_file.to_str().unwrap()
+        ).expect("Failed to read file");
+
+        // Write to plugin memory
+        let file_str = String::from_utf8_lossy(&file_bytes);
+        let data_ptr = runtime.write_string_to_memory(&manifest.id, &file_str)
+            .expect("Failed to write to memory");
+
+        // Call parse_csv_from_memory
+        let result = runtime.execute(
+            &manifest.id,
+            "parse_csv_from_memory",
+            vec![wasmer::Value::I32(data_ptr), wasmer::Value::I32(file_str.len() as i32)]
+        ).expect("Failed to execute");
+
+        // Decode result: (valid << 16) | (row_count << 8) | column_count
+        if let wasmer::Value::I32(packed) = result[0] {
+            let valid = (packed >> 16) & 0xFF;
+            let row_count = (packed >> 8) & 0xFF;
+            let column_count = packed & 0xFF;
+
+            assert_eq!(column_count, 3, "Expected 3 columns");
+            assert_eq!(row_count, 3, "Expected 3 rows");
+            assert_eq!(valid, 1, "Expected CSV to be valid");
+
+            println!("End-to-end CSV parsing test passed!");
+            println!("  - File read through sandboxing ✓");
+            println!("  - Data written to plugin memory ✓");
+            println!("  - Plugin parsed CSV correctly ✓");
+            println!("  - Result: {} columns, {} rows, valid={}", column_count, row_count, valid);
+        } else {
+            panic!("Expected I32 return value");
+        }
+
+        // Clean up
+        std::fs::remove_dir_all(&test_dir).ok();
+        runtime.unload_plugin(&manifest.id).ok();
     }
 }

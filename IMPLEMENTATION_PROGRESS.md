@@ -223,9 +223,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 **Commits:**
 - `3c95b4e` - feat: enhance Local-First Query History with export and statistics
 
-### Plugin Execution Layer ✅ DONE (Phase 4 - Host Function Infrastructure)
-**Status:** Complete (Phase 4 - Memory Registry + Sandboxing Infrastructure)
-**Effort:** ~4.5 days (Rust runtime + memory management + example plugins + testing + file I/O + infrastructure)
+### Plugin Execution Layer ✅ DONE (Phase 4 - End-to-End Working!)
+**Status:** Complete (Phase 4 - Full Working Plugin System with Real File Processing)
+**Effort:** ~5 days (Rust runtime + memory management + example plugins + testing + file I/O + infrastructure + end-to-end integration)
 **Implementation:**
 - ✅ WebAssembly runtime infrastructure using wasmer v7.1.0
 - ✅ PluginRuntime struct with load/unload/execute methods
@@ -248,6 +248,11 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - ✅ Plugin ID tracking: HostEnv stores current plugin ID for context
 - ✅ Memory registration: load_plugin stores Memory in global registry
 - ✅ Infrastructure for WASM-callable host functions (FunctionEnv pattern researched)
+- ✅ End-to-end working flow: File → Host sandboxing → Plugin memory → Execute → Results
+- ✅ CSV parser parse_csv_from_memory() function: takes ptr+len, returns packed i32 result
+- ✅ execute_plugin_with_file: reads file, writes to memory, calls plugin, returns result
+- ✅ write_string_to_memory: public method for Tauri commands to use
+- ✅ End-to-end test: file read ✓, memory write ✓, parse ✓, result decode ✓
 - ⏸️ WASM-callable read_file (requires FunctionEnvMut for Store access) - deferred to Phase 5
 - ⏸️ Other WASM-callable host functions (http_get, exec, clipboard) - deferred to Phase 5
 - ⏸️ Frontend UI for plugin execution - deferred to Phase 5
@@ -272,11 +277,13 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
   - `README.md` - Documentation with test data and expected results
 
 **Files modified:**
-- `src-tauri/src/commands.rs` - Added 5 plugin runtime commands (load, unload, is_loaded, get_loaded, execute_with_file) + PLUGIN_RUNTIME global handle
+- `src-tauri/src/commands.rs` - Added 5 plugin runtime commands + PLUGIN_RUNTIME global, execute_plugin_with_file now fully functional
 - `src-tauri/src/lib.rs` - Registered plugin_runtime module and commands
 - `src-tauri/Cargo.toml` - Added wasmer v7.1.0 (97 new packages) + tempfile + once_cell dev-dependencies
 - `src-tauri/src/export_import.rs` - Fixed test fixtures for new Config schema fields
-- `src-tauri/src/plugin_runtime.rs` - Added read_file_for_plugin(), HostEnv extensions (plugin_id, read_file_if_allowed), PLUGIN_MEMORY registry, memory registration in load_plugin(), sandboxing test
+- `src-tauri/src/plugin_runtime.rs` - read_file_for_plugin(), write_string_to_memory (public), HostEnv extensions, PLUGIN_MEMORY registry, end-to-end test
+- `examples/plugins/csv-parser/src/lib.rs` - Added parse_csv_from_memory() function, conditional no_std for test compatibility
+- `examples/plugins/csv-parser/plugin.wasm` - Rebuilt with new function (2.4KB)
 
 **Test Results:**
 ```

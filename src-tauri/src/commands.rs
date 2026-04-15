@@ -760,15 +760,34 @@ pub async fn execute_plugin_with_file(
         .read_file_for_plugin(&plugin_id, &file_path)
         .map_err(|e| e.to_string())?;
 
-    // For Phase 3 MVP: write file bytes to plugin memory and call function
-    // This demonstrates the full flow without complex memory management yet
+    // Convert bytes to string (for text files like CSV)
+    let file_str = String::from_utf8_lossy(&file_bytes);
 
-    // For now, return a placeholder showing we successfully read the file
-    Ok(format!(
-        "{{\"plugin\":\"{}\",\"file\":\"{}\",\"size\":{},\"function\":\"{}\"}}",
-        plugin_id,
-        file_path,
-        file_bytes.len(),
-        function_name
-    ))
+    // Write file contents to plugin memory
+    let data_ptr = runtime
+        .write_string_to_memory(&plugin_id, &file_str)
+        .map_err(|e| e.to_string())?;
+
+    // Call the plugin function with pointer and length
+    let data_len = file_str.len() as i32;
+    let result = runtime
+        .execute(&plugin_id, &function_name, vec![
+            wasmer::Value::I32(data_ptr),
+            wasmer::Value::I32(data_len),
+        ])
+        .map_err(|e| e.to_string())?;
+
+    // Extract the result (assuming i32 return)
+    if let Some(wasmer::Value::I32(value)) = result.first() {
+        Ok(format!(
+            "{{\"plugin\":\"{}\",\"file\":\"{}\",\"size\":{},\"function\":\"{}\",\"result\":{}}}",
+            plugin_id,
+            file_path,
+            file_bytes.len(),
+            function_name,
+            value
+        ))
+    } else {
+        Err("Plugin function did not return i32".to_string())
+    }
 }
