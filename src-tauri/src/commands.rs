@@ -791,3 +791,99 @@ pub async fn execute_plugin_with_file(
         Err("Plugin function did not return i32".to_string())
     }
 }
+
+
+// ─── Plugin Marketplace ─────────────────────────────────────────────────────
+
+use crate::plugin_marketplace::{MarketplaceEntry, MarketplaceRegistry, PluginInstaller};
+use once_cell::sync::Lazy;
+
+static MARKETPLACE: Lazy<Arc<RwLock<Option<MarketplaceRegistry>>>> = 
+    Lazy::new(|| Arc::new(RwLock::new(None)));
+
+#[tauri::command]
+pub async fn load_marketplace() -> Result<MarketplaceRegistry, String> {
+    let marketplace_path = dirs::home_dir()
+        .ok_or_else(|| "Could not find home directory".to_string())?
+        .join(".sery")
+        .join("marketplace.json");
+
+    if marketplace_path.exists() {
+        let registry = MarketplaceRegistry::load(&marketplace_path)
+            .map_err(|e| e.to_string())?;
+        *MARKETPLACE.write().await = Some(registry.clone());
+        Ok(registry)
+    } else {
+        // Return empty marketplace if file doesn't exist
+        let registry = MarketplaceRegistry::default();
+        Ok(registry)
+    }
+}
+
+#[tauri::command]
+pub async fn search_marketplace(query: String) -> Result<Vec<MarketplaceEntry>, String> {
+    let marketplace = MARKETPLACE.read().await;
+    
+    if let Some(ref registry) = *marketplace {
+        let results = registry.search(&query);
+        Ok(results.into_iter().cloned().collect())
+    } else {
+        Err("Marketplace not loaded".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_featured_plugins() -> Result<Vec<MarketplaceEntry>, String> {
+    let marketplace = MARKETPLACE.read().await;
+    
+    if let Some(ref registry) = *marketplace {
+        let results = registry.featured();
+        Ok(results.into_iter().cloned().collect())
+    } else {
+        Err("Marketplace not loaded".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_popular_plugins(limit: usize) -> Result<Vec<MarketplaceEntry>, String> {
+    let marketplace = MARKETPLACE.read().await;
+    
+    if let Some(ref registry) = *marketplace {
+        let results = registry.popular(limit);
+        Ok(results.into_iter().cloned().collect())
+    } else {
+        Err("Marketplace not loaded".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_marketplace_plugin(plugin_id: String) -> Result<Option<MarketplaceEntry>, String> {
+    let marketplace = MARKETPLACE.read().await;
+    
+    if let Some(ref registry) = *marketplace {
+        Ok(registry.get(&plugin_id).cloned())
+    } else {
+        Err("Marketplace not loaded".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn install_marketplace_plugin(plugin_id: String) -> Result<(), String> {
+    let marketplace = MARKETPLACE.read().await;
+    let entry = if let Some(ref registry) = *marketplace {
+        registry.get(&plugin_id)
+            .ok_or_else(|| format!("Plugin not found in marketplace: {}", plugin_id))?
+            .clone()
+    } else {
+        return Err("Marketplace not loaded".to_string());
+    };
+    
+    let plugins_dir = dirs::home_dir()
+        .ok_or_else(|| "Could not find home directory".to_string())?
+        .join(".sery")
+        .join("plugins");
+    
+    let installer = PluginInstaller::new(plugins_dir);
+    installer.install(&entry).await
+        .map_err(|e| e.to_string())
+}
