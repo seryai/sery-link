@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use wasmer::{imports, Function, FunctionEnv, FunctionEnvMut, Instance, Module, Store, Value};
+use wasmer::{imports, Function, Instance, Module, Store, Value};
 
 /// Environment passed to host functions
 /// Contains sandboxing constraints and shared state
@@ -49,6 +49,17 @@ impl HostEnv {
             }
         }
         false
+    }
+
+    /// Read a file if the path is allowed
+    /// Returns file contents as bytes, or error
+    fn read_file_if_allowed(&self, path: &Path) -> std::result::Result<Vec<u8>, String> {
+        if !self.is_path_allowed(path) {
+            return Err(format!("Access denied: {} is not in allowed paths", path.display()));
+        }
+
+        std::fs::read(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))
     }
 }
 
@@ -103,6 +114,11 @@ impl PluginRuntime {
             AgentError::Validation(format!("Failed to instantiate WASM module: {}", e))
         })?;
 
+        // Call _initialize if it exists
+        if let Ok(init_fn) = instance.exports.get_function("_initialize") {
+            let _ = init_fn.call(&mut self.store, &[]);
+        }
+
         // Store the instance
         self.instances.insert(
             manifest.id.clone(),
@@ -110,6 +126,15 @@ impl PluginRuntime {
         );
 
         Ok(())
+    }
+
+    /// Read a file through a plugin (with sandboxing)
+    /// This is called by the host, not directly by WASM
+    pub fn read_file_for_plugin(&mut self, plugin_id: &str, file_path: &str) -> Result<Vec<u8>> {
+        let path = PathBuf::from(file_path);
+
+        self.env.read_file_if_allowed(&path)
+            .map_err(|e| AgentError::FileSystem(e))
     }
 
     /// Write a string to WASM memory (allocates memory in plugin)
@@ -499,5 +524,53 @@ mod tests {
         println!("  - Row count: 3 ✓");
         println!("  - CSV valid: true ✓");
         println!("  - Version: 1.0 ✓");
+    }
+
+    #[test]
+    fn test_file_reading_sandboxing() {
+        let mut runtime = PluginRuntime::new();
+
+        // Create a temporary test file
+        let test_dir = std::env::temp_dir().join("sery_plugin_test");
+        std::fs::create_dir_all(&test_dir).expect("Failed to create test dir");
+
+        let allowed_file = test_dir.join("allowed.txt");
+        std::fs::write(&allowed_file, b"Hello from allowed file")
+            .expect("Failed to write test file");
+
+        let denied_dir = std::env::temp_dir().join("sery_plugin_denied");
+        std::fs::create_dir_all(&denied_dir).expect("Failed to create denied dir");
+        let denied_file = denied_dir.join("denied.txt");
+        std::fs::write(&denied_file, b"This should not be readable")
+            .expect("Failed to write denied file");
+
+        // Set allowed paths - only test_dir is allowed
+        runtime.set_allowed_paths(vec![test_dir.clone()]);
+
+        // Test 1: Reading from allowed path should succeed
+        let result = runtime.read_file_for_plugin(
+            "com.test.plugin",
+            allowed_file.to_str().unwrap()
+        );
+        assert!(result.is_ok(), "Should be able to read from allowed path");
+        let content = result.unwrap();
+        assert_eq!(content, b"Hello from allowed file");
+
+        // Test 2: Reading from denied path should fail
+        let result = runtime.read_file_for_plugin(
+            "com.test.plugin",
+            denied_file.to_str().unwrap()
+        );
+        assert!(result.is_err(), "Should NOT be able to read from denied path");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Access denied"), "Error should mention access denied");
+
+        // Clean up
+        std::fs::remove_dir_all(&test_dir).ok();
+        std::fs::remove_dir_all(&denied_dir).ok();
+
+        println!("File reading sandboxing test passed!");
+        println!("  - Allowed path readable ✓");
+        println!("  - Denied path blocked ✓");
     }
 }

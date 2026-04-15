@@ -152,6 +152,7 @@ pub fn run() {
             commands::unload_plugin_from_runtime,
             commands::is_plugin_loaded,
             commands::get_loaded_plugins,
+            commands::execute_plugin_with_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
