@@ -27,3 +27,4 @@ dist-ssr
 sidecar/build/
 sidecar/dist/
 sidecar/*.spec
+examples/plugins/*/target/
