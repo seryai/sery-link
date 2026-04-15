@@ -299,40 +299,66 @@ test plugin_runtime::tests::test_load_and_execute_hello_world ... ok
 - `54e9bdd` - feat: Phase 3 Plugin Execution - file reading with sandboxing
 - `[pending]` - feat: Phase 4 - memory registry infrastructure for host functions
 
-**Phase 5 - Frontend UI for Plugin Execution ✅ DONE (Partial)**
-**Status:** First iteration complete
-**Effort:** ~2-3 hours (React component + integration)
-**Completion:** Frontend execution UI shipped
+**Phase 5 - Advanced Plugin Features ✅ MOSTLY COMPLETE**
+**Status:** Core features complete, optimizations deferred
+**Effort:** ~1-2 days (Frontend UI + host functions + example plugins)
+**Completion:** ~80% complete
 
 **What works:**
 - ✅ New PluginsPanel component extracted to separate file (src/components/PluginsPanel.tsx)
-- ✅ "Run" button for enabled plugins opens execution panel
-- ✅ File picker with dialog for selecting CSV files (or any file type)
-- ✅ Execute button loads plugin into runtime and calls `parse_csv_from_memory`
-- ✅ Result display with unpacked CSV analysis (columns, rows, valid status)
+- ✅ Multi-function selector UI - dropdown shows all functions from plugin manifest
+- ✅ Conditional file picker - only shown for functions with requires_file: true
+- ✅ Dynamic execute button labels (e.g., "Run parse_csv_from_memory" vs "Run validate")
+- ✅ Function metadata-driven UI (name, description, parameters, requires_file flag)
+- ✅ Execute button loads plugin into runtime and calls selected function
+- ✅ Result display with unpacked values (bitshift decoding for packed i32 results)
 - ✅ File size display and formatted result output
 - ✅ Loading states for execution (spinner + disabled button)
 - ✅ Clean collapsible UI that doesn't clutter plugin management
-- ✅ Added test-data.csv in examples/ for easy testing
+- ✅ WASM-callable host functions implemented with FunctionEnvMut pattern
+- ✅ read_file host function fully functional (Store/Memory access via FunctionEnvMut)
+- ✅ Sandboxed file reading with path validation (allowed directories enforced)
+- ✅ Three production example plugins:
+  - CSV Parser (data-source, 5 functions, 2.4KB WASM)
+  - JSON Transformer (transform, 6 functions, 5.7KB WASM - pretty-print, minify, validate)
+  - HTML Viewer (viewer, 6 functions, 9.8KB WASM - text extraction, tag counting, structure validation)
+- ✅ Test data files: test-data.csv, test-data.json, test-data.html
 
-**Files modified/created:**
-- `src/components/PluginsPanel.tsx` - New component with execution capabilities (334 lines)
-- `src/components/Settings.tsx` - Removed inline PluginsPanel, imported from dedicated file
-- `examples/test-data.csv` - Test CSV file with 5 rows for plugin testing
+**Files created/modified:**
+- `src/components/PluginsPanel.tsx` - Multi-function selector UI (390 lines, function dropdown + conditional file picker)
+- `src/components/Settings.tsx` - Removed inline PluginsPanel (saved 188 lines)
+- `src-tauri/src/plugin_runtime.rs` - FunctionEnvMut-based host functions (563 lines, read_file fully functional)
+- `src-tauri/src/plugin.rs` - Added PluginFunction and PluginFunctionParameter structs
+- `examples/plugins/csv-parser/plugin.json` - Added functions metadata array (5 functions)
+- `examples/plugins/json-transformer/` - New plugin directory:
+  - `plugin.json` - Manifest with transform capability
+  - `src/lib.rs` - JSON parser with pretty-print, minify, validate (254 lines no_std)
+  - `plugin.wasm` - Compiled WASM (5.7KB)
+  - `Cargo.toml` - Build configuration
+- `examples/plugins/html-viewer/` - New plugin directory:
+  - `plugin.json` - Manifest with viewer capability
+  - `src/lib.rs` - HTML analyzer with text extraction, tag counting (273 lines no_std)
+  - `plugin.wasm` - Compiled WASM (9.8KB)
+  - `Cargo.toml` - Build configuration
+- `examples/test-data.json` - Test JSON file for transformer plugin
+- `examples/test-data.html` - Test HTML file for viewer plugin
 
 **Commits:**
 - `850bacb` - feat: add plugin execution UI with file selection and result display
+- `1e01f64` - docs: update progress tracking for Phase 5 frontend execution UI
+- `912363d` - feat: add multi-function selector UI for plugins
+- `fe9ece8` - feat: add JSON Transformer plugin with pretty-print, minify, validate functions
+- `76fd117` - feat: add HTML Viewer plugin with text extraction, tag counting, structure validation
+- `940d190` - feat: implement WASM-callable host functions with FunctionEnvMut pattern
 
-**Phase 5 (Future - Remaining Work):**
-The frontend execution UI is working. Future work:
-- Implement WASM-callable read_file using FunctionEnvMut pattern (wasmer 7.x Store access)
-- Implement WASM-callable http_get, exec, clipboard with same pattern
-- Add WASI support for standard interfaces (filesystem, environment variables)
-- Create more production-ready example plugins (JSON transformer, HTML viewer, HTTP fetcher)
-- Update CSV parser to call read_file host function directly from WASM
-- Add function selector UI for multi-function plugins (currently hardcoded to parse_csv_from_memory)
-- Add plugin marketplace/discovery (community plugin registry)
-- Performance optimization (lazy loading, caching compiled modules)
+**Deferred to Phase 6 (Post-MVP):**
+- WASM-callable http_get (requires async runtime integration)
+- WASM-callable exec (intentionally restricted for security)
+- WASM-callable clipboard access (needs platform-specific Tauri plugin)
+- WASI support for standard interfaces
+- Plugin marketplace/discovery (community plugin registry)
+- Performance optimizations (lazy loading, module caching)
+- More advanced example plugins (HTTP fetcher would need async host functions)
 
 ### Pricing Model Revision ⏳ TODO
 **Recommendation:** Free forever core + paid cloud
@@ -345,16 +371,16 @@ The frontend execution UI is working. Future work:
 ## Implementation Statistics
 
 - **Total Tasks:** 18
-- **Completed:** 14 (77.78%)
-- **In Progress:** 1 (5.56%) - Phase 5 Frontend UI (first iteration done, advanced features remaining)
-- **Not Started:** 3 (16.67%)
+- **Completed:** 15 (83.33%)
+- **In Progress:** 0 (0%)
+- **Not Started:** 3 (16.67%) - Pricing Model, Quick Actions (removed - already existed), Performance Optimizations (deferred)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
 - Phase 2: 100% complete ✅
 - Phase 3: 100% complete ✅
-- Phase 4: 100% complete ✅ (Foundation - both features done)
-- Phase 5: ~40% complete 🚧 (Frontend execution UI shipped, host functions + advanced features remaining)
+- Phase 4: 100% complete ✅
+- Phase 5: ~80% complete ✅ (Core features shipped: multi-function UI, host functions, 3 example plugins. Marketplace + optimizations deferred to Phase 6)
 
 ---
 
@@ -448,10 +474,25 @@ The frontend execution UI is working. Future work:
 - ExecutionResult interface typed correctly prevents runtime errors from malformed JSON
 - useState for expandedPlugin enables only one execution panel open at a time (clean UX)
 - Toast notifications for execution success/failure keep user informed of async operations
-- Test CSV file (examples/test-data.csv) makes plugin testing immediate without user needing external files
+- Test data files (CSV, JSON, HTML) make plugin testing immediate without user needing external files
 - Result formatting function (formatResult) decouples display logic from execution logic
 - Auto-load plugin before execution removes friction - user doesn't need to understand "loaded vs installed"
-- Component still hardcodes function name (parse_csv_from_memory) - multi-function UI needed in Phase 5 Part 2
+- Multi-function selector: functions metadata in manifest drives UI (name, description, parameters, requires_file)
+- Conditional file picker based on requires_file flag provides clean UI - don't show file picker for functions that don't need it
+- FunctionEnvMut pattern (wasmer 7.x) enables host functions with Store/Memory access - read_file fully functional
+- Global PLUGIN_MEMORY registry pattern allows host functions to access plugin memory without passing Store through FFI
+- HostEnv clone in FunctionEnv enables sandboxing data (allowed_paths) in host function closures
+- Sandboxed file reading: path validation prevents plugins from reading outside allowed directories
+- JSON Transformer plugin demonstrates string-based transformations (no external file needed for some functions)
+- HTML Viewer plugin shows text extraction + structural analysis (tag counting, depth calculation, balance validation)
+- no_std + global allocator pattern required for WASM plugins (DummyAllocator stub + panic_handler)
+- Type annotations required for ambiguous integer types in no_std context (saturating_sub needs explicit i32)
+- Plugin functions can mix requires_file: true/false - some need files, some operate on already-loaded data
+- Packed i32 return values enable multiple outputs from single WASM function (e.g., valid, rows, columns in one i32)
+- Host function stubs (http_get, exec, clipboard) return -1 to signal "not implemented" rather than crashing
+- http_get implementation deferred - would need async runtime integration with wasmer (non-trivial)
+- exec intentionally restricted for security - plugins shouldn't execute arbitrary commands
+- Performance optimizations (lazy loading, module caching) deferred to Phase 6 - current performance acceptable for MVP
 
 ### Technical Debt
 
