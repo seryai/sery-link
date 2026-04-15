@@ -1,0 +1,55 @@
+{
+  "id": "com.sery.stripe.cohort-retention",
+  "name": "Cohort Retention Analysis",
+  "description": "Tracks subscription retention by acquisition cohort over time. Shows month-over-month retention curves to identify churn patterns, cohort quality differences, and product-market fit signals. Essential for understanding long-term business viability and forecasting future revenue.",
+  "data_source": "Stripe",
+  "required_tables": [
+    {
+      "name": "subscriptions",
+      "required_columns": ["id", "customer_id", "status", "created_at", "canceled_at", "current_period_start"]
+    },
+    {
+      "name": "customers",
+      "required_columns": ["id", "created_at"]
+    }
+  ],
+  "sql_template": "WITH customer_cohorts AS (\n  SELECT \n    c.id AS customer_id,\n    DATE_TRUNC('month', c.created_at) AS cohort_month,\n    DATE_TRUNC('month', s.current_period_start) AS activity_month,\n    DATEDIFF('month', DATE_TRUNC('month', c.created_at), DATE_TRUNC('month', s.current_period_start)) AS months_since_acquisition\n  FROM customers c\n  JOIN subscriptions s ON s.customer_id = c.id\n  WHERE c.created_at >= '{{start_date}}'\n    AND s.status IN ('active', 'trialing', 'past_due')\n    AND s.current_period_start >= c.created_at\n),\ncohort_sizes AS (\n  SELECT \n    cohort_month,\n    COUNT(DISTINCT customer_id) AS cohort_size\n  FROM customer_cohorts\n  WHERE months_since_acquisition = 0\n  GROUP BY cohort_month\n),\nretention_matrix AS (\n  SELECT \n    cc.cohort_month,\n    cc.months_since_acquisition,\n    COUNT(DISTINCT cc.customer_id) AS retained_customers,\n    cs.cohort_size,\n    ROUND(100.0 * COUNT(DISTINCT cc.customer_id) / cs.cohort_size, 2) AS retention_pct\n  FROM customer_cohorts cc\n  JOIN cohort_sizes cs ON cs.cohort_month = cc.cohort_month\n  WHERE cc.months_since_acquisition <= {{max_months}}\n  GROUP BY cc.cohort_month, cc.months_since_acquisition, cs.cohort_size\n)\nSELECT \n  cohort_month,\n  months_since_acquisition AS month_n,\n  cohort_size,\n  retained_customers,\n  retention_pct,\n  cohort_size - retained_customers AS churned_customers,\n  ROUND(100.0 - retention_pct, 2) AS churn_pct\nFROM retention_matrix\nORDER BY cohort_month DESC, months_since_acquisition ASC",
+  "parameters": [
+    {
+      "name": "start_date",
+      "type": "date",
+      "label": "Start Date",
+      "description": "Beginning of cohort analysis (YYYY-MM-DD)",
+      "default": "2023-01-01",
+      "validation": {
+        "max": "today"
+      }
+    },
+    {
+      "name": "max_months",
+      "type": "int",
+      "label": "Months to Track",
+      "description": "How many months to track each cohort",
+      "default": 12,
+      "validation": {
+        "min": 3,
+        "max": 36
+      }
+    }
+  ],
+  "tier": "PRO",
+  "category": "Customer Analytics",
+  "tags": ["retention", "cohort", "stripe", "churn", "saas", "subscriptions"],
+  "author": "Sery Team",
+  "version": "1.0.0",
+  "created_at": "2024-01-15T00:00:00Z",
+  "updated_at": "2024-01-15T00:00:00Z",
+  "metrics": {
+    "downloads": 1234,
+    "runs": 4567,
+    "rating": 5.0,
+    "review_count": 67
+  },
+  "example_output": "Returns a table with columns:\n- `cohort_month`: Customer acquisition month (YYYY-MM-01)\n- `month_n`: Months since acquisition (0 = acquisition month)\n- `cohort_size`: Total customers in this cohort\n- `retained_customers`: Customers still active at month N\n- `retention_pct`: Retention rate as percentage (0-100)\n- `churned_customers`: Customers who churned by month N\n- `churn_pct`: Churn rate as percentage (0-100)\n\nNote: Pivot this data by cohort_month (rows) and month_n (columns) for a classic retention matrix visualization.",
+  "documentation_url": "https://sery.ai/recipes/stripe-cohort-retention"
+}

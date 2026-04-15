@@ -1,0 +1,65 @@
+{
+  "id": "com.sery.shopify.customer-lifetime-value",
+  "name": "Customer Lifetime Value (LTV)",
+  "description": "Calculates customer lifetime value using cohort analysis and predictive metrics. Segments customers by acquisition cohort and tracks average order value, purchase frequency, and retention to estimate total customer value. Essential for CAC payback analysis and determining sustainable acquisition costs.",
+  "data_source": "Shopify",
+  "required_tables": [
+    {
+      "name": "orders",
+      "required_columns": ["customer_id", "order_id", "created_at", "total_price", "financial_status"]
+    },
+    {
+      "name": "customers",
+      "required_columns": ["id", "created_at"]
+    }
+  ],
+  "sql_template": "WITH customer_metrics AS (\n  SELECT \n    c.id AS customer_id,\n    DATE_TRUNC('month', c.created_at) AS acquisition_cohort,\n    MIN(o.created_at) AS first_order_date,\n    MAX(o.created_at) AS last_order_date,\n    COUNT(DISTINCT o.order_id) AS total_orders,\n    SUM(o.total_price) AS total_revenue,\n    AVG(o.total_price) AS avg_order_value,\n    DATEDIFF('day', MIN(o.created_at), MAX(o.created_at)) + 1 AS customer_lifetime_days\n  FROM customers c\n  LEFT JOIN orders o ON o.customer_id = c.id AND o.financial_status = 'paid'\n  WHERE c.created_at >= '{{start_date}}'\n    AND c.created_at < '{{end_date}}'\n  GROUP BY c.id, acquisition_cohort\n),\ncohort_stats AS (\n  SELECT \n    acquisition_cohort,\n    COUNT(DISTINCT customer_id) AS cohort_size,\n    AVG(total_orders) AS avg_orders_per_customer,\n    AVG(total_revenue) AS avg_revenue_per_customer,\n    AVG(avg_order_value) AS avg_order_value,\n    AVG(customer_lifetime_days) AS avg_lifetime_days,\n    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY total_revenue) AS median_revenue,\n    SUM(total_revenue) AS cohort_total_revenue\n  FROM customer_metrics\n  GROUP BY acquisition_cohort\n)\nSELECT \n  acquisition_cohort,\n  cohort_size,\n  ROUND(avg_orders_per_customer, 2) AS avg_orders,\n  ROUND(avg_revenue_per_customer, 2) AS ltv,\n  ROUND(avg_order_value, 2) AS aov,\n  ROUND(avg_lifetime_days, 0) AS avg_lifetime_days,\n  ROUND(median_revenue, 2) AS median_ltv,\n  ROUND(cohort_total_revenue, 2) AS cohort_revenue,\n  ROUND(365.0 * avg_orders_per_customer / NULLIF(avg_lifetime_days, 0), 2) AS annual_order_frequency\nFROM cohort_stats\nORDER BY acquisition_cohort DESC\nLIMIT {{limit}}",
+  "parameters": [
+    {
+      "name": "start_date",
+      "type": "date",
+      "label": "Start Date",
+      "description": "Beginning of cohort period (YYYY-MM-DD)",
+      "default": "2023-01-01",
+      "validation": {
+        "max": "today"
+      }
+    },
+    {
+      "name": "end_date",
+      "type": "date",
+      "label": "End Date",
+      "description": "End of cohort period (YYYY-MM-DD)",
+      "default": "today",
+      "validation": {
+        "max": "today"
+      }
+    },
+    {
+      "name": "limit",
+      "type": "int",
+      "label": "Number of Cohorts",
+      "description": "How many monthly cohorts to analyze",
+      "default": 12,
+      "validation": {
+        "min": 1,
+        "max": 60
+      }
+    }
+  ],
+  "tier": "PRO",
+  "category": "Customer Analytics",
+  "tags": ["ltv", "cohort", "shopify", "retention", "revenue", "customer-value"],
+  "author": "Sery Team",
+  "version": "1.0.0",
+  "created_at": "2024-01-15T00:00:00Z",
+  "updated_at": "2024-01-15T00:00:00Z",
+  "metrics": {
+    "downloads": 876,
+    "runs": 2341,
+    "rating": 4.9,
+    "review_count": 43
+  },
+  "example_output": "Returns a table with columns:\n- `acquisition_cohort`: Month customers were acquired (YYYY-MM-01)\n- `cohort_size`: Number of customers in this cohort\n- `avg_orders`: Average orders per customer\n- `ltv`: Average customer lifetime value (total revenue)\n- `aov`: Average order value\n- `avg_lifetime_days`: Average days from first to last order\n- `median_ltv`: Median customer value (less sensitive to outliers)\n- `cohort_revenue`: Total revenue from this cohort\n- `annual_order_frequency`: Estimated orders per year",
+  "documentation_url": "https://sery.ai/recipes/shopify-customer-ltv"
+}
