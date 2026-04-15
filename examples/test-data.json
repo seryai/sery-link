@@ -1,0 +1,1 @@
+{"name":"SeryLink","version":"0.1.0","features":["plugin-system","file-watching","data-sources","transformations"],"config":{"max_file_size":"50MB","supported_formats":["parquet","csv","xlsx","xls"]}}

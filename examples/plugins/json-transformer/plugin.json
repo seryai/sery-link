@@ -1,0 +1,59 @@
+{
+  "id": "com.sery.json-transformer",
+  "name": "JSON Transformer",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "Transform and validate JSON data (pretty-print, minify, validate)",
+  "capabilities": ["transform"],
+  "permissions": ["read-files"],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null,
+  "functions": [
+    {
+      "name": "parse_json_from_memory",
+      "description": "Load and validate JSON from file",
+      "parameters": [
+        { "name": "data_ptr", "type": "i32" },
+        { "name": "data_len", "type": "i32" }
+      ],
+      "returns": "i32",
+      "requires_file": true
+    },
+    {
+      "name": "pretty_print",
+      "description": "Format JSON with indentation",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "minify",
+      "description": "Remove all whitespace from JSON",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "validate",
+      "description": "Check if JSON is valid",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_json_length",
+      "description": "Get character count of stored JSON",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    },
+    {
+      "name": "get_version",
+      "description": "Get plugin version",
+      "parameters": [],
+      "returns": "i32",
+      "requires_file": false
+    }
+  ]
+}
