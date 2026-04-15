@@ -5,8 +5,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Bell,
+  Download,
   Info,
   LogOut,
   Monitor,
@@ -16,6 +18,7 @@ import {
   Save,
   Settings as SettingsIcon,
   Sun,
+  Upload,
   Zap,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -82,6 +85,88 @@ export function Settings() {
     }
   };
 
+  const exportConfig = async () => {
+    if (!agentInfo?.workspace_id) {
+      toast.error('Workspace ID not available');
+      return;
+    }
+    try {
+      const json = await invoke<string>('export_configuration', {
+        workspaceId: agentInfo.workspace_id,
+      });
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sery-config-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Configuration exported');
+    } catch (err) {
+      toast.error(`Export failed: ${err}`);
+    }
+  };
+
+  const importConfig = async () => {
+    if (!agentInfo?.workspace_id) {
+      toast.error('Workspace ID not available');
+      return;
+    }
+    try {
+      const file = await openDialog({
+        multiple: false,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (!file) return;
+
+      const contents = await invoke<string>('read_file', { path: file });
+
+      // Validate first
+      await invoke('validate_import_file', { json: contents });
+
+      // Ask user for import strategy
+      const strategy = window.confirm(
+        'Merge with existing folders (OK) or replace all (Cancel)?'
+      )
+        ? 'merge'
+        : 'overwrite';
+
+      const result = await invoke<{
+        folders_added: number;
+        folders_skipped: number;
+        folders_replaced: number;
+        datasets_imported: number;
+        queries_imported: number;
+        warnings: string[];
+      }>('import_configuration', {
+        json: contents,
+        workspaceId: agentInfo.workspace_id,
+        strategy,
+      });
+
+      // Reload config to reflect changes
+      const newConfig = await invoke<AgentConfig>('get_config');
+      setConfig(newConfig);
+
+      const summary = [
+        result.folders_added && `${result.folders_added} folders added`,
+        result.folders_replaced && `${result.folders_replaced} folders replaced`,
+        result.folders_skipped && `${result.folders_skipped} folders skipped`,
+        result.datasets_imported && `${result.datasets_imported} datasets imported`,
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      toast.success(`Import complete: ${summary}`);
+
+      if (result.warnings.length > 0) {
+        result.warnings.forEach((w) => toast.info(w));
+      }
+    } catch (err) {
+      toast.error(`Import failed: ${err}`);
+    }
+  };
+
   if (!draft) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-slate-500 dark:text-slate-400">
@@ -141,6 +226,8 @@ export function Settings() {
           agentId={agentInfo?.agent_id}
           workspaceId={agentInfo?.workspace_id}
           onLogout={logout}
+          onExport={exportConfig}
+          onImport={importConfig}
         />
       )}
     </div>
@@ -385,11 +472,15 @@ function AboutPanel({
   agentId,
   workspaceId,
   onLogout,
+  onExport,
+  onImport,
 }: {
   draft: AgentConfig;
   agentId: string | undefined;
   workspaceId: string | undefined;
   onLogout: () => void;
+  onExport: () => void;
+  onImport: () => void;
 }) {
   return (
     <Panel>
@@ -407,6 +498,23 @@ function AboutPanel({
           Signing out removes the stored token from this device. Your data
           stays put, and you can sign back in at any time.
         </span>
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={onExport}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <Download className="h-4 w-4" />
+          Export Configuration
+        </button>
+        <button
+          onClick={onImport}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <Upload className="h-4 w-4" />
+          Import Configuration
+        </button>
       </div>
 
       <button
