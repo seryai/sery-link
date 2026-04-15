@@ -5,6 +5,14 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Puzzle, RefreshCw, Trash2, Upload, Zap } from 'lucide-react';
 import { useToast } from './Toast';
 
+interface PluginFunction {
+  name: string;
+  description: string;
+  parameters: Array<{ name: string; type: string }>;
+  returns: string;
+  requires_file: boolean;
+}
+
 interface Plugin {
   manifest: {
     id: string;
@@ -15,6 +23,7 @@ interface Plugin {
     capabilities: string[];
     permissions: string[];
     homepage?: string;
+    functions?: PluginFunction[];
   };
   enabled: boolean;
 }
@@ -37,6 +46,7 @@ export function PluginsPanel() {
   const [loading, setLoading] = useState(true);
   const [expandedPlugin, setExpandedPlugin] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFunction, setSelectedFunction] = useState<Record<string, string>>({});
   const [executing, setExecuting] = useState(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
 
@@ -105,8 +115,12 @@ export function PluginsPanel() {
     }
   };
 
-  const executePlugin = async (pluginId: string, functionName: string) => {
-    if (!selectedFile) {
+  const executePlugin = async (
+    pluginId: string,
+    functionName: string,
+    requiresFile: boolean
+  ) => {
+    if (requiresFile && !selectedFile) {
       toast.error('Please select a file first');
       return;
     }
@@ -121,7 +135,7 @@ export function PluginsPanel() {
       // Execute the plugin function
       const resultJson = await invoke<string>('execute_plugin_with_file', {
         pluginId,
-        filePath: selectedFile,
+        filePath: selectedFile || '',
         functionName,
       });
 
@@ -273,57 +287,98 @@ export function PluginsPanel() {
                 </div>
 
                 {/* Execution panel */}
-                {isExpanded && (
-                  <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={selectFile}
-                        className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                      >
-                        <Upload className="h-3.5 w-3.5" />
-                        {selectedFile ? 'Change file' : 'Select file'}
-                      </button>
-                      {selectedFile && (
-                        <span className="truncate text-xs text-slate-600 dark:text-slate-400">
-                          {selectedFile.split('/').pop()}
-                        </span>
+                {isExpanded && (() => {
+                  const functions = plugin.manifest.functions || [];
+                  const currentFunction =
+                    selectedFunction[plugin.manifest.id] || functions[0]?.name;
+                  const funcMetadata = functions.find((f) => f.name === currentFunction);
+
+                  return (
+                    <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
+                      {/* Function selector */}
+                      {functions.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
+                            Function
+                          </label>
+                          <select
+                            value={currentFunction}
+                            onChange={(e) =>
+                              setSelectedFunction({
+                                ...selectedFunction,
+                                [plugin.manifest.id]: e.target.value,
+                              })
+                            }
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                          >
+                            {functions.map((func) => (
+                              <option key={func.name} value={func.name}>
+                                {func.name} - {func.description}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* File picker (only for functions that require files) */}
+                      {funcMetadata?.requires_file && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={selectFile}
+                            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            {selectedFile ? 'Change file' : 'Select file'}
+                          </button>
+                          {selectedFile && (
+                            <span className="truncate text-xs text-slate-600 dark:text-slate-400">
+                              {selectedFile.split('/').pop()}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Execute button */}
+                      {currentFunction && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() =>
+                              executePlugin(
+                                plugin.manifest.id,
+                                currentFunction,
+                                funcMetadata?.requires_file || false
+                              )
+                            }
+                            disabled={executing}
+                            className="flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+                          >
+                            {executing ? (
+                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Zap className="h-3.5 w-3.5" />
+                            )}
+                            {executing ? 'Executing…' : `Run ${currentFunction}`}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Results */}
+                      {executionResult && (
+                        <div className="rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-900 dark:bg-green-950/30">
+                          <div className="text-xs font-medium text-green-900 dark:text-green-100">
+                            Result
+                          </div>
+                          <div className="mt-1 text-xs text-green-700 dark:text-green-300">
+                            {formatResult(executionResult)}
+                          </div>
+                          <div className="mt-2 text-xs text-green-600 dark:text-green-400">
+                            File size: {executionResult.size.toLocaleString()} bytes
+                          </div>
+                        </div>
                       )}
                     </div>
-
-                    {selectedFile && (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() =>
-                            executePlugin(plugin.manifest.id, 'parse_csv_from_memory')
-                          }
-                          disabled={executing}
-                          className="flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
-                        >
-                          {executing ? (
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Zap className="h-3.5 w-3.5" />
-                          )}
-                          {executing ? 'Executing…' : 'Parse CSV'}
-                        </button>
-                      </div>
-                    )}
-
-                    {executionResult && (
-                      <div className="rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-900 dark:bg-green-950/30">
-                        <div className="text-xs font-medium text-green-900 dark:text-green-100">
-                          Result
-                        </div>
-                        <div className="mt-1 text-xs text-green-700 dark:text-green-300">
-                          {formatResult(executionResult)}
-                        </div>
-                        <div className="mt-2 text-xs text-green-600 dark:text-green-400">
-                          File size: {executionResult.size.toLocaleString()} bytes
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           );
