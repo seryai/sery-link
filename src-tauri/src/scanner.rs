@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::io::Write;
 use walkdir::WalkDir;
 
 // ---------------------------------------------------------------------------
@@ -30,10 +32,17 @@ pub struct DatasetMetadata {
     pub relative_path: String,
     pub file_format: String,
     pub size_bytes: u64,
-    pub row_count_estimate: i64,
+    pub row_count_estimate: Option<i64>,
     pub schema: Vec<ColumnSchema>,
     pub last_modified: String,
+    /// Extracted markdown text for document files (DOCX, PPTX, HTML, etc.).
+    /// `None` for tabular files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_markdown: Option<String>,
 }
+
+/// File extensions classified as document (non-tabular) types.
+const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnSchema {
@@ -177,7 +186,12 @@ fn is_supported(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()).unwrap_or(""),
         "parquet" | "csv" | "xlsx" | "xls"
+        | "docx" | "pptx" | "html" | "htm" | "ipynb"
     )
+}
+
+fn is_document_ext(ext: &str) -> bool {
+    DOCUMENT_EXTENSIONS.contains(&ext)
 }
 
 fn is_excluded(path: &Path, base: &str, patterns: &[Pattern]) -> bool {
@@ -220,22 +234,182 @@ fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
-
     let last_modified = file_metadata
         .modified()
         .ok()
         .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    Ok(DatasetMetadata {
-        relative_path,
-        file_format: ext.to_string(),
-        size_bytes: file_metadata.len(),
-        row_count_estimate: row_count,
-        schema,
-        last_modified,
-    })
+    if is_document_ext(ext) {
+        // Document files — extract markdown via anytomd
+        let document_markdown = extract_document_markdown(file_path, ext);
+        Ok(DatasetMetadata {
+            relative_path,
+            file_format: ext.to_string(),
+            size_bytes: file_metadata.len(),
+            row_count_estimate: None,
+            schema: vec![],
+            last_modified,
+            document_markdown,
+        })
+    } else {
+        // Tabular files — DuckDB schema extraction
+        let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
+        Ok(DatasetMetadata {
+            relative_path,
+            file_format: ext.to_string(),
+            size_bytes: file_metadata.len(),
+            row_count_estimate: Some(row_count),
+            schema,
+            last_modified,
+            document_markdown: None,
+        })
+    }
+}
+
+/// Convert a document file to markdown using the MarkItDown sidecar.
+/// Falls back to anytomd if the sidecar fails.
+/// Returns `Some(markdown)` on success, `None` on error (logged and skipped).
+fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
+    // Cap at 50 MB
+    let bytes = match fs::read(file_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "[scanner] failed to read document {:?}: {}",
+                file_path, e
+            );
+            return None;
+        }
+    };
+
+    if bytes.len() > 50 * 1024 * 1024 {
+        eprintln!(
+            "[scanner] document {:?} exceeds 50 MB, skipping conversion",
+            file_path
+        );
+        return None;
+    }
+
+    // Try sidecar first (MarkItDown)
+    if let Some(markdown) = try_sidecar_conversion(file_path) {
+        eprintln!("[scanner] ✅ MarkItDown sidecar converted {:?}", file_path);
+        return Some(markdown);
+    }
+
+    // Fallback to anytomd (Rust-native, faster but less capable)
+    eprintln!("[scanner] ⚠️ Sidecar failed for {:?}, trying anytomd fallback", file_path);
+    match anytomd::convert_bytes(&bytes, ext, &anytomd::ConversionOptions::default()) {
+        Ok(result) => {
+            eprintln!("[scanner] ✅ anytomd converted {:?}", file_path);
+            Some(result.markdown)
+        },
+        Err(e) => {
+            eprintln!(
+                "[scanner] ❌ Both sidecar and anytomd failed for {:?}: {}",
+                file_path, e
+            );
+            None
+        }
+    }
+}
+
+/// Call the MarkItDown sidecar binary to convert a document.
+/// Returns `Some(markdown)` on success, `None` on failure.
+fn try_sidecar_conversion(file_path: &Path) -> Option<String> {
+    // Construct sidecar binary path (bundled with the app)
+    let sidecar_path = if cfg!(target_os = "macos") {
+        // macOS: sidecar is in .app/Contents/MacOS/
+        std::env::current_exe()
+            .ok()?
+            .parent()?
+            .join("markitdown-sidecar")
+    } else if cfg!(target_os = "windows") {
+        std::env::current_exe()
+            .ok()?
+            .parent()?
+            .join("markitdown-sidecar.exe")
+    } else {
+        // Linux
+        std::env::current_exe()
+            .ok()?
+            .parent()?
+            .join("markitdown-sidecar")
+    };
+
+    if !sidecar_path.exists() {
+        eprintln!("[scanner] sidecar not found at {:?}", sidecar_path);
+        return None;
+    }
+
+    // Spawn the sidecar process
+    let mut child = match Command::new(&sidecar_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[scanner] failed to spawn sidecar: {}", e);
+            return None;
+        }
+    };
+
+    // Write the file path to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        let path_str = file_path.to_string_lossy();
+        if let Err(e) = stdin.write_all(path_str.as_bytes()) {
+            eprintln!("[scanner] failed to write to sidecar stdin: {}", e);
+            return None;
+        }
+        drop(stdin); // Close stdin to signal EOF
+    }
+
+    // Read the JSON response from stdout
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[scanner] failed to read sidecar output: {}", e);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        eprintln!(
+            "[scanner] sidecar exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    // Parse JSON response
+    #[derive(Deserialize)]
+    struct SidecarResponse {
+        success: bool,
+        markdown: Option<String>,
+        error: Option<String>,
+    }
+
+    match serde_json::from_slice::<SidecarResponse>(&output.stdout) {
+        Ok(response) => {
+            if response.success {
+                response.markdown
+            } else {
+                eprintln!(
+                    "[scanner] sidecar conversion failed: {}",
+                    response.error.unwrap_or_else(|| "unknown error".to_string())
+                );
+                None
+            }
+        }
+        Err(e) => {
+            eprintln!("[scanner] failed to parse sidecar JSON: {}", e);
+            eprintln!("[scanner] stdout was: {}", String::from_utf8_lossy(&output.stdout));
+            None
+        }
+    }
 }
 
 fn extract_schema(
@@ -246,13 +420,20 @@ fn extract_schema(
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("Failed to open DuckDB: {}", e)))?;
 
-    // xlsx is transparently converted to a cached CSV so the read_func pipeline
-    // stays uniform downstream.
-    let (effective_path, effective_ext): (Cow<Path>, &str) = if ext == "xlsx" || ext == "xls" {
-        let csv = excel::xlsx_to_csv(file_path)?;
-        (Cow::Owned(csv), "csv")
-    } else {
-        (Cow::Borrowed(file_path), ext)
+    // xlsx is transparently converted to cached CSV, then to Parquet.
+    // csv is transparently converted to cached Parquet for 10-100x faster queries.
+    // This keeps the read_func pipeline uniform downstream (always Parquet).
+    let (effective_path, effective_ext): (Cow<Path>, &str) = match ext {
+        "xlsx" | "xls" => {
+            let csv = excel::xlsx_to_csv(file_path)?;
+            let parquet = crate::csv::csv_to_parquet(&csv)?;
+            (Cow::Owned(parquet), "parquet")
+        },
+        "csv" => {
+            let parquet = crate::csv::csv_to_parquet(file_path)?;
+            (Cow::Owned(parquet), "parquet")
+        },
+        _ => (Cow::Borrowed(file_path), ext)
     };
     let path_str = effective_path.to_string_lossy();
 

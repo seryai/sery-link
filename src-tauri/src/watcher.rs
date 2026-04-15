@@ -297,6 +297,7 @@ fn is_data_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()).unwrap_or(""),
         "parquet" | "csv" | "xlsx" | "xls"
+        | "docx" | "pptx" | "html" | "htm" | "ipynb"
     )
 }
 
