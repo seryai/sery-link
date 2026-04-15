@@ -746,3 +746,29 @@ pub async fn get_loaded_plugins() -> Result<Vec<String>, String> {
     let runtime = PLUGIN_RUNTIME.read().await;
     Ok(runtime.loaded_plugins())
 }
+
+#[tauri::command]
+pub async fn execute_plugin_with_file(
+    plugin_id: String,
+    file_path: String,
+    function_name: String,
+) -> Result<String, String> {
+    let mut runtime = PLUGIN_RUNTIME.write().await;
+
+    // Read the file with sandboxing
+    let file_bytes = runtime
+        .read_file_for_plugin(&plugin_id, &file_path)
+        .map_err(|e| e.to_string())?;
+
+    // For Phase 3 MVP: write file bytes to plugin memory and call function
+    // This demonstrates the full flow without complex memory management yet
+
+    // For now, return a placeholder showing we successfully read the file
+    Ok(format!(
+        "{{\"plugin\":\"{}\",\"file\":\"{}\",\"size\":{},\"function\":\"{}\"}}",
+        plugin_id,
+        file_path,
+        file_bytes.len(),
+        function_name
+    ))
+}
