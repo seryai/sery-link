@@ -628,3 +628,40 @@ pub async fn detect_dataset_relationships(
     crate::relationship_detector::detect_relationships(&workspace_id)
         .map_err(|e| e.to_string())
 }
+
+// ─── Export/Import ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn export_configuration(workspace_id: String) -> Result<String, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    crate::export_import::export_to_json(&workspace_id, &config)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn import_configuration(
+    json: String,
+    workspace_id: String,
+    strategy: crate::export_import::ImportStrategy,
+) -> Result<crate::export_import::ImportResult, String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    let (new_folders, result) = crate::export_import::import_from_json(
+        &json,
+        &workspace_id,
+        &config.watched_folders,
+        strategy,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Save the updated config
+    config.watched_folders = new_folders;
+    config.save().map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn validate_import_file(json: String) -> Result<crate::export_import::ExportData, String> {
+    crate::export_import::validate_export(&json).map_err(|e| e.to_string())
+}
