@@ -1,6 +1,8 @@
 # Sery Link
 
-Cross-platform desktop app that connects local data sources to Sery Cloud, enabling natural language queries over local files without uploading raw data. Part of [Sery.ai](https://sery.ai).
+**Local-first data analytics. Your data never leaves your machine.**
+
+Cross-platform desktop app that analyzes local data sources (Parquet, CSV, Excel, documents) using AI. Cloud sync is optional — tunnel mode queries run entirely on your computer. Part of [Sery.ai](https://sery.ai).
 
 ## Features
 
@@ -11,7 +13,7 @@ Cross-platform desktop app that connects local data sources to Sery Cloud, enabl
 - 🚀 **Local Query Execution** - Run SQL queries locally using DuckDB
 - 🌐 **WebSocket Tunnel** - Persistent connection for real-time query execution
 - 🔒 **Secure Credential Storage** - OS-native keychain integration
-- 🔒 **Privacy-First** - Raw files never leave your machine, only metadata and extracted text
+- 🔒 **Privacy-First** - Raw files never leave your machine (read-only file access). In tunnel mode, queries execute locally with zero data upload. Optional cloud sync for performance mode.
 - 💻 **Beautiful UI** - Modern React interface with Tailwind CSS
 
 ## Development
