@@ -11,6 +11,7 @@ mod export_import;
 mod history;
 mod keyring_store;
 mod metadata_cache;
+mod plugin;
 mod relationship_detector;
 mod scanner;
 mod stats;
@@ -142,6 +143,10 @@ pub fn run() {
             commands::import_configuration,
             commands::validate_import_file,
             commands::read_file,
+            commands::list_plugins,
+            commands::enable_plugin,
+            commands::disable_plugin,
+            commands::uninstall_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
