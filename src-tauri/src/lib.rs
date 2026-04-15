@@ -12,6 +12,7 @@ mod history;
 mod keyring_store;
 mod metadata_cache;
 mod plugin;
+mod plugin_marketplace;
 mod plugin_runtime;
 mod relationship_detector;
 mod scanner;
@@ -153,6 +154,12 @@ pub fn run() {
             commands::is_plugin_loaded,
             commands::get_loaded_plugins,
             commands::execute_plugin_with_file,
+            commands::load_marketplace,
+            commands::search_marketplace,
+            commands::get_featured_plugins,
+            commands::get_popular_plugins,
+            commands::get_marketplace_plugin,
+            commands::install_marketplace_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
