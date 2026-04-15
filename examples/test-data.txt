@@ -1,0 +1,11 @@
+Welcome to the Sery Link Plugin System! This is a powerful platform for extending functionality through WebAssembly plugins. 
+
+The plugin system provides advanced text analysis capabilities, including:
+- Word frequency analysis and unique word counting
+- Readability metrics based on the Flesch reading ease formula
+- Basic sentiment analysis using keyword matching
+- Comprehensive text statistics including word counts, sentence counts, and paragraph counts
+
+This innovative approach allows developers to create secure, sandboxed plugins that can process data without compromising system security. The use of WebAssembly ensures high performance and cross-platform compatibility.
+
+We're excited to see what amazing plugins the community will create!
