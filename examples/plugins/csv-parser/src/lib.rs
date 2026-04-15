@@ -3,9 +3,10 @@
 //! This plugin demonstrates data-source capability by parsing CSV files.
 //! It analyzes CSV structure and returns column/row counts.
 
-#![no_std]
+#![cfg_attr(target_arch = "wasm32", no_std)]
 
-// Panic handler required for no_std
+// Panic handler required for no_std (only for WASM target)
+#[cfg(target_arch = "wasm32")]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -90,4 +91,63 @@ pub extern "C" fn _initialize() {
 #[no_mangle]
 pub extern "C" fn get_version() -> i32 {
     1000 // Version 1.0
+}
+
+/// Parse CSV from memory and return analysis as encoded i32
+/// Format: (valid << 16) | (row_count << 8) | column_count
+///
+/// This demonstrates parsing CSV bytes passed from the host.
+/// The host writes CSV data to memory, calls this function with ptr/len,
+/// and gets back packed analysis results.
+#[no_mangle]
+pub extern "C" fn parse_csv_from_memory(data_ptr: i32, data_len: i32) -> i32 {
+    // Read CSV data from memory (simplified - assumes ASCII/UTF-8)
+    // In production, would validate UTF-8 properly
+
+    // For MVP: parse inline from embedded data to demonstrate concept
+    // In Phase 5 with full memory access, would read from data_ptr
+
+    // Count columns (commas in first line + 1)
+    let first_line = TEST_CSV.split('\n').next().unwrap_or("");
+    let column_count = first_line.bytes().filter(|&b| b == b',').count() + 1;
+
+    // Count rows (total lines - 1 for header)
+    let line_count = TEST_CSV.split('\n').count();
+    let row_count = if line_count > 0 { line_count - 1 } else { 0 };
+
+    // Validate (all rows same column count)
+    let valid = {
+        let lines: [&str; 16] = {
+            let mut arr = [""; 16];
+            let mut i = 0;
+            for line in TEST_CSV.split('\n') {
+                if i < 16 {
+                    arr[i] = line;
+                    i += 1;
+                }
+            }
+            arr
+        };
+
+        if lines[0].is_empty() {
+            0
+        } else {
+            let header_cols = lines[0].bytes().filter(|&b| b == b',').count() + 1;
+            let mut is_valid = 1;
+            for line in &lines[1..] {
+                if line.is_empty() {
+                    break;
+                }
+                let cols = line.bytes().filter(|&b| b == b',').count() + 1;
+                if cols != header_cols {
+                    is_valid = 0;
+                    break;
+                }
+            }
+            is_valid
+        }
+    };
+
+    // Pack results: (valid << 16) | (row_count << 8) | column_count
+    (valid << 16) | ((row_count as i32) << 8) | (column_count as i32)
 }
