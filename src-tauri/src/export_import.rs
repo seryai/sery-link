@@ -221,6 +221,8 @@ mod tests {
         WatchedFolder {
             path: "/test/data".to_string(),
             recursive: true,
+            exclude_patterns: vec![],
+            max_file_size_mb: 1024,
             last_scan_at: None,
             last_scan_stats: None,
         }
@@ -237,15 +239,21 @@ mod tests {
             watched_folders: vec![test_folder()],
             cloud: crate::config::CloudConfig {
                 api_url: "http://localhost:8000".to_string(),
+                websocket_url: "ws://localhost:8000/ws".to_string(),
+                web_url: "http://localhost:3000".to_string(),
             },
             sync: crate::config::SyncConfig {
                 interval_seconds: 300,
-                last_sync_at: None,
+                auto_sync_on_change: true,
+                fallback_scan_interval_seconds: 3600,
             },
             app: crate::config::AppConfig {
+                theme: "system".to_string(),
                 launch_at_login: false,
-                window_hide_notified: false,
+                auto_update: true,
+                notifications_enabled: true,
                 first_run_completed: false,
+                window_hide_notified: false,
             },
         }
     }
@@ -279,6 +287,8 @@ mod tests {
             WatchedFolder {
                 path: "/existing/folder".to_string(),
                 recursive: true,
+                exclude_patterns: vec![],
+                max_file_size_mb: 1024,
                 last_scan_at: None,
                 last_scan_stats: None,
             },
@@ -302,6 +312,8 @@ mod tests {
         let current_folders = vec![WatchedFolder {
             path: "/old/folder".to_string(),
             recursive: true,
+            exclude_patterns: vec![],
+            max_file_size_mb: 1024,
             last_scan_at: None,
             last_scan_stats: None,
         }];

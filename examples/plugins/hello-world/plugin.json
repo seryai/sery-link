@@ -1,0 +1,12 @@
+{
+  "id": "com.sery.hello-world",
+  "name": "Hello World Plugin",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "A simple example plugin that demonstrates the plugin system",
+  "capabilities": ["data-source"],
+  "permissions": [],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null
+}

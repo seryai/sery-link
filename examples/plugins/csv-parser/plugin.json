@@ -1,0 +1,12 @@
+{
+  "id": "com.sery.csv-parser",
+  "name": "CSV Parser Plugin",
+  "version": "1.0.0",
+  "author": "Sery Team",
+  "description": "Parse CSV files and extract column information",
+  "capabilities": ["data-source"],
+  "permissions": ["read-files"],
+  "entry_point": "plugin.wasm",
+  "icon": null,
+  "homepage": null
+}
