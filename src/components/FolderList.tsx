@@ -95,9 +95,10 @@ export function FolderList() {
           onClick={addFolder}
           disabled={busy}
           className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+          title="Read-only access — your files are never modified"
         >
           <Plus className="h-4 w-4" />
-          Add folder
+          Watch Folder
         </button>
       </div>
 
@@ -137,17 +138,19 @@ function EmptyState({
         No folders yet
       </h2>
       <p className="mx-auto mb-6 max-w-sm text-sm text-slate-600 dark:text-slate-400">
-        Pick a folder containing Parquet, CSV, or Excel files. Sery
-        Desktop will index schemas locally and make them queryable from
-        the cloud.
+        Pick a folder containing Parquet, CSV, Excel, or document files.
+        Read-only access — your files stay on your machine. Queries can run
+        locally in tunnel mode (zero upload) or use optional cloud sync for
+        performance mode.
       </p>
       <button
         onClick={onAdd}
         disabled={busy}
         className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+        title="Read-only access — your files are never modified"
       >
         <Plus className="h-4 w-4" />
-        Add your first folder
+        Watch Your First Folder
       </button>
     </div>
   );

@@ -28,6 +28,7 @@ import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
 import { ReAuthModal } from './components/ReAuthModal';
+import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import type { AgentConfig, AgentStats } from './types/events';
 
 type Tab = 'folders' | 'history' | 'privacy' | 'settings';
@@ -146,7 +147,7 @@ function AppInner() {
                 Sery Link
               </h1>
               <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Local analytics bridge
+                Local-first data analytics
               </p>
             </div>
           </div>
@@ -190,6 +191,7 @@ function AppInner() {
 
       {/* Global overlays */}
       <ReAuthModal />
+      <KeyboardShortcuts />
     </div>
   );
 }
