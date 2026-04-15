@@ -37,6 +37,9 @@ static WS_CLIENT: once_cell::sync::Lazy<Arc<RwLock<Option<WebSocketClient>>>> =
 static WATCHER: once_cell::sync::Lazy<Arc<RwLock<Option<WatcherHandle>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
 
+static PLUGIN_RUNTIME: once_cell::sync::Lazy<Arc<RwLock<crate::plugin_runtime::PluginRuntime>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(crate::plugin_runtime::PluginRuntime::new())));
+
 // ---------------------------------------------------------------------------
 // Auth + config
 // ---------------------------------------------------------------------------
@@ -696,4 +699,50 @@ pub async fn disable_plugin(plugin_id: String) -> Result<(), String> {
 pub async fn uninstall_plugin(plugin_id: String) -> Result<(), String> {
     let mut manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
     manager.uninstall_plugin(&plugin_id).map_err(|e| e.to_string())
+}
+
+// ─── Plugin Runtime (WebAssembly execution) ─────────────────────────────────
+
+#[tauri::command]
+pub async fn load_plugin_into_runtime(plugin_id: String) -> Result<(), String> {
+    let manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
+    let plugins = manager.list_plugins().map_err(|e| e.to_string())?;
+
+    let (manifest, enabled) = plugins
+        .iter()
+        .find(|(m, _)| m.id == plugin_id)
+        .ok_or_else(|| format!("Plugin not found: {}", plugin_id))?;
+
+    if !enabled {
+        return Err(format!("Plugin is disabled: {}", plugin_id));
+    }
+
+    let plugin_dir = dirs::home_dir()
+        .ok_or_else(|| "Could not find home directory".to_string())?
+        .join(".sery")
+        .join("plugins")
+        .join(&plugin_id);
+
+    let mut runtime = PLUGIN_RUNTIME.write().await;
+    runtime.load_plugin(&plugin_dir, manifest.clone())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unload_plugin_from_runtime(plugin_id: String) -> Result<(), String> {
+    let mut runtime = PLUGIN_RUNTIME.write().await;
+    runtime.unload_plugin(&plugin_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn is_plugin_loaded(plugin_id: String) -> Result<bool, String> {
+    let runtime = PLUGIN_RUNTIME.read().await;
+    Ok(runtime.is_loaded(&plugin_id))
+}
+
+#[tauri::command]
+pub async fn get_loaded_plugins() -> Result<Vec<String>, String> {
+    let runtime = PLUGIN_RUNTIME.read().await;
+    Ok(runtime.loaded_plugins())
 }

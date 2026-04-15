@@ -50,4 +50,8 @@ glob = "0.3"
 zip = "0.6"
 anytomd = { version = "0.1", default-features = false }
 regex = "1.10"
+wasmer = { version = "7.1.0", features = ["cranelift"] }
 
+
+[dev-dependencies]
+tempfile = "3.8"
