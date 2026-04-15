@@ -48,6 +48,24 @@ python3 --version  # Should be 3.11 or higher
 
 ---
 
+## Installation for End Users
+
+**TL;DR:** Users download ONE installer (DMG/MSI/AppImage) and install ONE app. The MarkItDown sidecar is bundled inside automatically - users never see it.
+
+**What users get:**
+- macOS: Download `Sery Link.dmg`, drag to Applications, done
+- Windows: Download `Sery Link.msi`, run installer, done
+- Linux: Download `sery-link.AppImage`, make executable, done
+
+**What's inside the app:**
+- Main Sery Link binary (~10 MB)
+- MarkItDown sidecar binary (~180 MB) - bundled automatically
+- Tauri manages the sidecar lifecycle - users never interact with it directly
+
+**Total installed size:** ~200 MB (compressed installers are ~60-80 MB)
+
+---
+
 ## Quick Start (Development)
 
 ### 1. Clone and Install
@@ -336,28 +354,30 @@ The frontend supports hot reload, but Rust changes require restart:
 
 ### Checking Sidecar Integration
 
-Verify the sidecar is properly bundled:
+Verify the sidecar is properly bundled in the final app:
 
 ```bash
 # macOS - Check .app bundle
 cd src-tauri/target/release/bundle/macos
 ls -lh "Sery Link.app/Contents/MacOS/"
-# Should show: Sery Link (main binary)
+# Should show: Sery Link (main binary ~10 MB)
 #              markitdown-sidecar-aarch64-apple-darwin (~180 MB)
 
 # Windows - Check exe directory
 cd src-tauri/target/release
 dir
-# Should show: Sery Link.exe
-#              markitdown-sidecar-x86_64-pc-windows-msvc.exe
+# Should show: Sery Link.exe (~10 MB)
+#              markitdown-sidecar-x86_64-pc-windows-msvc.exe (~180 MB)
 
 # Linux - Check AppImage or deb
 # Extract AppImage:
 ./sery-link_*.AppImage --appimage-extract
 ls squashfs-root/usr/bin/
-# Should show: sery-link
-#              markitdown-sidecar-x86_64-unknown-linux-gnu
+# Should show: sery-link (~10 MB)
+#              markitdown-sidecar-x86_64-unknown-linux-gnu (~180 MB)
 ```
+
+**Important:** The sidecar is bundled automatically by Tauri during build. End users never see or interact with it - it's an internal implementation detail. The installer packages everything together.
 
 ---
 
@@ -377,9 +397,10 @@ ls squashfs-root/usr/bin/
 ```
 
 **What this does:**
-- Automatically includes sidecar in builds
-- Tauri resolves platform-specific binary name
-- Binary placed next to main executable
+- Automatically includes sidecar in builds (DMG/MSI/AppImage)
+- Tauri resolves platform-specific binary name at build time
+- Binary placed next to main executable inside the app bundle
+- Users only see ONE app to install, sidecar is invisible
 
 ### Environment Variables
 
