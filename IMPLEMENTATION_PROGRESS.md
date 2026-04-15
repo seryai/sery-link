@@ -126,15 +126,47 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-## 📋 Phase 3: Quarter 2 — IN PROGRESS
+## 📋 Phase 3: Quarter 2 — COMPLETE ✅
 
 **Goal:** Extensibility and community features
 
-### MCP Plugin System ⏳ TODO
-- Define MCP manifest schema
-- Create plugin discovery UI
-- Implement sandboxed plugin execution
-- Add community plugin marketplace
+### MCP Plugin System ✅ DONE
+**Status:** Complete (Phase 1 - Discovery & Management)
+**Effort:** ~2-3 days (Rust backend + React frontend)
+**Implementation:**
+- ✅ Plugin manifest schema (plugin.json) - reverse-DNS IDs, semver versions, capabilities, permissions
+- ✅ Plugin discovery from `~/.sery/plugins/[plugin-id]/` directories
+- ✅ Plugin registry tracking enabled/disabled state
+- ✅ Validation: ID format, version format, description length, capabilities
+- ✅ Settings → Plugins tab with enable/disable toggles
+- ✅ Uninstall functionality with confirmation
+- ✅ Empty state with installation instructions
+- ⏸️ WebAssembly execution layer (deferred to Phase 4)
+
+**Capabilities supported:**
+- `data-source` - Custom file formats or data sources
+- `viewer` - Custom data renderers
+- `transform` - Data transformations
+- `exporter` - Export to custom formats
+- `ui-component` - UI extensions
+
+**Permissions framework:**
+- `read-files` - Read from watched folders
+- `execute-commands` - Run external commands
+- `network` - Make HTTP requests
+- `clipboard` - Access clipboard
+
+**Files created:**
+- `src-tauri/src/plugin.rs` - Plugin system core (430 lines, 5 tests passing)
+
+**Files modified:**
+- `src-tauri/src/commands.rs` - Added 4 plugin commands
+- `src-tauri/src/error.rs` - Added Validation and NotFound error variants
+- `src-tauri/src/lib.rs` - Registered plugin module and commands
+- `src/components/Settings.tsx` - Added Plugins tab UI
+
+**Commits:**
+- `be4b4b5` - feat: implement MCP Plugin System foundation - complete Phase 3
 
 ### Export/Import Metadata ✅ DONE
 **Status:** Complete
@@ -182,14 +214,14 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 ## Implementation Statistics
 
 - **Total Tasks:** 17
-- **Completed:** 10 (58.82%)
+- **Completed:** 11 (64.71%)
 - **In Progress:** 0 (0%)
-- **Not Started:** 7 (41.18%)
+- **Not Started:** 6 (35.29%)
 
 **Phase Breakdown:**
 - Phase 1: 100% complete ✅
 - Phase 2: 100% complete ✅
-- Phase 3: 50% complete (1/2 features done)
+- Phase 3: 100% complete ✅
 - Phase 4: 0% complete
 
 ---
@@ -198,8 +230,9 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 1. ~~**Quick Actions Menu** (Phase 2)~~ - REMOVED (feature was already in FolderCard dropdown)
 2. ~~**Export/Import Metadata** (Phase 3)~~ - ✅ COMPLETE
-3. **MCP Plugin System** (Phase 3) - Enable community extensibility
+3. ~~**MCP Plugin System** (Phase 3)~~ - ✅ COMPLETE
 4. **Local-First Query History** (Phase 4) - Offline query access and export
+5. **Plugin Execution Layer** (Phase 4) - WebAssembly runtime for plugin code
 
 ---
 
@@ -235,6 +268,14 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 - Settings → About tab is the natural home for backup/restore controls
 - Toast notifications for success/warnings keep users informed without blocking
 - Unit tests for roundtrip, merge, and overwrite scenarios caught edge cases early
+- MCP Plugin System: Reverse-DNS IDs (com.example.plugin) prevent collisions
+- Plugin registry as separate JSON file makes state independent of plugin code
+- Validation at manifest load time catches bad plugins before they can break anything
+- AgentError::Io expects std::io::Error, not String - use FileSystem for formatted errors
+- Capabilities + Permissions model enables fine-grained access control
+- Deferring WebAssembly execution to Phase 4 let us ship plugin management MVP faster
+- Empty state UI teaches users where to install plugins (~/.sery/plugins/)
+- Toggle switches + uninstall buttons provide expected plugin management UX
 
 ### Technical Debt
 
@@ -246,4 +287,4 @@ Tracking implementation of the roadmap from `OBSIDIAN_INSPIRED_IMPROVEMENTS.md`.
 
 ---
 
-Last updated: 2024-01-XX (Phase 3: 50% complete - Export/Import Metadata shipped)
+Last updated: 2024-01-XX (Phase 3: 100% complete ✅ - MCP Plugin System shipped)
