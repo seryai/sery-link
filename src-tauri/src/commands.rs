@@ -671,3 +671,29 @@ pub async fn read_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file {}: {}", path, e))
 }
+
+// ─── Plugin Management ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_plugins() -> Result<Vec<(crate::plugin::PluginManifest, bool)>, String> {
+    let manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
+    manager.list_plugins().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn enable_plugin(plugin_id: String) -> Result<(), String> {
+    let mut manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
+    manager.enable_plugin(&plugin_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn disable_plugin(plugin_id: String) -> Result<(), String> {
+    let mut manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
+    manager.disable_plugin(&plugin_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn uninstall_plugin(plugin_id: String) -> Result<(), String> {
+    let mut manager = crate::plugin::PluginManager::new().map_err(|e| e.to_string())?;
+    manager.uninstall_plugin(&plugin_id).map_err(|e| e.to_string())
+}
