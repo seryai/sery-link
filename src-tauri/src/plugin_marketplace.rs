@@ -7,7 +7,6 @@
 // - Version compatibility checking
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -266,7 +265,7 @@ impl PluginInstaller {
         Ok(())
     }
 
-    async fn install_from_url(&self, url: &str, dest_dir: &Path) -> Result<()> {
+    async fn install_from_url(&self, _url: &str, _dest_dir: &Path) -> Result<()> {
         // TODO: Implement HTTP download
         // For now, return error
         Err(AgentError::Validation(
@@ -276,10 +275,10 @@ impl PluginInstaller {
 
     async fn install_from_github(
         &self,
-        owner: &str,
-        repo: &str,
-        tag: &str,
-        dest_dir: &Path,
+        _owner: &str,
+        _repo: &str,
+        _tag: &str,
+        _dest_dir: &Path,
     ) -> Result<()> {
         // TODO: Implement GitHub release download
         // For now, return error
