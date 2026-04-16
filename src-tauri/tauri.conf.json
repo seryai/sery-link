@@ -37,6 +37,9 @@
     ],
     "externalBin": [
       "../sidecar/dist/markitdown-sidecar"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

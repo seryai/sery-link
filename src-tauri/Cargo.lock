@@ -3,6 +3,47 @@
 version = 4
 
 [[package]]
+name = "SeryLink"
+version = "0.4.0"
+dependencies = [
+ "anytomd",
+ "axum",
+ "calamine 0.24.0",
+ "chrono",
+ "dirs 5.0.1",
+ "duckdb",
+ "futures",
+ "glob",
+ "hostname",
+ "keyring",
+ "notify",
+ "once_cell",
+ "open",
+ "regex",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tauri-plugin-updater",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "urlencoding",
+ "uuid",
+ "walkdir",
+ "wasmer",
+ "zip 0.6.6",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6256,47 +6297,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
 dependencies = [
  "stable_deref_trait",
-]
-
-[[package]]
-name = "sery-link"
-version = "0.4.0"
-dependencies = [
- "anytomd",
- "axum",
- "calamine 0.24.0",
- "chrono",
- "dirs 5.0.1",
- "duckdb",
- "futures",
- "glob",
- "hostname",
- "keyring",
- "notify",
- "once_cell",
- "open",
- "regex",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tauri-plugin-updater",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-tungstenite",
- "url",
- "urlencoding",
- "uuid",
- "walkdir",
- "wasmer",
- "zip 0.6.6",
 ]
 
 [[package]]
