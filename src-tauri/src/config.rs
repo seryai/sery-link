@@ -4,6 +4,25 @@ use std::path::PathBuf;
 use crate::error::{AgentError, Result};
 
 // ---------------------------------------------------------------------------
+// Auth modes
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum AuthMode {
+    LocalOnly,
+    BYOK {
+        provider: String,
+        #[serde(skip_serializing)]
+        api_key: String,
+    },
+    WorkspaceKey {
+        #[serde(skip_serializing)]
+        key: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
 
@@ -105,6 +124,8 @@ pub struct AppConfig {
     pub first_run_completed: bool,
     #[serde(default)]
     pub window_hide_notified: bool,
+    #[serde(default)]
+    pub selected_auth_mode: Option<AuthMode>,
 }
 
 fn default_theme() -> String {
@@ -124,6 +145,7 @@ impl Default for AppConfig {
             notifications_enabled: true,
             first_run_completed: false,
             window_hide_notified: false,
+            selected_auth_mode: None,
         }
     }
 }
@@ -226,5 +248,225 @@ impl Config {
             folder.last_scan_stats = Some(stats);
             folder.last_scan_at = Some(when);
         }
+    }
+
+    /// Migrate existing users to the new auth mode system.
+    /// Checks keyring for existing token and sets appropriate auth mode.
+    pub fn migrate_if_needed(&mut self) -> Result<()> {
+        use crate::keyring_store;
+
+        if self.app.selected_auth_mode.is_none() {
+            // Check if user has existing workspace token
+            if keyring_store::has_token() {
+                // User was already authenticated with workspace key
+                self.app.selected_auth_mode = Some(AuthMode::WorkspaceKey {
+                    key: "<from_keyring>".to_string(),
+                });
+            } else {
+                // New user or no previous auth - default to local-only
+                self.app.selected_auth_mode = Some(AuthMode::LocalOnly);
+            }
+            self.save()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+
+        // Verify default values
+        assert!(!config.app.first_run_completed);
+        assert!(config.app.auto_update);
+        assert!(config.app.notifications_enabled);
+        assert_eq!(config.app.theme, "system");
+        assert!(config.app.selected_auth_mode.is_none());
+        assert!(config.watched_folders.is_empty());
+    }
+
+    #[test]
+    fn test_app_config_defaults() {
+        let app_config = AppConfig::default();
+
+        assert_eq!(app_config.theme, "system");
+        assert!(app_config.launch_at_login);
+        assert!(app_config.auto_update);
+        assert!(app_config.notifications_enabled);
+        assert!(!app_config.first_run_completed);
+        assert!(!app_config.window_hide_notified);
+        assert!(app_config.selected_auth_mode.is_none());
+    }
+
+    #[test]
+    fn test_add_watched_folder() {
+        let mut config = Config::default();
+
+        assert_eq!(config.watched_folders.len(), 0);
+
+        config.add_watched_folder("/path/to/folder".to_string(), true);
+
+        assert_eq!(config.watched_folders.len(), 1);
+        assert_eq!(config.watched_folders[0].path, "/path/to/folder");
+        assert!(config.watched_folders[0].recursive);
+        assert!(config.watched_folders[0].exclude_patterns.contains(&".git".to_string()));
+    }
+
+    #[test]
+    fn test_remove_watched_folder() {
+        let mut config = Config::default();
+
+        config.add_watched_folder("/folder1".to_string(), true);
+        config.add_watched_folder("/folder2".to_string(), true);
+        config.add_watched_folder("/folder3".to_string(), true);
+
+        assert_eq!(config.watched_folders.len(), 3);
+
+        config.remove_watched_folder("/folder2");
+
+        assert_eq!(config.watched_folders.len(), 2);
+        assert_eq!(config.watched_folders[0].path, "/folder1");
+        assert_eq!(config.watched_folders[1].path, "/folder3");
+    }
+
+    #[test]
+    fn test_update_folder_scan_stats() {
+        let mut config = Config::default();
+        config.add_watched_folder("/test/folder".to_string(), true);
+
+        let stats = ScanStats {
+            datasets: 10,
+            columns: 50,
+            errors: 0,
+            total_bytes: 1024000,
+            duration_ms: 500,
+        };
+
+        let timestamp = "2026-04-15T12:00:00Z".to_string();
+
+        config.update_folder_scan_stats("/test/folder", stats.clone(), timestamp.clone());
+
+        let folder = &config.watched_folders[0];
+        assert!(folder.last_scan_stats.is_some());
+        assert_eq!(folder.last_scan_stats.as_ref().unwrap().datasets, 10);
+        assert_eq!(folder.last_scan_at.as_ref().unwrap(), &timestamp);
+    }
+
+    #[test]
+    fn test_exclude_patterns_default() {
+        let patterns = default_exclude_patterns();
+
+        assert!(patterns.contains(&".DS_Store".to_string()));
+        assert!(patterns.contains(&".git".to_string()));
+        assert!(patterns.contains(&"node_modules".to_string()));
+        assert!(patterns.contains(&".venv".to_string()));
+        assert!(patterns.contains(&"target".to_string()));
+    }
+
+    #[test]
+    fn test_max_file_size_default() {
+        let max_size = default_max_file_size_mb();
+        assert_eq!(max_size, 1024); // 1 GB
+    }
+
+    #[test]
+    fn test_auth_mode_serialization_in_config() {
+        let mut config = Config::default();
+
+        // Test LocalOnly mode
+        config.app.selected_auth_mode = Some(AuthMode::LocalOnly);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("LocalOnly"));
+
+        // Test BYOK mode (api_key should not be serialized)
+        config.app.selected_auth_mode = Some(AuthMode::BYOK {
+            provider: "anthropic".to_string(),
+            api_key: "secret-key".to_string(),
+        });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("BYOK"));
+        assert!(!json.contains("secret-key"));
+
+        // Test WorkspaceKey mode (key should not be serialized)
+        config.app.selected_auth_mode = Some(AuthMode::WorkspaceKey {
+            key: "secret-workspace".to_string(),
+        });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("WorkspaceKey"));
+        assert!(!json.contains("secret-workspace"));
+    }
+
+    #[test]
+    fn test_config_deserialization_with_missing_auth_mode() {
+        // Simulate old config file without selected_auth_mode
+        let json = r#"{
+            "agent": {
+                "name": "test",
+                "platform": "macos",
+                "hostname": "test-host",
+                "agent_id": null
+            },
+            "watched_folders": [],
+            "cloud": {
+                "api_url": "http://localhost:8000",
+                "websocket_url": "ws://localhost:8000",
+                "web_url": "http://localhost:3000"
+            },
+            "sync": {
+                "interval_seconds": 300,
+                "auto_sync_on_change": true,
+                "fallback_scan_interval_seconds": 3600
+            },
+            "app": {
+                "theme": "system",
+                "launch_at_login": true,
+                "auto_update": true,
+                "notifications_enabled": true,
+                "first_run_completed": false,
+                "window_hide_notified": false
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        // selected_auth_mode should default to None
+        assert!(config.app.selected_auth_mode.is_none());
+    }
+
+    #[test]
+    fn test_scan_stats_serialization() {
+        let stats = ScanStats {
+            datasets: 100,
+            columns: 500,
+            errors: 5,
+            total_bytes: 1048576,
+            duration_ms: 1500,
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        let deserialized: ScanStats = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(stats.datasets, deserialized.datasets);
+        assert_eq!(stats.columns, deserialized.columns);
+        assert_eq!(stats.errors, deserialized.errors);
+        assert_eq!(stats.total_bytes, deserialized.total_bytes);
+        assert_eq!(stats.duration_ms, deserialized.duration_ms);
+    }
+
+    #[test]
+    fn test_watched_folder_defaults() {
+        let mut config = Config::default();
+        config.add_watched_folder("/test".to_string(), true);
+
+        let folder = &config.watched_folders[0];
+
+        assert_eq!(folder.max_file_size_mb, 1024);
+        assert!(folder.exclude_patterns.len() > 0);
+        assert!(folder.last_scan_at.is_none());
+        assert!(folder.last_scan_stats.is_none());
     }
 }

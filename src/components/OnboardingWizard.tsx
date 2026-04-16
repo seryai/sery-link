@@ -20,12 +20,12 @@ import {
   Database,
   Eye,
   Folder as FolderIcon,
+  HardDrive,
   Key,
   Loader2,
   Lock,
-
   Shield,
-
+  Sparkles,
   Zap,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from '../stores/agentStore';
@@ -33,12 +33,14 @@ import seryLogo from '../assets/sery-logo.svg';
 import { useToast } from './Toast';
 import type { AgentConfig } from '../types/events';
 
-type Step = 'welcome' | 'connect' | 'folder' | 'privacy' | 'done';
+type Step = 'welcome' | 'mode' | 'connect' | 'folder' | 'privacy' | 'done';
+type AuthChoice = 'local' | 'workspace';
 
-const STEPS: Step[] = ['welcome', 'connect', 'folder', 'privacy', 'done'];
+const STEPS: Step[] = ['welcome', 'mode', 'connect', 'folder', 'privacy', 'done'];
 
 export function OnboardingWizard() {
   const [step, setStep] = useState<Step>('welcome');
+  const [authChoice, setAuthChoice] = useState<AuthChoice | null>(null);
   const toast = useToast();
 
   const goNext = () => {
@@ -49,6 +51,17 @@ export function OnboardingWizard() {
   const goPrev = () => {
     const idx = STEPS.indexOf(step);
     if (idx > 0) setStep(STEPS[idx - 1]);
+  };
+
+  const handleModeSelect = (choice: AuthChoice) => {
+    setAuthChoice(choice);
+    if (choice === 'local') {
+      // Skip connect step for local mode
+      setStep('folder');
+    } else {
+      // Go to connect step for workspace mode
+      goNext();
+    }
   };
 
   return (
@@ -74,8 +87,9 @@ export function OnboardingWizard() {
       <div className="flex flex-1 items-center justify-center p-8">
         <div className="w-full max-w-lg">
           {step === 'welcome' && <WelcomeStep onNext={goNext} />}
+          {step === 'mode' && <ModeSelectionStep onSelect={handleModeSelect} onBack={goPrev} />}
           {step === 'connect' && <ConnectStep onNext={goNext} onBack={goPrev} toast={toast} />}
-          {step === 'folder' && <FolderStep onNext={goNext} onBack={goPrev} toast={toast} />}
+          {step === 'folder' && <FolderStep onNext={goNext} onBack={goPrev} toast={toast} authChoice={authChoice} />}
           {step === 'privacy' && <PrivacyStep onNext={goNext} onBack={goPrev} />}
           {step === 'done' && <DoneStep />}
         </div>
@@ -126,7 +140,119 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-// ─── Step 2: Connect ────────────────────────────────────────────────────────
+// ─── Step 2: Mode Selection ─────────────────────────────────────────────────
+
+function ModeSelectionStep({
+  onSelect,
+  onBack,
+}: {
+  onSelect: (choice: AuthChoice) => void;
+  onBack: () => void;
+}) {
+  return (
+    <Card>
+      <StepHeader
+        icon={<HardDrive className="h-6 w-6" />}
+        title="Choose your mode"
+        subtitle="Start with local-only analysis or connect to your Sery workspace."
+      />
+
+      <div className="space-y-4">
+        {/* Local Vault Option */}
+        <button
+          onClick={() => onSelect('local')}
+          className="group w-full rounded-lg border-2 border-slate-200 bg-white p-6 text-left transition-all hover:border-purple-500 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-purple-500"
+        >
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-slate-100 p-3 dark:bg-slate-700">
+              <Database className="h-6 w-6 text-slate-600 dark:text-slate-300" />
+            </div>
+            <div className="flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50">
+                  Local Vault
+                </h3>
+                <span className="rounded-md bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                  FREE
+                </span>
+              </div>
+              <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+                Query your files with SQL. Zero sign-up, zero cloud sync.
+              </p>
+              <ul className="space-y-1.5 text-sm">
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  SQL queries on local files
+                </li>
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  5 FREE analysis recipes
+                </li>
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  No account required
+                </li>
+                <li className="flex items-center gap-2 text-slate-400 dark:text-slate-500">
+                  <Lock className="h-4 w-4" />
+                  AI-powered queries (PRO)
+                </li>
+              </ul>
+            </div>
+          </div>
+        </button>
+
+        {/* Workspace Option */}
+        <button
+          onClick={() => onSelect('workspace')}
+          className="group w-full rounded-lg border-2 border-slate-200 bg-white p-6 text-left transition-all hover:border-purple-500 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-purple-500"
+        >
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-purple-100 p-3 dark:bg-purple-900/30">
+              <Cloud className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div className="flex-1">
+              <div className="mb-1 flex items-center gap-2">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50">
+                  Sery Workspace
+                </h3>
+                <span className="rounded-md bg-purple-100 px-2 py-0.5 text-xs font-semibold text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
+                  PRO
+                </span>
+              </div>
+              <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+                Full AI-powered analytics with team collaboration.
+              </p>
+              <ul className="space-y-1.5 text-sm">
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  AI-powered natural language queries
+                </li>
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  PRO analysis recipes
+                </li>
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  Cloud sync & team sharing
+                </li>
+                <li className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
+                  <Check className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                  Performance mode (S3 upload)
+                </li>
+              </ul>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      <div className="mt-6">
+        <SecondaryButton onClick={onBack}>Back</SecondaryButton>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Step 3: Connect ────────────────────────────────────────────────────────
 
 function ConnectStep({
   onNext,
@@ -269,14 +395,16 @@ function FolderStep({
   onNext,
   onBack,
   toast,
+  authChoice,
 }: {
   onNext: () => void;
   onBack: () => void;
   toast: ReturnType<typeof useToast>;
+  authChoice: AuthChoice | null;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
-  const { setConfig } = useAgentStore();
+  const { setConfig, setOnboardingComplete } = useAgentStore();
 
   const pick = async () => {
     try {
@@ -294,6 +422,19 @@ function FolderStep({
     setScanning(true);
     try {
       await invoke('add_watched_folder', { path: selected, recursive: true });
+
+      // If local mode, set auth mode and mark onboarding complete
+      if (authChoice === 'local') {
+        try {
+          await invoke('set_auth_mode', {
+            mode: { type: 'LocalOnly' },
+          });
+          await invoke('complete_first_run');
+          setOnboardingComplete(true);
+        } catch (err) {
+          console.warn('Failed to set local mode:', err);
+        }
+      }
 
       // Start the file watcher so the folder is actively monitored
       try {

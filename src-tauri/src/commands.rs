@@ -10,7 +10,7 @@
 
 use crate::audit;
 use crate::auth::{self, AgentToken};
-use crate::config::Config;
+use crate::config::{AuthMode, Config};
 use crate::events;
 use crate::history::{self, QueryHistoryEntry};
 use crate::keyring_store;
@@ -249,6 +249,26 @@ pub async fn logout() -> Result<(), String> {
     drop(watcher_guard);
 
     keyring_store::delete_token().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_current_auth_mode() -> Result<AuthMode, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    Ok(auth::get_auth_mode(&config))
+}
+
+#[tauri::command]
+pub async fn check_feature_available(feature: String) -> Result<bool, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let mode = auth::get_auth_mode(&config);
+    Ok(auth::feature_available(&mode, &feature))
+}
+
+#[tauri::command]
+pub async fn set_auth_mode(mode: AuthMode) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.app.selected_auth_mode = Some(mode);
+    config.save().map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -890,7 +910,7 @@ pub async fn install_marketplace_plugin(plugin_id: String) -> Result<(), String>
 
 // ─── SQL Recipe Executor ───────────────────────────────────────────────────
 
-use crate::recipe_executor::{Recipe, RecipeExecutor};
+use crate::recipe_executor::{Recipe, RecipeExecutor, RecipeTier};
 use std::collections::HashMap;
 
 static RECIPE_EXECUTOR: Lazy<Arc<RwLock<RecipeExecutor>>> =
@@ -964,5 +984,44 @@ pub async fn validate_recipe_tables(
         .ok_or_else(|| format!("Recipe not found: {}", recipe_id))?;
 
     executor.validate_tables(recipe, &available_tables)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn execute_recipe(
+    recipe_id: String,
+    params: HashMap<String, serde_json::Value>,
+) -> Result<String, String> {
+    let executor = RECIPE_EXECUTOR.read().await;
+    let recipe = executor.get_recipe(&recipe_id)
+        .ok_or_else(|| format!("Recipe not found: {}", recipe_id))?;
+
+    // Tier authorization check
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let auth_mode = auth::get_auth_mode(&config);
+
+    let allowed = match (&recipe.tier, &auth_mode) {
+        (RecipeTier::Free, _) => true,
+        (RecipeTier::Pro, AuthMode::LocalOnly) => false,
+        (RecipeTier::Pro, _) => true,
+        (RecipeTier::Team, AuthMode::WorkspaceKey { .. }) => true,
+        (RecipeTier::Team, _) => false,
+    };
+
+    if !allowed {
+        let tier_name = match recipe.tier {
+            RecipeTier::Free => "FREE",
+            RecipeTier::Pro => "PRO",
+            RecipeTier::Team => "TEAM",
+        };
+        return Err(format!(
+            "Recipe '{}' requires {} tier. Connect your workspace or use your own API key to access.",
+            recipe.name,
+            tier_name
+        ));
+    }
+
+    // Render the SQL with parameters
+    executor.render_sql(recipe, &params)
         .map_err(|e| e.to_string())
 }

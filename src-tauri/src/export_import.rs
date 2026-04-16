@@ -254,6 +254,7 @@ mod tests {
                 notifications_enabled: true,
                 first_run_completed: false,
                 window_hide_notified: false,
+                selected_auth_mode: None,
             },
         }
     }
