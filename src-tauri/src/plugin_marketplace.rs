@@ -77,6 +77,7 @@ impl MarketplaceRegistry {
     }
 
     /// Save marketplace to JSON file
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| AgentError::Serialization(format!("Failed to serialize marketplace: {}", e)))?;
@@ -114,6 +115,7 @@ impl MarketplaceRegistry {
     }
 
     /// Filter by capability
+    #[allow(dead_code)]
     pub fn by_capability(&self, capability: &str) -> Vec<&MarketplaceEntry> {
         self.plugins
             .iter()
@@ -128,6 +130,7 @@ impl MarketplaceRegistry {
     }
 
     /// Filter by tag
+    #[allow(dead_code)]
     pub fn by_tag(&self, tag: &str) -> Vec<&MarketplaceEntry> {
         let tag_lower = tag.to_lowercase();
         self.plugins
@@ -150,6 +153,7 @@ impl MarketplaceRegistry {
     }
 
     /// Get verified plugins
+    #[allow(dead_code)]
     pub fn verified(&self) -> Vec<&MarketplaceEntry> {
         self.plugins
             .iter()
@@ -165,6 +169,7 @@ impl MarketplaceRegistry {
     }
 
     /// Sort by rating
+    #[allow(dead_code)]
     pub fn top_rated(&self, limit: usize) -> Vec<&MarketplaceEntry> {
         let mut plugins: Vec<&MarketplaceEntry> = self.plugins.iter().collect();
         plugins.sort_by(|a, b| {
@@ -184,6 +189,7 @@ impl MarketplaceRegistry {
     }
 
     /// Add or update plugin in marketplace
+    #[allow(dead_code)]
     pub fn upsert(&mut self, entry: MarketplaceEntry) {
         if let Some(existing) = self
             .plugins
@@ -197,6 +203,7 @@ impl MarketplaceRegistry {
     }
 
     /// Remove plugin from marketplace
+    #[allow(dead_code)]
     pub fn remove(&mut self, plugin_id: &str) -> bool {
         let initial_len = self.plugins.len();
         self.plugins.retain(|e| e.manifest.id != plugin_id);

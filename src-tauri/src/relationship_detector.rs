@@ -41,6 +41,7 @@ pub struct DatasetRelationship {
 struct SchemaColumn {
     name: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     column_type: Option<String>,
 }
 
