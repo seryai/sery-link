@@ -601,13 +601,16 @@ function PrivacyStep({
 
 function DoneStep() {
   const [finishing, setFinishing] = useState(false);
-  const { setOnboardingComplete } = useAgentStore();
+  const { setOnboardingComplete, setConfig } = useAgentStore();
   const toast = useToast();
 
   const finish = async () => {
     setFinishing(true);
     try {
       await invoke('complete_first_run');
+      // Reload config so App.tsx sees first_run_completed = true
+      const updatedConfig = await invoke<AgentConfig>('get_config');
+      setConfig(updatedConfig);
       setOnboardingComplete(true);
     } catch (err) {
       toast.error(`Couldn't save onboarding state: ${err}`);
