@@ -46,7 +46,6 @@ function AppInner() {
   const [activeTab, setActiveTab] = useState<Tab>('folders');
   const [bootstrapping, setBootstrapping] = useState(true);
   const {
-    authenticated,
     agentInfo,
     config,
     setAuthenticated,
@@ -130,9 +129,9 @@ function AppInner() {
     );
   }
 
-  // Not authenticated → show onboarding
-  // (Once authenticated, user can access the app regardless of onboarding completion)
-  if (!authenticated) {
+  // Show onboarding for first-time users (regardless of auth)
+  // Users can choose Local Vault (no auth) or Workspace mode
+  if (!config?.app?.first_run_completed) {
     return <OnboardingWizard />;
   }
 

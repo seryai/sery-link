@@ -70,8 +70,9 @@ pub fn run() {
                 app.set_activation_policy(ActivationPolicy::Regular);
             }
 
-            // Apply autostart configuration from saved settings on launch.
-            if let Ok(config) = config::Config::load() {
+            // Migrate existing users to the new auth mode system (v0.4.0+)
+            if let Ok(mut config) = config::Config::load() {
+                let _ = config.migrate_if_needed();
                 apply_autostart(app.handle(), config.app.launch_at_login);
             }
 
@@ -169,6 +170,10 @@ pub fn run() {
             commands::filter_recipes_by_data_source,
             commands::render_recipe_sql,
             commands::validate_recipe_tables,
+            commands::execute_recipe,
+            commands::get_current_auth_mode,
+            commands::check_feature_available,
+            commands::set_auth_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

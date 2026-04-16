@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Play, AlertCircle, CheckCircle2, Download, X } from 'lucide-react';
+import { UpgradePrompt } from './UpgradePrompt';
 
 interface Recipe {
   id: string;
@@ -54,6 +55,7 @@ export function RecipeExecutor({ recipe, onClose }: RecipeExecutorProps) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renderedSql, setRenderedSql] = useState<string | null>(null);
+  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
 
   const handleParameterChange = (paramName: string, value: any) => {
     setParameters(prev => ({
@@ -62,18 +64,6 @@ export function RecipeExecutor({ recipe, onClose }: RecipeExecutorProps) {
     }));
   };
 
-  const renderSql = async () => {
-    try {
-      const sql = await invoke<string>('render_recipe_sql', {
-        recipeId: recipe.id,
-        params: parameters
-      });
-      setRenderedSql(sql);
-      return sql;
-    } catch (err) {
-      throw new Error(`Failed to render SQL: ${err}`);
-    }
-  };
 
   const executeRecipe = async () => {
     try {
@@ -81,8 +71,13 @@ export function RecipeExecutor({ recipe, onClose }: RecipeExecutorProps) {
       setError(null);
       setResult(null);
 
-      // Step 1: Render SQL with parameters
-      await renderSql();
+      // Step 1: Execute recipe (with tier check)
+      const sql = await invoke<string>('execute_recipe', {
+        recipeId: recipe.id,
+        params: parameters
+      });
+
+      setRenderedSql(sql);
 
       // Step 2: Execute SQL via DuckDB
       // TODO: This requires implementing a execute_sql Tauri command
@@ -100,7 +95,14 @@ export function RecipeExecutor({ recipe, onClose }: RecipeExecutorProps) {
       setResult(mockResult);
     } catch (err) {
       console.error('Recipe execution failed:', err);
-      setError(err instanceof Error ? err.message : String(err));
+      const errorMsg = err instanceof Error ? err.message : String(err);
+
+      // Check if it's a tier restriction error
+      if (errorMsg.includes('requires PRO tier') || errorMsg.includes('requires TEAM tier')) {
+        setShowUpgradePrompt(true);
+      } else {
+        setError(errorMsg);
+      }
     } finally {
       setExecuting(false);
     }
@@ -365,6 +367,22 @@ export function RecipeExecutor({ recipe, onClose }: RecipeExecutorProps) {
           </div>
         </div>
       </div>
+
+      {/* Upgrade Modal */}
+      {showUpgradePrompt && (
+        <UpgradePrompt
+          variant="modal"
+          feature="recipe"
+          onClose={() => {
+            setShowUpgradePrompt(false);
+            onClose();
+          }}
+          onUpgrade={() => {
+            setShowUpgradePrompt(false);
+            onClose();
+          }}
+        />
+      )}
     </div>
   );
 }

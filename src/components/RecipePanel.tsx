@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Search, Filter, Database, TrendingUp, Users, DollarSign, BarChart3, FileSpreadsheet, Award } from 'lucide-react';
+import { Search, Filter, Database, TrendingUp, Users, DollarSign, BarChart3, FileSpreadsheet, Award, Lock } from 'lucide-react';
 import { RecipeExecutor } from './RecipeExecutor';
+import { useFeatureGate } from '../hooks/useFeatureGate';
+import { UpgradePrompt } from './UpgradePrompt';
 
 interface Recipe {
   id: string;
@@ -45,6 +47,10 @@ export function RecipePanel() {
   const [executingRecipe, setExecutingRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
+
+  // Check feature availability
+  const { available: proRecipesAvailable } = useFeatureGate('pro_recipes');
 
   // Load recipes on mount
   useEffect(() => {
@@ -80,8 +86,11 @@ export function RecipePanel() {
     try {
       let filtered = [...recipes];
 
-      // Filter by tier
-      if (viewMode === 'free') {
+      // Filter by tier based on auth mode
+      if (!proRecipesAvailable) {
+        // Local mode - only show FREE recipes
+        filtered = filtered.filter(r => r.tier === 'FREE');
+      } else if (viewMode === 'free') {
         filtered = filtered.filter(r => r.tier === 'FREE');
       } else if (viewMode === 'pro') {
         filtered = filtered.filter(r => r.tier === 'PRO' || r.tier === 'TEAM');
@@ -158,6 +167,20 @@ export function RecipePanel() {
 
   return (
     <div className="h-full flex flex-col">
+      {/* Upgrade Prompt for Local Mode */}
+      {!proRecipesAvailable && (
+        <div className="flex-shrink-0 p-4 border-b border-gray-200 bg-gray-50">
+          <UpgradePrompt
+            variant="banner"
+            feature="PRO recipes"
+            onUpgrade={() => {
+              // TODO: Navigate to settings or show auth modal
+              console.log('Navigate to upgrade');
+            }}
+          />
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex-shrink-0 border-b border-gray-200 bg-white px-6 py-4">
         <div className="flex items-center justify-between mb-4">
@@ -226,11 +249,23 @@ export function RecipePanel() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredRecipes.map((recipe) => (
+            {filteredRecipes.map((recipe) => {
+              const isLocked = !proRecipesAvailable && recipe.tier !== 'FREE';
+              return (
               <div
                 key={recipe.id}
-                onClick={() => setSelectedRecipe(recipe)}
-                className="border border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer bg-white"
+                onClick={() => {
+                  if (isLocked) {
+                    setShowUpgradePrompt(true);
+                  } else {
+                    setSelectedRecipe(recipe);
+                  }
+                }}
+                className={`border border-gray-200 rounded-lg p-4 transition-all cursor-pointer bg-white ${
+                  isLocked
+                    ? 'opacity-75 hover:border-gray-300'
+                    : 'hover:border-blue-400 hover:shadow-md'
+                }`}
               >
                 {/* Header */}
                 <div className="flex items-start justify-between mb-3">
@@ -239,6 +274,7 @@ export function RecipePanel() {
                     <span className={`text-xs font-medium px-2 py-0.5 rounded border ${getTierBadge(recipe.tier)}`}>
                       {recipe.tier}
                     </span>
+                    {isLocked && <Lock className="w-3 h-3 text-gray-400" />}
                   </div>
                   {recipe.metrics.rating >= 4.5 && (
                     <span title="Highly rated">
@@ -272,7 +308,8 @@ export function RecipePanel() {
                   <span className="text-gray-400">{recipe.author}</span>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         )}
       </div>
@@ -294,6 +331,19 @@ export function RecipePanel() {
         <RecipeExecutor
           recipe={executingRecipe}
           onClose={() => setExecutingRecipe(null)}
+        />
+      )}
+
+      {/* Upgrade Modal */}
+      {showUpgradePrompt && (
+        <UpgradePrompt
+          variant="modal"
+          feature="recipe"
+          onClose={() => setShowUpgradePrompt(false)}
+          onUpgrade={() => {
+            setShowUpgradePrompt(false);
+            // TODO: Navigate to settings or show auth modal
+          }}
         />
       )}
     </div>
