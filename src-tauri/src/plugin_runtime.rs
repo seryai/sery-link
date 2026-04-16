@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use wasmer::{imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, Module, Store, StoreMut, Value};
+use wasmer::{imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, Module, Store, Value};
 
 /// Global registry mapping plugin IDs to their WASM memory
 /// This allows host functions to access memory for string reading/writing
@@ -171,7 +171,7 @@ impl PluginRuntime {
 
     /// Read a file through a plugin (with sandboxing)
     /// This is called by the host, not directly by WASM
-    pub fn read_file_for_plugin(&mut self, plugin_id: &str, file_path: &str) -> Result<Vec<u8>> {
+    pub fn read_file_for_plugin(&mut self, _plugin_id: &str, file_path: &str) -> Result<Vec<u8>> {
         let path = PathBuf::from(file_path);
 
         self.env.read_file_if_allowed(&path)
@@ -260,7 +260,7 @@ impl PluginRuntime {
                     let read_file_fn = Function::new_typed_with_env(
                         &mut self.store,
                         &env,
-                        |mut env: FunctionEnvMut<HostEnv>,
+                        |env: FunctionEnvMut<HostEnv>,
                          path_ptr: i32,
                          path_len: i32,
                          output_ptr: i32,
@@ -346,7 +346,7 @@ impl PluginRuntime {
                     let get_clipboard_fn = Function::new_typed_with_env(
                         &mut self.store,
                         &env,
-                        |mut env: FunctionEnvMut<HostEnv>, output_ptr: i32, output_max_len: i32| -> i32 {
+                        |env: FunctionEnvMut<HostEnv>, output_ptr: i32, output_max_len: i32| -> i32 {
                             // Get plugin ID from environment
                             let plugin_id = {
                                 let host_env = env.data();
@@ -618,7 +618,7 @@ pub fn execute_data_source_plugin(
 pub fn execute_transform_plugin(
     runtime: &mut PluginRuntime,
     plugin_id: &str,
-    input_data: &str,
+    _input_data: &str,
 ) -> Result<String> {
     if !runtime.is_loaded(plugin_id) {
         return Err(AgentError::NotFound(format!(
@@ -635,7 +635,7 @@ pub fn execute_transform_plugin(
 pub fn execute_viewer_plugin(
     runtime: &mut PluginRuntime,
     plugin_id: &str,
-    data: &str,
+    _data: &str,
 ) -> Result<String> {
     if !runtime.is_loaded(plugin_id) {
         return Err(AgentError::NotFound(format!(
