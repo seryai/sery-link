@@ -94,6 +94,7 @@ pub struct RecipeMetrics {
 
 /// Recipe execution result
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct RecipeResult {
     pub recipe_id: String,
     pub recipe_name: String,
@@ -198,6 +199,7 @@ impl RecipeExecutor {
     }
 
     /// Filter recipes by tier
+    #[allow(dead_code)]
     pub fn filter_by_tier(&self, tier: RecipeTier) -> Vec<&Recipe> {
         self.recipes
             .values()

@@ -94,6 +94,7 @@ pub struct PluginRuntime {
 /// A loaded plugin instance
 struct PluginInstance {
     instance: Instance,
+    #[allow(dead_code)]
     manifest: PluginManifest,
 }
 
@@ -110,6 +111,7 @@ impl PluginRuntime {
 
     /// Set allowed file paths for plugins with ReadFiles permission
     /// Plugins can only read files under these directories
+    #[allow(dead_code)]
     pub fn set_allowed_paths(&mut self, paths: Vec<PathBuf>) {
         let mut allowed = self.env.allowed_paths.lock().unwrap();
         *allowed = paths;
@@ -219,6 +221,7 @@ impl PluginRuntime {
     }
 
     /// Read a string from WASM memory
+    #[allow(dead_code)]
     fn read_string_from_memory(&self, plugin_id: &str, ptr: i32, len: i32) -> Result<String> {
         let instance_data = self.instances.get(plugin_id)
             .ok_or_else(|| AgentError::NotFound(format!("Plugin not loaded: {}", plugin_id)))?;
@@ -568,22 +571,26 @@ impl PluginRuntime {
 
     /// Clear the module cache (force recompilation on next load)
     /// Useful after plugin updates or for memory management
+    #[allow(dead_code)]
     pub fn clear_module_cache(&mut self) {
         self.module_cache.clear();
     }
 
     /// Clear cached module for a specific plugin
+    #[allow(dead_code)]
     pub fn clear_plugin_cache(&mut self, plugin_id: &str) {
         self.module_cache.remove(plugin_id);
     }
 
     /// Get cache statistics
+    #[allow(dead_code)]
     pub fn cache_stats(&self) -> (usize, usize) {
         (self.module_cache.len(), self.instances.len())
     }
 }
 
 /// Helper for data source plugins (parse file format)
+#[allow(dead_code)]
 pub fn execute_data_source_plugin(
     runtime: &mut PluginRuntime,
     plugin_id: &str,
@@ -615,6 +622,7 @@ pub fn execute_data_source_plugin(
 }
 
 /// Helper for transform plugins (data transformation)
+#[allow(dead_code)]
 pub fn execute_transform_plugin(
     runtime: &mut PluginRuntime,
     plugin_id: &str,
@@ -632,6 +640,7 @@ pub fn execute_transform_plugin(
 }
 
 /// Helper for viewer plugins (render data to HTML/JSON)
+#[allow(dead_code)]
 pub fn execute_viewer_plugin(
     runtime: &mut PluginRuntime,
     plugin_id: &str,
