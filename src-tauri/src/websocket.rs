@@ -332,6 +332,7 @@ impl WebSocketClient {
         let removed = message["removed"].as_u64().unwrap_or(0);
         let type_changed = message["type_changed"].as_u64().unwrap_or(0);
         let origin_agent = message["origin_agent_name"].as_str().unwrap_or("another machine");
+        let origin_agent_id = message["origin_agent_id"].as_str().map(str::to_string);
 
         // The cloud sends a {added, removed, changed} name-list drift
         // shape; our local SchemaDiff wants full ColumnChange entries.
@@ -380,7 +381,7 @@ impl WebSocketClient {
         // "this change happened on my laptop" vs "on my desktop."
         let tagged_name = format!("{} (from {})", dataset_name, origin_agent);
 
-        if let Ok(stored) = crate::schema_notifications::record(
+        if let Ok(stored) = crate::schema_notifications::record_with_origin(
             &workspace_id,
             &dataset_path,
             &tagged_name,
@@ -388,6 +389,7 @@ impl WebSocketClient {
             removed,
             type_changed,
             diff.clone(),
+            origin_agent_id.clone(),
         ) {
             crate::events::emit_schema_changed(
                 &app,
@@ -401,6 +403,7 @@ impl WebSocketClient {
                     removed,
                     type_changed,
                     diff,
+                    origin_agent_id,
                 },
             );
         }

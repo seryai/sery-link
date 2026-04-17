@@ -10,8 +10,11 @@
 //
 // Paired backend: api/app/api/v1/fleet.py.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Bell } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAgentStore } from '../stores/agentStore';
 import { AddMachineModal } from './AddMachineModal';
 
 type FleetAgent = {
@@ -121,13 +124,7 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
       )}
 
       {fleet && fleet.agents.length > 0 && (
-        <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
-          {fleet.agents.map(agent => (
-            <li key={agent.agent_id}>
-              <AgentRow agent={agent} />
-            </li>
-          ))}
-        </ul>
+        <FleetList agents={fleet.agents} />
       )}
 
       {showAddModal && (
@@ -144,9 +141,42 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
   );
 }
 
-// ─── Row ───────────────────────────────────────────────────────────────────
+// ─── List + Rows ───────────────────────────────────────────────────────────
 
-function AgentRow({ agent }: { agent: FleetAgent }) {
+function FleetList({ agents }: { agents: FleetAgent[] }) {
+  // Derive per-agent unread schema-change counts once, outside the row
+  // components — avoids each row subscribing independently to the store.
+  const notifications = useAgentStore((s) => s.schemaNotifications);
+  const unreadByAgent = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const n of notifications) {
+      if (n.read || !n.origin_agent_id) continue;
+      map.set(n.origin_agent_id, (map.get(n.origin_agent_id) ?? 0) + 1);
+    }
+    return map;
+  }, [notifications]);
+
+  return (
+    <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
+      {agents.map((agent) => (
+        <li key={agent.agent_id}>
+          <AgentRow
+            agent={agent}
+            unreadSchemaChanges={unreadByAgent.get(agent.agent_id) ?? 0}
+          />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AgentRow({
+  agent,
+  unreadSchemaChanges,
+}: {
+  agent: FleetAgent;
+  unreadSchemaChanges: number;
+}) {
   const niceName = agent.display_name ?? agent.name;
   const sub = [
     agent.os_type,
@@ -167,6 +197,18 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
             <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
               This machine
             </span>
+          )}
+          {unreadSchemaChanges > 0 && (
+            <Link
+              to="/notifications"
+              title={`${unreadSchemaChanges} unread schema change${
+                unreadSchemaChanges === 1 ? '' : 's'
+              } on this machine`}
+              className="inline-flex items-center gap-1 rounded-full bg-purple-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white transition-colors hover:bg-purple-700"
+            >
+              <Bell className="h-2.5 w-2.5" />
+              {unreadSchemaChanges > 99 ? '99+' : unreadSchemaChanges}
+            </Link>
           )}
         </div>
         <div className="truncate text-xs text-slate-500 dark:text-slate-400">
