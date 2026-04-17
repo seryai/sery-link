@@ -574,6 +574,88 @@ mod pii_tests {
     }
 }
 
+#[cfg(test)]
+mod filter_tests {
+    use super::{compile_patterns, is_document_ext, is_excluded, is_supported};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn is_supported_covers_all_indexable_formats() {
+        for ext in [
+            "parquet", "csv", "xlsx", "xls", "docx", "pptx", "html", "htm", "ipynb",
+        ] {
+            let p = PathBuf::from(format!("/tmp/file.{ext}"));
+            assert!(is_supported(&p), "{ext} should be supported");
+        }
+    }
+
+    #[test]
+    fn is_supported_rejects_nonindexable() {
+        for bad in ["exe", "bin", "mp4", "zip", "tar", ""] {
+            let p = PathBuf::from(format!("/tmp/file.{bad}"));
+            assert!(!is_supported(&p), "{bad} should NOT be supported");
+        }
+        // No extension — must also be rejected.
+        assert!(!is_supported(Path::new("/tmp/some_binary")));
+    }
+
+    #[test]
+    fn is_document_ext_separates_docs_from_tabular() {
+        assert!(is_document_ext("docx"));
+        assert!(is_document_ext("pptx"));
+        assert!(is_document_ext("html"));
+        assert!(is_document_ext("ipynb"));
+
+        assert!(!is_document_ext("parquet"));
+        assert!(!is_document_ext("csv"));
+        assert!(!is_document_ext("xlsx"));
+    }
+
+    #[test]
+    fn compile_patterns_drops_invalid_globs_silently() {
+        // One valid, one invalid. compile_patterns is best-effort: a bad
+        // pattern in user settings must not break the scan.
+        let patterns = compile_patterns(&["node_modules".into(), "[".into()]);
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].matches("node_modules"));
+    }
+
+    #[test]
+    fn is_excluded_matches_directory_component() {
+        // "node_modules" as a single pattern should exclude nested folders.
+        let base = "/home/user/repo";
+        let patterns = compile_patterns(&["node_modules".into()]);
+        let nested = PathBuf::from("/home/user/repo/app/node_modules/foo.js");
+        assert!(is_excluded(&nested, base, &patterns));
+    }
+
+    #[test]
+    fn is_excluded_matches_filename_pattern() {
+        let base = "/home/user/repo";
+        let patterns = compile_patterns(&["*.log".into()]);
+        assert!(is_excluded(
+            &PathBuf::from("/home/user/repo/app.log"),
+            base,
+            &patterns,
+        ));
+        assert!(!is_excluded(
+            &PathBuf::from("/home/user/repo/data.csv"),
+            base,
+            &patterns,
+        ));
+    }
+
+    #[test]
+    fn is_excluded_false_when_no_patterns() {
+        let patterns = compile_patterns(&[]);
+        assert!(!is_excluded(
+            &PathBuf::from("/tmp/anything.csv"),
+            "/tmp",
+            &patterns,
+        ));
+    }
+}
+
 /// Best-effort sample-row extraction for tabular files.
 ///
 /// Opens a fresh in-memory DuckDB, runs `SELECT * LIMIT 5`, converts the

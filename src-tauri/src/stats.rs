@@ -132,3 +132,52 @@ pub fn clear() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{roll_over_day, today_key, Stats};
+    use chrono::TimeZone;
+
+    #[test]
+    fn today_key_formats_as_iso_date() {
+        let dt = chrono::Utc
+            .with_ymd_and_hms(2026, 7, 13, 9, 0, 0)
+            .unwrap();
+        assert_eq!(today_key(&dt), "2026-07-13");
+    }
+
+    #[test]
+    fn today_key_zero_pads_single_digit_month_and_day() {
+        let dt = chrono::Utc.with_ymd_and_hms(2026, 1, 5, 0, 0, 0).unwrap();
+        assert_eq!(today_key(&dt), "2026-01-05");
+    }
+
+    #[test]
+    fn roll_over_initializes_date_on_first_call() {
+        let mut s = Stats::default();
+        s.queries_today = 42; // pretend state from a crash or bug
+        roll_over_day(&mut s, "2026-04-17");
+        assert_eq!(s.queries_today, 0, "counter resets on first roll-over");
+        assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));
+    }
+
+    #[test]
+    fn roll_over_resets_counter_on_new_day() {
+        let mut s = Stats::default();
+        s.queries_today = 7;
+        s.queries_today_date = Some("2026-04-16".into());
+        roll_over_day(&mut s, "2026-04-17");
+        assert_eq!(s.queries_today, 0);
+        assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));
+    }
+
+    #[test]
+    fn roll_over_is_noop_on_same_day() {
+        let mut s = Stats::default();
+        s.queries_today = 7;
+        s.queries_today_date = Some("2026-04-17".into());
+        roll_over_day(&mut s, "2026-04-17");
+        assert_eq!(s.queries_today, 7, "counter must not reset mid-day");
+        assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));
+    }
+}
