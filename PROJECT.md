@@ -10,11 +10,17 @@ Live docs: [README.md](./README.md) · [CHANGELOG.md](./CHANGELOG.md) · parent 
 
 ## 1. What Sery Link Is
 
-Cross-platform desktop app that analyzes local data sources (Parquet, CSV, Excel, documents) using AI. Cloud sync is optional — tunnel mode queries run entirely on the user's computer. Part of [Sery.ai](https://sery.ai).
+**Sery Link is a data node in your personal fleet.**
 
-**North Star:** *"Download to Insight in 60 Seconds"* — from install to first answer without creating an account.
+You install one copy per machine you want to monitor (home PC, office laptop, server, NAS). Each copy watches folders, indexes local files into DuckDB, and publishes *metadata only* (schema, sample rows, column descriptions, machine identity) to the Sery cloud. When you ask a natural-language question from the web dashboard, the backend routes SQL back to the right agent(s); each agent runs the query locally and streams results home. **Raw files never leave the machine.**
 
-**Positioning:** Sery Link is a **data sovereignty bridge** — like Obsidian did for notes, we do for data lakes. Your data never leaves your machine, but you get enterprise-grade analytics. Plays to the PRD's 3-tier execution model (Cloud / Tunnel / Hybrid).
+**One user → many Sery Link installs → one workspace.** Multiple machines bound to the same workspace key appear as one fleet.
+
+**North Star:** *"Download to Insight in 60 Seconds"* — from install on the first machine to the first answer. Adding a second machine should be another 60 seconds.
+
+**Positioning:** Sery Link is the sensor, not the brain. The web dashboard is the primary conversation surface (plus future mobile / email / Slack). Sery Link's job is to keep each machine's data indexed, queryable, and reachable.
+
+See the canonical 7-step end-to-end flow in [../PROJECT.md §4.0](../PROJECT.md).
 
 ---
 
