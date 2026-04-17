@@ -69,8 +69,14 @@ pub struct ScanComplete {
 /// scanned one. Emitted BEFORE the upsert so the UI can react to the
 /// change (toast, notifications tab) while the cache is still in its
 /// "old" state — not strictly required, but makes reasoning simpler.
+///
+/// `id` and `received_at` are assigned by `schema_notifications::record`
+/// before emission so the frontend store and the on-disk log agree on
+/// the same id (mark-read operations need that).
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaChanged {
+    pub id: String,
+    pub received_at: String, // RFC 3339
     pub workspace_id: String,
     pub dataset_path: String,
     pub dataset_name: String,

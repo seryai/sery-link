@@ -5,6 +5,7 @@
 // and the "re-auth modal" flag. Everything else is derived from this.
 
 import { create } from 'zustand';
+import { invoke } from '@tauri-apps/api/core';
 import type {
   AgentConfig,
   AgentStats,
@@ -12,16 +13,12 @@ import type {
   QueryHistoryEntry,
   ScanProgress,
   SchemaChangedPayload,
+  StoredSchemaNotification,
 } from '../types/events';
 
-// One stored notification = one schema_changed event + a client-side id
-// + an unread flag so the UI can badge the tab and mark as read on view.
-// Bounded to MAX_KEEP entries to avoid unbounded growth.
-export interface SchemaNotification extends SchemaChangedPayload {
-  id: string;
-  received_at: string; // ISO 8601
-  read: boolean;
-}
+// Stored notifications come from the Rust side already carrying an id
+// + received_at. The in-memory slice keeps the same shape.
+export type SchemaNotification = StoredSchemaNotification;
 
 const MAX_NOTIFICATIONS_KEEP = 200;
 
@@ -90,10 +87,11 @@ interface AgentState {
   clearScanProgress: (folder: string) => void;
   setReAuthRequired: (v: boolean) => void;
   setOnboardingComplete: (v: boolean) => void;
+  setSchemaNotifications: (entries: SchemaNotification[]) => void;
   addSchemaNotification: (payload: SchemaChangedPayload) => void;
-  markSchemaNotificationRead: (id: string) => void;
-  markAllSchemaNotificationsRead: () => void;
-  clearSchemaNotifications: () => void;
+  markSchemaNotificationRead: (id: string) => Promise<void>;
+  markAllSchemaNotificationsRead: () => Promise<void>;
+  clearSchemaNotifications: () => Promise<void>;
   setLoading: (value: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -150,17 +148,17 @@ export const useAgentStore = create<AgentState>((set) => ({
     }),
   setReAuthRequired: (v) => set({ reAuthRequired: v }),
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
+  setSchemaNotifications: (entries) =>
+    set({ schemaNotifications: entries.slice(0, MAX_NOTIFICATIONS_KEEP) }),
   addSchemaNotification: (payload) =>
     set((state) => {
-      const entry: SchemaNotification = {
-        ...payload,
-        id:
-          typeof crypto !== 'undefined' && 'randomUUID' in crypto
-            ? crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        received_at: new Date().toISOString(),
-        read: false,
-      };
+      // Dedupe on id — schema_changed carries the id assigned by the
+      // Rust side at record-time. If the event re-fires for any reason,
+      // we don't want a duplicate entry.
+      if (state.schemaNotifications.some((n) => n.id === payload.id)) {
+        return {};
+      }
+      const entry: SchemaNotification = { ...payload, read: false };
       return {
         schemaNotifications: [entry, ...state.schemaNotifications].slice(
           0,
@@ -168,20 +166,41 @@ export const useAgentStore = create<AgentState>((set) => ({
         ),
       };
     }),
-  markSchemaNotificationRead: (id) =>
+  markSchemaNotificationRead: async (id) => {
+    // Optimistic UI update, then persist. If persistence fails, log
+    // and keep the optimistic state — the user's intent is clear.
     set((state) => ({
       schemaNotifications: state.schemaNotifications.map((n) =>
         n.id === id ? { ...n, read: true } : n,
       ),
-    })),
-  markAllSchemaNotificationsRead: () =>
+    }));
+    try {
+      await invoke('mark_schema_notification_read', { id });
+    } catch (err) {
+      console.error('mark_schema_notification_read failed:', err);
+    }
+  },
+  markAllSchemaNotificationsRead: async () => {
     set((state) => ({
       schemaNotifications: state.schemaNotifications.map((n) => ({
         ...n,
         read: true,
       })),
-    })),
-  clearSchemaNotifications: () => set({ schemaNotifications: [] }),
+    }));
+    try {
+      await invoke('mark_all_schema_notifications_read');
+    } catch (err) {
+      console.error('mark_all_schema_notifications_read failed:', err);
+    }
+  },
+  clearSchemaNotifications: async () => {
+    set({ schemaNotifications: [] });
+    try {
+      await invoke('clear_schema_notifications');
+    } catch (err) {
+      console.error('clear_schema_notifications failed:', err);
+    }
+  },
   setLoading: (value) => set({ isLoading: value }),
   setError: (error) => set({ error }),
   reset: () => set(initial),
