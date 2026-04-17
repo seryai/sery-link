@@ -695,6 +695,22 @@ pub async fn get_cache_stats() -> Result<CacheStats, String> {
     cache.get_stats().map_err(|e| e.to_string())
 }
 
+/// Compute what changed between the currently-cached schema for a dataset
+/// and a newly-scanned one. Returns an empty diff when the dataset isn't
+/// yet cached (first-sync is not a change). Callers typically invoke this
+/// *before* upserting so they can capture the notification.
+#[tauri::command]
+pub async fn compute_schema_diff(
+    workspace_id: String,
+    path: String,
+    new_schema_json: Option<String>,
+) -> Result<crate::schema_diff::SchemaDiff, String> {
+    let cache = MetadataCache::new().map_err(|e| e.to_string())?;
+    cache
+        .compute_schema_diff(&workspace_id, &path, new_schema_json.as_deref())
+        .map_err(|e| e.to_string())
+}
+
 // ─── Dataset Relationships ────────────────────────────────────────────────
 
 #[tauri::command]
