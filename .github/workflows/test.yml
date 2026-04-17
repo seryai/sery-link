@@ -14,6 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Ubuntu runners ship with ~25GB of pre-installed SDKs we don't need.
+      # DuckDB's bundled C++ build can fill the disk during `cargo check`
+      # (the .a archive alone is multi-GB). Free space up front.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android
+          df -h /
+
       - name: Install Linux build deps (Tauri)
         run: |
           sudo apt-get update
