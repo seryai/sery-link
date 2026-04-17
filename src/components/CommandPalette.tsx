@@ -6,13 +6,14 @@
 import { useEffect, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  BarChart3,
   Search,
   Folder,
   FolderOpen,
   RefreshCw,
   Settings as SettingsIcon,
   Shield,
-  Clock,
+  Sparkles,
   Database,
   Trash2,
   X,
@@ -33,7 +34,7 @@ interface Command {
 interface CommandPaletteProps {
   config: AgentConfig | null;
   workspaceId: string | null;
-  onNavigate: (tab: 'folders' | 'history' | 'privacy' | 'settings') => void;
+  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'privacy' | 'settings') => void;
   onAddFolder: () => void;
   onRescanFolder?: (path: string) => void;
   onRemoveFolder?: (path: string) => void;
@@ -70,12 +71,23 @@ export function CommandPalette({
         section: 'navigation',
       },
       {
-        id: 'nav-history',
-        label: 'Go to History',
-        icon: <Clock className="h-4 w-4" />,
-        keywords: ['history', 'past', 'navigate'],
+        id: 'nav-analytics',
+        label: 'Go to Analytics',
+        icon: <Sparkles className="h-4 w-4" />,
+        keywords: ['analytics', 'recipes', 'query', 'sql', 'navigate'],
         action: () => {
-          onNavigate('history');
+          onNavigate('analytics');
+          setIsOpen(false);
+        },
+        section: 'navigation',
+      },
+      {
+        id: 'nav-results',
+        label: 'Go to Results',
+        icon: <BarChart3 className="h-4 w-4" />,
+        keywords: ['results', 'history', 'queries', 'navigate'],
+        action: () => {
+          onNavigate('results');
           setIsOpen(false);
         },
         section: 'navigation',

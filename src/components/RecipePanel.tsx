@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { resolveResource } from '@tauri-apps/api/path';
 import { Search, Filter, Database, TrendingUp, Users, DollarSign, BarChart3, FileSpreadsheet, Award, Lock } from 'lucide-react';
 import { RecipeExecutor } from './RecipeExecutor';
 import { useFeatureGate } from '../hooks/useFeatureGate';
@@ -37,12 +38,28 @@ interface Recipe {
 type ViewMode = 'all' | 'free' | 'pro';
 type DataSource = 'all' | 'Shopify' | 'Stripe' | 'Google Analytics' | 'CSV' | 'Generic';
 
-export function RecipePanel() {
+interface RecipePanelProps {
+  initialDataSourceFilter?: string;
+  showSuggestedOnly?: boolean;
+  maxResults?: number;
+  autoOpenRecipe?: string | null;
+}
+
+export function RecipePanel({
+  initialDataSourceFilter,
+  showSuggestedOnly = false,
+  maxResults,
+  autoOpenRecipe,
+}: RecipePanelProps) {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [filteredRecipes, setFilteredRecipes] = useState<Recipe[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('all');
-  const [dataSource, setDataSource] = useState<DataSource>('all');
+  const [dataSource, setDataSource] = useState<DataSource>(
+    initialDataSourceFilter === 'all' || !initialDataSourceFilter
+      ? 'all'
+      : (initialDataSourceFilter as DataSource)
+  );
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [executingRecipe, setExecutingRecipe] = useState<Recipe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +68,16 @@ export function RecipePanel() {
 
   // Check feature availability
   const { available: proRecipesAvailable } = useFeatureGate('pro_recipes');
+
+  // Auto-open recipe if specified
+  useEffect(() => {
+    if (autoOpenRecipe && recipes.length > 0) {
+      const recipe = recipes.find(r => r.id === autoOpenRecipe);
+      if (recipe) {
+        setSelectedRecipe(recipe);
+      }
+    }
+  }, [autoOpenRecipe, recipes]);
 
   // Load recipes on mount
   useEffect(() => {
@@ -67,9 +94,20 @@ export function RecipePanel() {
       setLoading(true);
       setError(null);
 
-      // Load recipes from examples directory (bundled with app)
-      // In production, this would load from ~/.sery/recipes/
-      const recipesDir = 'examples/recipes';
+      // Try to resolve bundled resources directory first (production)
+      // Fall back to examples directory (development)
+      let recipesDir: string;
+      try {
+        // In production, recipes are bundled in resources/recipes/
+        // Resolve one recipe file to get the directory
+        const firstRecipePath = await resolveResource('recipes/shopify-top-products.json');
+        // Extract parent directory by removing the filename
+        recipesDir = firstRecipePath.substring(0, firstRecipePath.lastIndexOf('/'));
+      } catch {
+        // In development, use the examples directory
+        recipesDir = 'examples/recipes';
+      }
+
       const loaded = await invoke<Recipe[]>('load_recipes_from_dir', { dirPath: recipesDir });
 
       setRecipes(loaded);
@@ -110,6 +148,11 @@ export function RecipePanel() {
         });
         const resultIds = new Set(results.map(r => r.id));
         filtered = filtered.filter(r => resultIds.has(r.id));
+      }
+
+      // Apply max results if specified (for suggested recipes section)
+      if (maxResults && filtered.length > maxResults) {
+        filtered = filtered.slice(0, maxResults);
       }
 
       setFilteredRecipes(filtered);
@@ -167,8 +210,8 @@ export function RecipePanel() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Upgrade Prompt for Local Mode */}
-      {!proRecipesAvailable && (
+      {/* Upgrade Prompt for Local Mode - only show if not in suggested mode */}
+      {!proRecipesAvailable && !showSuggestedOnly && (
         <div className="flex-shrink-0 p-4 border-b border-gray-200 bg-gray-50">
           <UpgradePrompt
             variant="banner"
@@ -181,66 +224,68 @@ export function RecipePanel() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex-shrink-0 border-b border-gray-200 bg-white px-6 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">SQL Recipe Library</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Pre-built analytics templates for common business questions
-            </p>
+      {/* Header - hide if showing suggested recipes only */}
+      {!showSuggestedOnly && (
+        <div className="flex-shrink-0 border-b border-gray-200 bg-white px-6 py-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">SQL Recipe Library</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Pre-built analytics templates for common business questions
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">{filteredRecipes.length} recipes</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">{filteredRecipes.length} recipes</span>
+
+          {/* Search Bar */}
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search recipes by name, description, or tags..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
-        </div>
 
-        {/* Search Bar */}
-        <div className="relative mb-4">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search recipes by name, description, or tags..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+          {/* Filters */}
+          <div className="flex items-center gap-4">
+            {/* Tier Filter */}
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-gray-500" />
+              <select
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value as ViewMode)}
+                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Tiers</option>
+                <option value="free">FREE Only</option>
+                <option value="pro">PRO/TEAM</option>
+              </select>
+            </div>
 
-        {/* Filters */}
-        <div className="flex items-center gap-4">
-          {/* Tier Filter */}
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-gray-500" />
+            {/* Data Source Filter */}
             <select
-              value={viewMode}
-              onChange={(e) => setViewMode(e.target.value as ViewMode)}
+              value={dataSource}
+              onChange={(e) => setDataSource(e.target.value as DataSource)}
               className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="all">All Tiers</option>
-              <option value="free">FREE Only</option>
-              <option value="pro">PRO/TEAM</option>
+              <option value="all">All Data Sources</option>
+              <option value="Shopify">Shopify</option>
+              <option value="Stripe">Stripe</option>
+              <option value="Google Analytics">Google Analytics</option>
+              <option value="CSV">CSV</option>
+              <option value="Generic">Generic</option>
             </select>
           </div>
-
-          {/* Data Source Filter */}
-          <select
-            value={dataSource}
-            onChange={(e) => setDataSource(e.target.value as DataSource)}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="all">All Data Sources</option>
-            <option value="Shopify">Shopify</option>
-            <option value="Stripe">Stripe</option>
-            <option value="Google Analytics">Google Analytics</option>
-            <option value="CSV">CSV</option>
-            <option value="Generic">Generic</option>
-          </select>
         </div>
-      </div>
+      )}
 
       {/* Recipe Grid */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className={`flex-1 overflow-y-auto ${showSuggestedOnly ? '' : 'p-6'}`}>
         {filteredRecipes.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-500">
             <FileSpreadsheet className="w-12 h-12 mb-3 text-gray-300" />
@@ -248,7 +293,7 @@ export function RecipePanel() {
             <p className="text-sm mt-1">Try adjusting your search or filters</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className={`grid gap-4 ${showSuggestedOnly ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
             {filteredRecipes.map((recipe) => {
               const isLocked = !proRecipesAvailable && recipe.tier !== 'FREE';
               return (

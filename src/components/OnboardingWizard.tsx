@@ -65,9 +65,9 @@ export function OnboardingWizard() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-br from-slate-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950">
+    <div className="flex h-screen flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950">
       {/* Progress indicator */}
-      <div className="flex items-center justify-center gap-2 pt-8">
+      <div className="flex shrink-0 items-center justify-center gap-2 pt-8">
         {STEPS.map((s, i) => {
           const current = STEPS.indexOf(step);
           const filled = i <= current;
@@ -84,8 +84,8 @@ export function OnboardingWizard() {
         })}
       </div>
 
-      <div className="flex flex-1 items-center justify-center p-8">
-        <div className="w-full max-w-lg">
+      <div className="flex flex-1 items-center justify-center overflow-y-auto p-8">
+        <div className="w-full max-w-lg py-4">
           {step === 'welcome' && <WelcomeStep onNext={goNext} />}
           {step === 'mode' && <ModeSelectionStep onSelect={handleModeSelect} onBack={goPrev} />}
           {step === 'connect' && <ConnectStep onNext={goNext} onBack={goPrev} toast={toast} />}

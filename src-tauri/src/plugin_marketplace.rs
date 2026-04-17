@@ -223,6 +223,35 @@ impl PluginInstaller {
 
     /// Install plugin from marketplace entry
     pub async fn install(&self, entry: &MarketplaceEntry) -> Result<()> {
+        // Validate source availability before attempting install
+        match &entry.source {
+            PluginSource::Local { path } => {
+                let source_path = PathBuf::from(path);
+                if !source_path.exists() {
+                    return Err(AgentError::Validation(format!(
+                        "Plugin source directory not found: {}\n\n\
+                        This plugin uses a local file path that doesn't exist.\n\
+                        Local plugins are only available when running from the development directory.\n\n\
+                        In the installed app, plugins need to be downloaded from URLs.\n\
+                        Plugin marketplace downloads are coming in a future update!",
+                        path
+                    )));
+                }
+            }
+            PluginSource::Url { .. } => {
+                return Err(AgentError::Validation(
+                    "URL-based plugin installation is not yet implemented.\n\
+                    This feature is coming in a future update!".to_string()
+                ));
+            }
+            PluginSource::GitHub { .. } => {
+                return Err(AgentError::Validation(
+                    "GitHub plugin installation is not yet implemented.\n\
+                    This feature is coming in a future update!".to_string()
+                ));
+            }
+        }
+
         let plugin_dir = self.plugins_dir.join(&entry.manifest.id);
 
         // Create plugin directory
@@ -257,9 +286,17 @@ impl PluginInstaller {
 
         // Copy plugin.wasm
         let wasm_src = source.join("plugin.wasm");
+        if !wasm_src.exists() {
+            return Err(AgentError::FileSystem(format!(
+                "Plugin WASM file not found: {}\nSource path: {}\nMake sure the plugin is built with: cd {} && cargo build --target wasm32-unknown-unknown --release",
+                wasm_src.display(),
+                source_path,
+                source_path
+            )));
+        }
         let wasm_dest = dest_dir.join("plugin.wasm");
         fs::copy(&wasm_src, &wasm_dest).map_err(|e| {
-            AgentError::FileSystem(format!("Failed to copy plugin.wasm: {}", e))
+            AgentError::FileSystem(format!("Failed to copy plugin.wasm from {} to {}: {}", wasm_src.display(), wasm_dest.display(), e))
         })?;
 
         // Copy README if exists

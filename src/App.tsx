@@ -8,13 +8,16 @@
 //   5. Providers: ToastProvider wraps everything so all components can show toasts.
 
 import { useEffect, useState } from 'react';
+import { HashRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  Clock,
+  BarChart3,
+  ChevronDown,
   Folder,
   Loader2,
   Settings as SettingsIcon,
   Shield,
+  Sparkles,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from './stores/agentStore';
 import seryLogo from './assets/sery-logo.svg';
@@ -24,6 +27,7 @@ import { ToastProvider } from './components/Toast';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
+import { Analytics } from './components/Analytics';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
@@ -32,18 +36,20 @@ import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { CommandPalette } from './components/CommandPalette';
 import type { AgentConfig, AgentStats } from './types/events';
 
-type Tab = 'folders' | 'history' | 'privacy' | 'settings';
-
 export default function App() {
   return (
-    <ToastProvider>
-      <AppInner />
-    </ToastProvider>
+    <HashRouter>
+      <ToastProvider>
+        <AppInner />
+      </ToastProvider>
+    </HashRouter>
   );
 }
 
 function AppInner() {
-  const [activeTab, setActiveTab] = useState<Tab>('folders');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [showMoreDropdown, setShowMoreDropdown] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const {
     agentInfo,
@@ -54,10 +60,37 @@ function AppInner() {
     setStats,
   } = useAgentStore();
 
+  // Check if current route is in More dropdown
+  const isMoreActive = location.pathname.startsWith('/settings') || location.pathname.startsWith('/privacy');
+
   // Keep the `html.dark` class and `html.theme` in sync with config
   useTheme();
   // Subscribe to every Tauri event we care about
   useAgentEvents();
+
+  // Close More dropdown when clicking outside
+  useEffect(() => {
+    if (!showMoreDropdown) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Don't close if clicking inside the dropdown or on NavLinks
+      if (target.closest('.dropdown-container') || target.closest('a[href]')) {
+        return;
+      }
+      setShowMoreDropdown(false);
+    };
+
+    // Use setTimeout to allow NavLink clicks to register first
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [showMoreDropdown]);
 
   // Bootstrap: existing token? → load config + stats, start tunnel + watcher
   useEffect(() => {
@@ -154,40 +187,137 @@ function AppInner() {
             </div>
           </div>
 
-          <nav className="flex-1 space-y-0.5 p-2">
-            <NavButton
-              active={activeTab === 'folders'}
-              onClick={() => setActiveTab('folders')}
-              icon={<Folder className="h-4 w-4" />}
-              label="Folders"
-            />
-            <NavButton
-              active={activeTab === 'history'}
-              onClick={() => setActiveTab('history')}
-              icon={<Clock className="h-4 w-4" />}
-              label="History"
-            />
-            <NavButton
-              active={activeTab === 'privacy'}
-              onClick={() => setActiveTab('privacy')}
-              icon={<Shield className="h-4 w-4" />}
-              label="Privacy"
-            />
-            <NavButton
-              active={activeTab === 'settings'}
-              onClick={() => setActiveTab('settings')}
-              icon={<SettingsIcon className="h-4 w-4" />}
-              label="Settings"
-            />
+          <nav className="flex flex-1 flex-col space-y-0.5 p-2">
+            {/* Debug test button */}
+            <button
+              onClick={() => {
+                console.log('Test button clicked, navigating to /folders');
+                navigate('/folders');
+              }}
+              className="mb-2 rounded bg-red-500 px-2 py-1 text-xs text-white"
+            >
+              TEST NAV
+            </button>
+
+            <NavLink
+              to="/folders"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Folder className="h-4 w-4" />
+              Folders
+            </NavLink>
+            <NavLink
+              to="/analytics"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Sparkles className="h-4 w-4" />
+              Analytics
+            </NavLink>
+            <NavLink
+              to="/results"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <BarChart3 className="h-4 w-4" />
+              Results
+            </NavLink>
+
+            {/* Spacer to push More to bottom */}
+            <div className="flex-1" />
+
+            {/* More dropdown */}
+            <div className="dropdown-container relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMoreDropdown(!showMoreDropdown);
+                }}
+                className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isMoreActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <SettingsIcon className="h-4 w-4" />
+                  <span>More</span>
+                </div>
+                <ChevronDown
+                  className={`h-4 w-4 transition-transform ${showMoreDropdown ? 'rotate-180' : ''}`}
+                />
+              </button>
+
+              {/* Dropdown menu */}
+              {showMoreDropdown && (
+                <div className="dropdown-container absolute bottom-full left-0 mb-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                  <NavLink
+                    to="/settings"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMoreDropdown(false);
+                    }}
+                    className={({ isActive }) =>
+                      `flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                          : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                      }`
+                    }
+                  >
+                    <SettingsIcon className="h-4 w-4" />
+                    <span>Settings</span>
+                  </NavLink>
+                  <NavLink
+                    to="/privacy"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMoreDropdown(false);
+                    }}
+                    className={({ isActive }) =>
+                      `flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                          : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                      }`
+                    }
+                  >
+                    <Shield className="h-4 w-4" />
+                    <span>Privacy</span>
+                  </NavLink>
+                </div>
+              )}
+            </div>
           </nav>
         </aside>
 
         {/* Main content */}
         <main className="flex-1 overflow-auto">
-          {activeTab === 'folders' && <FolderList />}
-          {activeTab === 'history' && <History />}
-          {activeTab === 'privacy' && <Privacy />}
-          {activeTab === 'settings' && <Settings />}
+          <Routes>
+            <Route path="/" element={<Navigate to="/folders" replace />} />
+            <Route path="/folders" element={<FolderList />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/analytics/:folderId" element={<Analytics />} />
+            <Route path="/results" element={<History />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/privacy" element={<Privacy />} />
+          </Routes>
         </main>
       </div>
 
@@ -197,40 +327,16 @@ function AppInner() {
       <CommandPalette
         config={config}
         workspaceId={agentInfo?.workspace_id ?? null}
-        onNavigate={(tab) => setActiveTab(tab)}
+        onNavigate={(tab) => {
+          navigate(`/${tab}`);
+          setShowMoreDropdown(false);
+        }}
         onAddFolder={() => {
-          // Switch to folders tab and trigger add folder action
-          // The FolderList component will handle the actual folder picker
-          setActiveTab('folders');
-          // TODO: Emit event to trigger folder picker in FolderList
+          navigate('/folders');
+          setShowMoreDropdown(false);
         }}
       />
     </div>
   );
 }
 
-function NavButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-        active
-          ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-          : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-      }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
