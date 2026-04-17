@@ -10,6 +10,8 @@ import {
   Search,
   Folder,
   FolderOpen,
+  Laptop,
+  Plus,
   RefreshCw,
   Settings as SettingsIcon,
   Shield,
@@ -34,7 +36,7 @@ interface Command {
 interface CommandPaletteProps {
   config: AgentConfig | null;
   workspaceId: string | null;
-  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'privacy' | 'settings') => void;
+  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'fleet' | 'privacy' | 'settings') => void;
   onAddFolder: () => void;
   onRescanFolder?: (path: string) => void;
   onRemoveFolder?: (path: string) => void;
@@ -91,6 +93,34 @@ export function CommandPalette({
           setIsOpen(false);
         },
         section: 'navigation',
+      },
+      {
+        id: 'nav-fleet',
+        label: 'Go to Fleet',
+        description: 'See all the machines connected to this workspace',
+        icon: <Laptop className="h-4 w-4" />,
+        keywords: ['fleet', 'machines', 'devices', 'agents', 'pair', 'navigate'],
+        action: () => {
+          onNavigate('fleet');
+          setIsOpen(false);
+        },
+        section: 'navigation',
+      },
+      {
+        id: 'add-machine',
+        label: 'Add Another Machine',
+        description: 'Pair a second machine via QR code or pair code',
+        icon: <Plus className="h-4 w-4" />,
+        keywords: ['pair', 'add machine', 'connect machine', 'fleet', 'qr'],
+        action: () => {
+          // Route through /fleet — the FleetView page has the "Add a
+          // machine" button which opens AddMachineModal. Avoids duplicating
+          // the modal-trigger wiring in two places. (The tray menu uses
+          // a Tauri event for the same effect.)
+          onNavigate('fleet');
+          setIsOpen(false);
+        },
+        section: 'actions',
       },
       {
         id: 'nav-privacy',
