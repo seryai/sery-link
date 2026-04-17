@@ -149,7 +149,8 @@ impl MetadataCache {
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
-                size_bytes, schema_json, tags, description, last_synced,
+                size_bytes, schema_json, tags, description,
+                strftime(last_synced, '%Y-%m-%dT%H:%M:%SZ') AS last_synced_str,
                 -- Simple scoring: exact match > prefix match > contains
                 CASE
                     WHEN LOWER(name) = ? THEN 100
@@ -229,7 +230,8 @@ impl MetadataCache {
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
-                size_bytes, schema_json, tags, description, last_synced
+                size_bytes, schema_json, tags, description,
+                strftime(last_synced, '%Y-%m-%dT%H:%M:%SZ') AS last_synced
             FROM datasets
             WHERE workspace_id = ?
             ORDER BY name ASC
@@ -274,7 +276,8 @@ impl MetadataCache {
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
-                size_bytes, schema_json, tags, description, last_synced
+                size_bytes, schema_json, tags, description,
+                strftime(last_synced, '%Y-%m-%dT%H:%M:%SZ') AS last_synced
             FROM datasets
             WHERE id = ?
             "#,
