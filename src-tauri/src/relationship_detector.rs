@@ -282,3 +282,102 @@ fn merge_relationships(relationships: Vec<DatasetRelationship>) -> Vec<DatasetRe
 
     merged
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_join_patterns, merge_relationships, DatasetRelationship};
+
+    fn make_rel(
+        src_id: &str,
+        tgt_id: &str,
+        src_col: &str,
+        tgt_col: &str,
+        confidence: u8,
+        method: &str,
+    ) -> DatasetRelationship {
+        DatasetRelationship {
+            source_id: src_id.into(),
+            target_id: tgt_id.into(),
+            source_name: src_id.into(),
+            target_name: tgt_id.into(),
+            source_column: src_col.into(),
+            target_column: tgt_col.into(),
+            confidence,
+            detection_method: method.into(),
+        }
+    }
+
+    #[test]
+    fn extract_join_returns_empty_for_non_join_sql() {
+        let joins = extract_join_patterns("SELECT * FROM users WHERE id = 1");
+        assert!(joins.is_empty());
+    }
+
+    #[test]
+    fn extract_join_parses_simple_inner_join() {
+        let sql = "SELECT * FROM users u JOIN orders o ON u.id = o.user_id";
+        let joins = extract_join_patterns(sql);
+        assert_eq!(joins.len(), 1);
+        let (left, right, left_col, right_col) = &joins[0];
+        // Both aliases should resolve to something non-empty.
+        assert!(!left.is_empty() && !right.is_empty());
+        assert_eq!(left_col, "id");
+        assert_eq!(right_col, "user_id");
+    }
+
+    #[test]
+    fn extract_join_parses_multiple_aliased_joins() {
+        // The regex requires whitespace around the alias group, so each
+        // JOIN in this test carries an alias — matching the dominant
+        // real-world shape of SQL the backend produces.
+        let sql = "SELECT * FROM a aa \
+             JOIN b bb ON aa.x = bb.y \
+             JOIN c cc ON bb.y = cc.z";
+        let joins = extract_join_patterns(sql);
+        assert_eq!(joins.len(), 2);
+    }
+
+    #[test]
+    fn merge_dedupes_identical_relationships_and_boosts_confidence() {
+        let rels = vec![
+            make_rel("users", "orders", "id", "user_id", 60, "schema_pattern"),
+            make_rel(
+                "users",
+                "orders",
+                "id",
+                "user_id",
+                80,
+                "query_history_join",
+            ),
+        ];
+        let merged = merge_relationships(rels);
+        assert_eq!(merged.len(), 1, "duplicates should collapse");
+        // First-seen (60) gets boosted by 20 → 80, not replaced by 80.
+        assert_eq!(merged[0].confidence, 80);
+        // Second-seen method name appends.
+        assert!(merged[0].detection_method.contains("query_history_join"));
+    }
+
+    #[test]
+    fn merge_caps_confidence_at_100() {
+        let rels = vec![
+            make_rel("u", "o", "id", "uid", 90, "schema_pattern"),
+            make_rel("u", "o", "id", "uid", 90, "query_history_join"),
+        ];
+        let merged = merge_relationships(rels);
+        assert_eq!(merged[0].confidence, 100, "should saturate at 100");
+    }
+
+    #[test]
+    fn merge_sorts_highest_confidence_first() {
+        let rels = vec![
+            make_rel("a", "b", "x", "y", 40, "schema_pattern"),
+            make_rel("c", "d", "x", "y", 80, "query_history_join"),
+            make_rel("e", "f", "x", "y", 60, "schema_pattern"),
+        ];
+        let merged = merge_relationships(rels);
+        assert_eq!(merged.len(), 3);
+        assert!(merged[0].confidence >= merged[1].confidence);
+        assert!(merged[1].confidence >= merged[2].confidence);
+    }
+}
