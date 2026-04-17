@@ -188,17 +188,6 @@ function AppInner() {
           </div>
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
-            {/* Debug test button */}
-            <button
-              onClick={() => {
-                console.log('Test button clicked, navigating to /folders');
-                navigate('/folders');
-              }}
-              className="mb-2 rounded bg-red-500 px-2 py-1 text-xs text-white"
-            >
-              TEST NAV
-            </button>
-
             <NavLink
               to="/folders"
               className={({ isActive }) =>
