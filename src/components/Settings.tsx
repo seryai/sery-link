@@ -471,6 +471,19 @@ function AppPanel({
           })
         }
       />
+
+      <Toggle
+        icon={<Bell className="h-5 w-5" />}
+        label="Schema-change toasts"
+        hint="Pop a toast when a scan detects a new, removed, or changed column. The Notifications tab and Fleet badge still update either way."
+        checked={draft.app.schema_change_toasts_enabled}
+        onChange={(v) =>
+          setDraft({
+            ...draft,
+            app: { ...draft.app, schema_change_toasts_enabled: v },
+          })
+        }
+      />
     </Panel>
   );
 }

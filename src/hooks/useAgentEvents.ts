@@ -65,10 +65,15 @@ export function useAgentEvents() {
 
     // Schema-change notification — fires once per dataset whose shape
     // drifted between scans. Push into the store (so the Notifications
-    // view can render it) AND surface a transient toast.
+    // view + Fleet badge update) regardless; the toast is gated by
+    // the user's setting so scan-heavy users can silence it without
+    // losing the persisted record.
     unsubs.push(
       listen<SchemaChangedPayload>(EVENT_NAMES.SCHEMA_CHANGED, (event) => {
         addSchemaNotification(event.payload);
+        const toastsEnabled =
+          useAgentStore.getState().config?.app?.schema_change_toasts_enabled ?? true;
+        if (!toastsEnabled) return;
         const { dataset_name, added, removed, type_changed } = event.payload;
         const parts: string[] = [];
         if (added > 0) parts.push(`${added} added`);

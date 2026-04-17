@@ -165,6 +165,7 @@ export interface AgentConfig {
     notifications_enabled: boolean;
     first_run_completed: boolean;
     window_hide_notified: boolean;
+    schema_change_toasts_enabled: boolean;
   };
 }
 

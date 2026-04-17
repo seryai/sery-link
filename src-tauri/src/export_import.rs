@@ -256,6 +256,7 @@ mod tests {
                 first_run_completed: false,
                 window_hide_notified: false,
                 selected_auth_mode: None,
+                schema_change_toasts_enabled: true,
             },
         }
     }
