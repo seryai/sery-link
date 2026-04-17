@@ -33,6 +33,7 @@ pub fn app_handle() -> Option<&'static AppHandle<Wry>> {
 
 pub const EVT_SCAN_PROGRESS: &str = "scan_progress";
 pub const EVT_SCAN_COMPLETE: &str = "scan_complete";
+pub const EVT_SCHEMA_CHANGED: &str = "schema_changed";
 pub const EVT_WS_STATUS: &str = "ws_status";
 pub const EVT_QUERY_STARTED: &str = "query_started";
 pub const EVT_QUERY_COMPLETED: &str = "query_completed";
@@ -62,6 +63,21 @@ pub struct ScanComplete {
     pub errors: u64,
     pub total_bytes: u64,
     pub duration_ms: u64,
+}
+
+/// Fired once per dataset whose cached schema differs from a freshly-
+/// scanned one. Emitted BEFORE the upsert so the UI can react to the
+/// change (toast, notifications tab) while the cache is still in its
+/// "old" state — not strictly required, but makes reasoning simpler.
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaChanged {
+    pub workspace_id: String,
+    pub dataset_path: String,
+    pub dataset_name: String,
+    pub added: u64,
+    pub removed: u64,
+    pub type_changed: u64,
+    pub diff: crate::schema_diff::SchemaDiff,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +112,10 @@ pub fn emit_scan_progress<R: Runtime>(app: &AppHandle<R>, payload: ScanProgress)
 
 pub fn emit_scan_complete<R: Runtime>(app: &AppHandle<R>, payload: ScanComplete) {
     let _ = app.emit(EVT_SCAN_COMPLETE, payload);
+}
+
+pub fn emit_schema_changed<R: Runtime>(app: &AppHandle<R>, payload: SchemaChanged) {
+    let _ = app.emit(EVT_SCHEMA_CHANGED, payload);
 }
 
 pub fn emit_ws_status<R: Runtime>(app: &AppHandle<R>, status: &str, detail: Option<String>) {

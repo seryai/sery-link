@@ -5,6 +5,7 @@
 export const EVENT_NAMES = {
   SCAN_PROGRESS: 'scan_progress',
   SCAN_COMPLETE: 'scan_complete',
+  SCHEMA_CHANGED: 'schema_changed',
   WS_STATUS: 'ws_status',
   QUERY_STARTED: 'query_started',
   QUERY_COMPLETED: 'query_completed',
@@ -53,6 +54,33 @@ export interface QueryCompleted {
 export interface SyncCompletedPayload {
   folder: string;
   datasets: number;
+}
+
+// Mirror of Rust events::SchemaChanged. The `diff.changes` entries are
+// a tagged union — each carries a `kind` discriminator matching the
+// ColumnChange enum variants on the Rust side.
+export type ColumnChange =
+  | { kind: 'Added'; name: string; column_type: string }
+  | { kind: 'Removed'; name: string; column_type: string }
+  | {
+      kind: 'TypeChanged';
+      name: string;
+      old_type: string;
+      new_type: string;
+    };
+
+export interface SchemaDiff {
+  changes: ColumnChange[];
+}
+
+export interface SchemaChangedPayload {
+  workspace_id: string;
+  dataset_path: string;
+  dataset_name: string;
+  added: number;
+  removed: number;
+  type_changed: number;
+  diff: SchemaDiff;
 }
 
 export interface SyncFailedPayload {
