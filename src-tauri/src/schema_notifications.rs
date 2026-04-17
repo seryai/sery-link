@@ -41,6 +41,12 @@ pub struct StoredNotification {
     pub removed: u64,
     pub type_changed: u64,
     pub diff: SchemaDiff,
+    // Which fleet member observed the change. None for records written
+    // before this field existed (forward-compatible read). Local scans
+    // fill it with the current machine's agent_id; cross-machine
+    // broadcasts fill it with the origin agent from the WS message.
+    #[serde(default)]
+    pub origin_agent_id: Option<String>,
 }
 
 fn path() -> Result<PathBuf> {
@@ -71,6 +77,29 @@ pub fn record(
     type_changed: u64,
     diff: SchemaDiff,
 ) -> Result<StoredNotification> {
+    record_with_origin(
+        workspace_id,
+        dataset_path,
+        dataset_name,
+        added,
+        removed,
+        type_changed,
+        diff,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_with_origin(
+    workspace_id: &str,
+    dataset_path: &str,
+    dataset_name: &str,
+    added: u64,
+    removed: u64,
+    type_changed: u64,
+    diff: SchemaDiff,
+    origin_agent_id: Option<String>,
+) -> Result<StoredNotification> {
     if let Some(existing) = find_recent_duplicate(workspace_id, dataset_path, &diff)? {
         return refresh_received_at(&existing.id).map(|refreshed| refreshed.unwrap_or(existing));
     }
@@ -86,6 +115,7 @@ pub fn record(
         removed,
         type_changed,
         diff,
+        origin_agent_id,
     };
     append(&entry)?;
     Ok(entry)

@@ -234,7 +234,8 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                             // Persist first so the id the UI sees is the
                             // same one stored on disk — this lets mark-read
                             // work offline and across app restarts.
-                            let stored = crate::schema_notifications::record(
+                            let origin = config_for_diff.agent.agent_id.clone();
+                            let stored = crate::schema_notifications::record_with_origin(
                                 workspace_id,
                                 &ds.relative_path,
                                 &dataset_name,
@@ -242,6 +243,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                                 diff.removed() as u64,
                                 diff.type_changed() as u64,
                                 diff.clone(),
+                                origin.clone(),
                             );
                             if let Ok(stored) = stored {
                                 events::emit_schema_changed(
@@ -256,6 +258,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                                         removed: diff.removed() as u64,
                                         type_changed: diff.type_changed() as u64,
                                         diff,
+                                        origin_agent_id: origin,
                                     },
                                 );
                             }

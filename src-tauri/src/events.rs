@@ -84,6 +84,10 @@ pub struct SchemaChanged {
     pub removed: u64,
     pub type_changed: u64,
     pub diff: crate::schema_diff::SchemaDiff,
+    // Which fleet member observed the change. Populated by local-scan
+    // callers from config.agent.agent_id; populated by cross-machine
+    // broadcast consumers from the WS message's origin_agent_id.
+    pub origin_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
