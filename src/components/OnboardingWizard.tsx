@@ -119,7 +119,7 @@ export function OnboardingWizard() {
           : 'Setup complete. Add a folder whenever you like.',
       );
     } catch (err) {
-      setErrorMessage(String(err));
+      setErrorMessage(friendlyBootstrapError(err));
       setPhase('error');
     }
   };
@@ -324,4 +324,33 @@ function defaultAgentName(): string {
 function folderName(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+/**
+ * Translate raw Rust-side errors into something a user-of-Sery can act on.
+ * Raw errors look like: "Authentication error: bootstrap failed: 429 ..."
+ * or "HTTP error: error sending request for url (...): operation timed out".
+ *
+ * Anything we don't recognize falls through with the raw text — never
+ * silently swallow a genuine bug signal.
+ */
+function friendlyBootstrapError(err: unknown): string {
+  const raw = String(err);
+  const lower = raw.toLowerCase();
+  if (lower.includes('timed out') || lower.includes('timeout')) {
+    return "Can't reach Sery. Check your internet connection and try again.";
+  }
+  if (lower.includes('network') || lower.includes('connection refused')) {
+    return "Can't reach Sery. Check your internet connection and try again.";
+  }
+  if (raw.includes('429')) {
+    return 'Too many signups from your network. Wait a minute and try again.';
+  }
+  if (raw.includes('500') || raw.includes('502') || raw.includes('503')) {
+    return "Sery's servers are having a moment. Try again in a minute.";
+  }
+  if (lower.includes('keyring')) {
+    return 'Your OS keyring rejected the new token. On Linux, make sure gnome-keyring (or equivalent) is running.';
+  }
+  return raw;
 }
