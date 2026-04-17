@@ -290,12 +290,120 @@ impl WebSocketClient {
             "run_sql" => {
                 Self::handle_run_sql(message, config, write, app).await?;
             }
+            "schema_change" => {
+                Self::handle_remote_schema_change(message, app);
+            }
             _ => {
                 eprintln!("Unknown message type: {}", msg_type);
             }
         }
 
         Ok(())
+    }
+
+    /// Handle a cloud-originated schema_change broadcast. Another machine
+    /// in the workspace detected a schema drift and the backend fanned it
+    /// out — we persist it locally (with a new local id) and emit a
+    /// schema_changed app event so the Notifications tab + toast fire
+    /// just like a local scan would.
+    ///
+    /// Best-effort: any persistence failure is swallowed. Showing a
+    /// warning toast on cross-machine messages is more disruptive than
+    /// silently missing one if the log is unwritable.
+    fn handle_remote_schema_change<R: Runtime>(
+        message: &Value,
+        app: Option<AppHandle<R>>,
+    ) {
+        let Some(app) = app else { return };
+
+        let workspace_id = message["workspace_id"].as_str().unwrap_or("").to_string();
+        let dataset_path = message["dataset_path"].as_str().unwrap_or("").to_string();
+        let dataset_name_raw = message["dataset_name"].as_str();
+        let dataset_name = dataset_name_raw
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                std::path::Path::new(&dataset_path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&dataset_path)
+                    .to_string()
+            });
+        let added = message["added"].as_u64().unwrap_or(0);
+        let removed = message["removed"].as_u64().unwrap_or(0);
+        let type_changed = message["type_changed"].as_u64().unwrap_or(0);
+        let origin_agent = message["origin_agent_name"].as_str().unwrap_or("another machine");
+
+        // The cloud sends a {added, removed, changed} name-list drift
+        // shape; our local SchemaDiff wants full ColumnChange entries.
+        // For cross-machine events we synthesize best-effort entries —
+        // column types aren't in the drift payload so we mark "unknown".
+        let mut changes: Vec<crate::schema_diff::ColumnChange> = Vec::new();
+        if let Some(drift) = message["drift"].as_object() {
+            for name in drift
+                .get("added")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default()
+            {
+                changes.push(crate::schema_diff::ColumnChange::Added {
+                    name: name.to_string(),
+                    column_type: "unknown".to_string(),
+                });
+            }
+            for name in drift
+                .get("removed")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default()
+            {
+                changes.push(crate::schema_diff::ColumnChange::Removed {
+                    name: name.to_string(),
+                    column_type: "unknown".to_string(),
+                });
+            }
+            for name in drift
+                .get("changed")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|n| n.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default()
+            {
+                changes.push(crate::schema_diff::ColumnChange::TypeChanged {
+                    name: name.to_string(),
+                    old_type: "unknown".to_string(),
+                    new_type: "unknown".to_string(),
+                });
+            }
+        }
+        let diff = crate::schema_diff::SchemaDiff { changes };
+
+        // Tag the display name with the origin machine so users can tell
+        // "this change happened on my laptop" vs "on my desktop."
+        let tagged_name = format!("{} (from {})", dataset_name, origin_agent);
+
+        if let Ok(stored) = crate::schema_notifications::record(
+            &workspace_id,
+            &dataset_path,
+            &tagged_name,
+            added,
+            removed,
+            type_changed,
+            diff.clone(),
+        ) {
+            crate::events::emit_schema_changed(
+                &app,
+                crate::events::SchemaChanged {
+                    id: stored.id,
+                    received_at: stored.received_at,
+                    workspace_id,
+                    dataset_path,
+                    dataset_name: tagged_name,
+                    added,
+                    removed,
+                    type_changed,
+                    diff,
+                },
+            );
+        }
     }
 
     async fn handle_run_sql<R: Runtime>(
