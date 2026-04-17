@@ -35,6 +35,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../examples/recipes/*.json": "recipes/"
+    },
     "externalBin": [
       "../sidecar/dist/markitdown-sidecar"
     ],
