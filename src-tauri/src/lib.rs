@@ -19,6 +19,7 @@ mod plugin_runtime;
 mod recipe_executor;
 mod relationship_detector;
 mod scanner;
+mod schema_diff;
 mod stats;
 mod tray;
 mod watcher;
