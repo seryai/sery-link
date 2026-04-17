@@ -149,6 +149,55 @@ async fn start_callback_server() -> Result<String> {
     Ok(code)
 }
 
+/// Anonymous workspace bootstrap — the zero-friction path for brand-new
+/// installs (SPEC_FIRST_INSTALL.md §Config Persisted at First-Install).
+///
+/// POSTs to /v1/workspace/bootstrap with just a display_name, receives
+/// a workspace_id + agent_id + 30-day token in one call. No OAuth, no
+/// email, no workspace key prompt. Token is saved to the OS keyring so
+/// the next launch picks it up transparently.
+///
+/// Caller should invoke this only on first run — after the keyring
+/// already has a token, use that instead.
+pub async fn bootstrap_workspace(
+    display_name: String,
+    api_url: String,
+) -> Result<AgentToken> {
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let os_type = std::env::consts::OS;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/workspace/bootstrap", api_url))
+        .json(&serde_json::json!({
+            "display_name": display_name,
+            "os_type": os_type,
+            "hostname": hostname,
+            "agent_version": env!("CARGO_PKG_VERSION"),
+        }))
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        let message = serde_json::from_str::<serde_json::Value>(&error_text)
+            .ok()
+            .and_then(|v| v["detail"].as_str().map(String::from))
+            .unwrap_or(error_text);
+        return Err(AgentError::Auth(format!("bootstrap failed: {}", message)));
+    }
+
+    let token: AgentToken = response.json().await?;
+    keyring_store::save_token(&token.access_token)?;
+    Ok(token)
+}
+
 pub async fn auth_with_workspace_key(
     key: String,
     display_name: String,
