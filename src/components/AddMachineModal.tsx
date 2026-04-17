@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import QRCode from 'qrcode';
 
 type PairRequestResponse = {
   pair_code: string;        // formatted "XXX-XXX-XXX-XXX"
@@ -51,12 +52,43 @@ export function AddMachineModal({ onClose, onPaired }: Props) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState<PairStatusResponse['new_agent'] | null>(null);
 
   const pollRef = useRef<number | null>(null);
   const tickRef = useRef<number | null>(null);
+
+  // Render the QR code to a data URL whenever qrUrl changes. Local
+  // generation (no external service) keeps the QR visible even when
+  // offline and avoids leaking pair codes to third parties.
+  useEffect(() => {
+    if (!qrUrl) {
+      setQrDataUrl(null);
+      return;
+    }
+    let cancelled = false;
+    QRCode.toDataURL(qrUrl, {
+      errorCorrectionLevel: 'H',
+      margin: 2,
+      width: 240,
+      color: {
+        dark: '#7c3aed', // purple-600
+        light: '#ffffff',
+      },
+    })
+      .then(url => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        // QR render failure is non-fatal — the code + URL remain visible.
+        if (!cancelled) setQrDataUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [qrUrl]);
 
   // Kick off pair_request on mount; allow manual refresh on expiry.
   const requestCode = async () => {
@@ -192,9 +224,21 @@ export function AddMachineModal({ onClose, onPaired }: Props) {
         {phase === 'pending' && pairCode && (
           <div className="space-y-4">
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              Install Sery on another machine — your home PC, work laptop, server — then open
-              it and enter this code:
+              Install Sery on another machine — your home PC, work laptop, server — then scan
+              this QR with your phone or type the code below:
             </p>
+
+            {qrDataUrl && (
+              <div className="flex justify-center">
+                <img
+                  src={qrDataUrl}
+                  alt="QR code for pairing"
+                  width={240}
+                  height={240}
+                  className="rounded-lg border border-slate-200 bg-white dark:border-slate-800"
+                />
+              </div>
+            )}
 
             <div className="flex items-center justify-center gap-2 rounded-lg border border-purple-200 bg-purple-50 py-4 dark:border-purple-900 dark:bg-purple-900/20">
               <span className="select-all font-mono text-2xl font-bold tracking-wider text-purple-700 dark:text-purple-200">
@@ -207,15 +251,6 @@ export function AddMachineModal({ onClose, onPaired }: Props) {
                 Copy
               </button>
             </div>
-
-            {qrUrl && (
-              <p className="text-center text-xs text-slate-500 dark:text-slate-400">
-                Or scan the QR at:{' '}
-                <a href={qrUrl} target="_blank" rel="noreferrer" className="underline">
-                  {qrUrl}
-                </a>
-              </p>
-            )}
 
             <div className={`text-center text-xs ${secondsLeft < 30 ? 'text-rose-500' : 'text-slate-500 dark:text-slate-400'}`}>
               Expires in <span className="font-semibold">{timeDisplay}</span>
