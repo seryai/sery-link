@@ -11,7 +11,19 @@ import type {
   AuditEntry,
   QueryHistoryEntry,
   ScanProgress,
+  SchemaChangedPayload,
 } from '../types/events';
+
+// One stored notification = one schema_changed event + a client-side id
+// + an unread flag so the UI can badge the tab and mark as read on view.
+// Bounded to MAX_KEEP entries to avoid unbounded growth.
+export interface SchemaNotification extends SchemaChangedPayload {
+  id: string;
+  received_at: string; // ISO 8601
+  read: boolean;
+}
+
+const MAX_NOTIFICATIONS_KEEP = 200;
 
 export interface AgentToken {
   access_token: string;
@@ -57,6 +69,10 @@ interface AgentState {
   // Onboarding flag
   onboardingComplete: boolean;
 
+  // Schema-change notifications (newest first). Populated by the
+  // schema_changed event; persisted to disk in a follow-up.
+  schemaNotifications: SchemaNotification[];
+
   // Loading / error
   isLoading: boolean;
   error: string | null;
@@ -74,6 +90,10 @@ interface AgentState {
   clearScanProgress: (folder: string) => void;
   setReAuthRequired: (v: boolean) => void;
   setOnboardingComplete: (v: boolean) => void;
+  addSchemaNotification: (payload: SchemaChangedPayload) => void;
+  markSchemaNotificationRead: (id: string) => void;
+  markAllSchemaNotificationsRead: () => void;
+  clearSchemaNotifications: () => void;
   setLoading: (value: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -91,6 +111,7 @@ const initial = {
   scansInFlight: {} as Record<string, ScanState>,
   reAuthRequired: false,
   onboardingComplete: false,
+  schemaNotifications: [] as SchemaNotification[],
   isLoading: false,
   error: null,
 };
@@ -129,6 +150,38 @@ export const useAgentStore = create<AgentState>((set) => ({
     }),
   setReAuthRequired: (v) => set({ reAuthRequired: v }),
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
+  addSchemaNotification: (payload) =>
+    set((state) => {
+      const entry: SchemaNotification = {
+        ...payload,
+        id:
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        received_at: new Date().toISOString(),
+        read: false,
+      };
+      return {
+        schemaNotifications: [entry, ...state.schemaNotifications].slice(
+          0,
+          MAX_NOTIFICATIONS_KEEP,
+        ),
+      };
+    }),
+  markSchemaNotificationRead: (id) =>
+    set((state) => ({
+      schemaNotifications: state.schemaNotifications.map((n) =>
+        n.id === id ? { ...n, read: true } : n,
+      ),
+    })),
+  markAllSchemaNotificationsRead: () =>
+    set((state) => ({
+      schemaNotifications: state.schemaNotifications.map((n) => ({
+        ...n,
+        read: true,
+      })),
+    })),
+  clearSchemaNotifications: () => set({ schemaNotifications: [] }),
   setLoading: (value) => set({ isLoading: value }),
   setError: (error) => set({ error }),
   reset: () => set(initial),
