@@ -42,6 +42,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # Tauri's build script validates externalBin paths exist at compile
+      # time. The real sidecar is packaged by a separate pipeline (release
+      # builds only) — in CI we stub it so cargo check/test can proceed.
+      - name: Stub externalBin sidecar (CI only)
+        run: |
+          mkdir -p sidecar/dist
+          touch sidecar/dist/markitdown-sidecar-x86_64-unknown-linux-gnu
+          chmod +x sidecar/dist/markitdown-sidecar-x86_64-unknown-linux-gnu
+
       # --lib so we skip bin tests (no main binary tests exist).
       - name: Run lib tests
         run: |
