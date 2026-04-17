@@ -132,6 +132,11 @@ pub struct AppConfig {
     pub window_hide_notified: bool,
     #[serde(default)]
     pub selected_auth_mode: Option<AuthMode>,
+    // Surface a toast when a scan detects a schema change. The Notifications
+    // tab + Fleet badge still update regardless — this only silences the
+    // transient popup, which scan-heavy users can find noisy.
+    #[serde(default = "default_true")]
+    pub schema_change_toasts_enabled: bool,
 }
 
 fn default_theme() -> String {
@@ -152,6 +157,7 @@ impl Default for AppConfig {
             first_run_completed: false,
             window_hide_notified: false,
             selected_auth_mode: None,
+            schema_change_toasts_enabled: true,
         }
     }
 }
