@@ -22,6 +22,13 @@ use uuid::Uuid;
 
 const MAX_NOTIFICATIONS: usize = 500;
 
+/// How recent an existing notification must be to count as a duplicate.
+/// File-watcher bounce from editor saves or brief filesystem churn
+/// typically fires within a few seconds; a 60-second window captures
+/// that without merging genuinely distinct changes that happen to
+/// share a shape.
+const DEDUP_WINDOW_SECS: i64 = 60;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredNotification {
     pub id: String,
@@ -40,9 +47,20 @@ fn path() -> Result<PathBuf> {
     Ok(Config::data_dir()?.join("schema_notifications.jsonl"))
 }
 
-/// Record a fresh schema change. Assigns a new id + received_at + read=false.
-/// Returns the stored notification so callers can hand the same id back to
-/// the frontend.
+/// Record a fresh schema change.
+///
+/// Dedup: if a notification for the same (workspace_id, dataset_path)
+/// with an identical diff exists and was received within the last
+/// DEDUP_WINDOW_SECS, we refresh its received_at timestamp and return
+/// the existing record instead of appending a new one. This prevents
+/// file-watcher bounce from spamming the tab when the same file
+/// churns multiple times in quick succession.
+///
+/// The dedup check preserves the existing record's `read` flag on
+/// purpose — if the user already dismissed the first firing, they
+/// don't want it re-appearing as unread three seconds later. If a
+/// genuinely new state landing later matters, the next scan will
+/// observe a different diff (not dedupable) and surface cleanly.
 #[allow(clippy::too_many_arguments)]
 pub fn record(
     workspace_id: &str,
@@ -53,6 +71,10 @@ pub fn record(
     type_changed: u64,
     diff: SchemaDiff,
 ) -> Result<StoredNotification> {
+    if let Some(existing) = find_recent_duplicate(workspace_id, dataset_path, &diff)? {
+        return refresh_received_at(&existing.id).map(|refreshed| refreshed.unwrap_or(existing));
+    }
+
     let entry = StoredNotification {
         id: Uuid::new_v4().to_string(),
         received_at: Utc::now().to_rfc3339(),
@@ -67,6 +89,88 @@ pub fn record(
     };
     append(&entry)?;
     Ok(entry)
+}
+
+/// Look for a stored notification for the same (workspace, path) with
+/// an identical diff received in the dedup window. Returns the newest
+/// such entry if found. Pure side-effect-free read; safe to call with
+/// concurrent mutations because mutate() uses atomic rename.
+fn find_recent_duplicate(
+    workspace_id: &str,
+    dataset_path: &str,
+    diff: &SchemaDiff,
+) -> Result<Option<StoredNotification>> {
+    let p = path()?;
+    if !p.exists() {
+        return Ok(None);
+    }
+    let file = fs::File::open(&p).map_err(AgentError::Io)?;
+    let reader = BufReader::new(file);
+    let cutoff = Utc::now() - chrono::Duration::seconds(DEDUP_WINDOW_SECS);
+
+    // Iterate back-to-front so we see newest entries first.
+    let lines: Vec<String> = reader.lines().map_while(|l| l.ok()).collect();
+    for line in lines.into_iter().rev() {
+        let Ok(entry) = serde_json::from_str::<StoredNotification>(&line) else {
+            continue;
+        };
+        // Timestamps older than the window end the search — entries
+        // are written newest-last, so once we cross cutoff going
+        // backwards we can stop.
+        let Ok(received) = chrono::DateTime::parse_from_rfc3339(&entry.received_at) else {
+            continue;
+        };
+        if received.with_timezone(&Utc) < cutoff {
+            return Ok(None);
+        }
+        if entry.workspace_id == workspace_id
+            && entry.dataset_path == dataset_path
+            && entry.diff == *diff
+        {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(None)
+}
+
+/// Bump the received_at of the entry with the given id. Returns the
+/// updated entry if found, None if the id isn't present.
+fn refresh_received_at(id: &str) -> Result<Option<StoredNotification>> {
+    let p = path()?;
+    if !p.exists() {
+        return Ok(None);
+    }
+    let file = fs::File::open(&p).map_err(AgentError::Io)?;
+    let reader = BufReader::new(file);
+    let mut entries: Vec<StoredNotification> = reader
+        .lines()
+        .map_while(|l| l.ok())
+        .filter_map(|l| serde_json::from_str::<StoredNotification>(&l).ok())
+        .collect();
+
+    let mut updated: Option<StoredNotification> = None;
+    for e in entries.iter_mut() {
+        if e.id == id {
+            e.received_at = Utc::now().to_rfc3339();
+            updated = Some(e.clone());
+            break;
+        }
+    }
+    if updated.is_none() {
+        return Ok(None);
+    }
+
+    let tmp = p.with_extension("jsonl.tmp");
+    {
+        let mut out = fs::File::create(&tmp).map_err(AgentError::Io)?;
+        for entry in &entries {
+            let json = serde_json::to_string(entry)
+                .map_err(|e| AgentError::Serialization(format!("schema notification: {}", e)))?;
+            writeln!(out, "{}", json).map_err(AgentError::Io)?;
+        }
+    }
+    fs::rename(&tmp, &p).map_err(AgentError::Io)?;
+    Ok(updated)
 }
 
 fn append(entry: &StoredNotification) -> Result<()> {
@@ -318,5 +422,125 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear().unwrap();
         assert!(load(100).unwrap().is_empty());
+    }
+
+    #[test]
+    fn dedup_same_diff_within_window_does_not_add_new_entry() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear().unwrap();
+
+        let first = record(
+            "ws",
+            "/data/orders.parquet",
+            "orders.parquet",
+            1,
+            0,
+            1,
+            seed_diff(),
+        )
+        .unwrap();
+        // Immediate re-record with identical diff — simulates file-watcher
+        // bounce firing twice for the same save.
+        let second = record(
+            "ws",
+            "/data/orders.parquet",
+            "orders.parquet",
+            1,
+            0,
+            1,
+            seed_diff(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            second.id, first.id,
+            "second record should reuse the first's id"
+        );
+        let loaded = load(100).unwrap();
+        assert_eq!(loaded.len(), 1, "no duplicate entry should be written");
+
+        clear().unwrap();
+    }
+
+    #[test]
+    fn dedup_preserves_read_flag_on_refresh() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear().unwrap();
+
+        let first = record("ws", "/a", "a", 1, 0, 0, seed_diff()).unwrap();
+        mark_read(&first.id).unwrap();
+
+        // Bounce: same diff again. The stored record should stay read —
+        // the user already dismissed it, re-surfacing would be annoying.
+        record("ws", "/a", "a", 1, 0, 0, seed_diff()).unwrap();
+        let loaded = load(100).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(
+            loaded[0].read,
+            "read flag must be preserved across dedup refresh"
+        );
+
+        clear().unwrap();
+    }
+
+    #[test]
+    fn different_diff_for_same_path_is_a_new_entry() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear().unwrap();
+
+        let first_diff = diff_schemas(
+            &[Column {
+                name: "amount".into(),
+                column_type: "INTEGER".into(),
+            }],
+            &[Column {
+                name: "amount".into(),
+                column_type: "VARCHAR".into(),
+            }],
+        );
+        let second_diff = diff_schemas(
+            &[Column {
+                name: "amount".into(),
+                column_type: "VARCHAR".into(),
+            }],
+            &[
+                Column {
+                    name: "amount".into(),
+                    column_type: "VARCHAR".into(),
+                },
+                Column {
+                    name: "currency".into(),
+                    column_type: "VARCHAR".into(),
+                },
+            ],
+        );
+
+        record("ws", "/o", "o", 0, 0, 1, first_diff).unwrap();
+        record("ws", "/o", "o", 1, 0, 0, second_diff).unwrap();
+
+        let loaded = load(100).unwrap();
+        assert_eq!(
+            loaded.len(),
+            2,
+            "different diffs on the same path must produce distinct entries"
+        );
+
+        clear().unwrap();
+    }
+
+    #[test]
+    fn dedup_differentiates_by_workspace_id() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear().unwrap();
+
+        // Same diff, same path, but different workspace — must be
+        // treated as distinct notifications.
+        record("ws-1", "/a", "a", 1, 0, 0, seed_diff()).unwrap();
+        record("ws-2", "/a", "a", 1, 0, 0, seed_diff()).unwrap();
+
+        let loaded = load(100).unwrap();
+        assert_eq!(loaded.len(), 2);
+
+        clear().unwrap();
     }
 }
