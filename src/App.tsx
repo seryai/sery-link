@@ -14,6 +14,7 @@ import {
   BarChart3,
   ChevronDown,
   Folder,
+  Laptop,
   Loader2,
   Settings as SettingsIcon,
   Shield,
@@ -23,6 +24,7 @@ import { useAgentStore, type AgentToken } from './stores/agentStore';
 import seryLogo from './assets/sery-logo.svg';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
+import { useTrayAddMachineListener } from './hooks/useTrayEvents';
 import { ToastProvider } from './components/Toast';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
@@ -31,6 +33,8 @@ import { Analytics } from './components/Analytics';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
+import { FleetView } from './components/FleetView';
+import { AddMachineModal } from './components/AddMachineModal';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { CommandPalette } from './components/CommandPalette';
@@ -51,6 +55,11 @@ function AppInner() {
   const location = useLocation();
   const [showMoreDropdown, setShowMoreDropdown] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
+  const [showAddMachineModal, setShowAddMachineModal] = useState(false);
+
+  // Tray menu → React bridge. Clicking "Add Another Machine…" in the
+  // macOS/Windows tray fires this event; open the pair modal in response.
+  useTrayAddMachineListener(() => setShowAddMachineModal(true));
   const {
     agentInfo,
     config,
@@ -227,6 +236,19 @@ function AppInner() {
               <BarChart3 className="h-4 w-4" />
               Results
             </NavLink>
+            <NavLink
+              to="/fleet"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Laptop className="h-4 w-4" />
+              Fleet
+            </NavLink>
 
             {/* Spacer to push More to bottom */}
             <div className="flex-1" />
@@ -304,6 +326,7 @@ function AppInner() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />
+            <Route path="/fleet" element={<div className="p-8"><FleetView /></div>} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />
           </Routes>
@@ -325,6 +348,16 @@ function AppInner() {
           setShowMoreDropdown(false);
         }}
       />
+      {showAddMachineModal && (
+        <AddMachineModal
+          onClose={() => setShowAddMachineModal(false)}
+          onPaired={() => {
+            // New machine joined — jump to the fleet so the user sees
+            // it in context.
+            navigate('/fleet');
+          }}
+        />
+      )}
     </div>
   );
 }
