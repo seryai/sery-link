@@ -32,14 +32,20 @@ import { useAgentStore, type AgentToken } from '../stores/agentStore';
 import seryLogo from '../assets/sery-logo.svg';
 import { useToast } from './Toast';
 import type { AgentConfig } from '../types/events';
+import { JoinFleetForm } from './JoinFleetForm';
 
-type Phase = 'idle' | 'working' | 'error';
+// 'idle'      – fresh install, offer bootstrap or "already have a machine"
+// 'joined'    – just paired via code, waiting for user to pick a folder
+// 'working'   – bootstrap / folder add / complete_first_run in flight
+// 'error'     – setup threw, show retry
+type Phase = 'idle' | 'joined' | 'working' | 'error';
 
 export function OnboardingWizard() {
   const [phase, setPhase] = useState<Phase>('idle');
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
+  const [showJoin, setShowJoin] = useState(false);
   const toast = useToast();
   const {
     setAuthenticated,
@@ -174,10 +180,44 @@ export function OnboardingWizard() {
                 Skip for now — I'll add folders later
               </button>
 
+              <button
+                onClick={() => setShowJoin(true)}
+                className="mt-3 w-full text-center text-xs font-medium text-purple-600 hover:underline dark:text-purple-400"
+              >
+                I already have a Sery machine — join my fleet
+              </button>
+
               <p className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <Lock className="h-3.5 w-3.5" />
                 No sign-up. No account. Nothing uploaded until you ask.
               </p>
+            </>
+          )}
+
+          {phase === 'joined' && (
+            <>
+              <h1 className="mb-2 text-center text-3xl font-bold text-slate-900 dark:text-slate-50">
+                You're in the fleet
+              </h1>
+              <p className="mb-8 text-center text-slate-600 dark:text-slate-300">
+                Now pick a folder on <strong>this</strong> machine to make it
+                queryable across your fleet.
+              </p>
+
+              <button
+                onClick={pickFolder}
+                className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700"
+              >
+                <FolderIcon className="h-5 w-5" />
+                Pick a folder
+              </button>
+
+              <button
+                onClick={skip}
+                className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Skip for now — I'll add folders later
+              </button>
             </>
           )}
 
@@ -233,6 +273,25 @@ export function OnboardingWizard() {
           )}
         </Card>
       </div>
+
+      {showJoin && (
+        <JoinFleetForm
+          defaultDisplayName={defaultAgentName()}
+          onClose={() => setShowJoin(false)}
+          onPaired={token => {
+            // pair_complete saved the token to keyring on the Rust side.
+            // Sync Zustand so the rest of the app sees us as authenticated
+            // immediately, then prompt the user to pick a folder on THIS
+            // machine. runSetup() will skip bootstrap because has_token
+            // returns true.
+            setAgentInfo(token);
+            setAuthenticated(true);
+            setShowJoin(false);
+            setPhase('joined');
+            toast.success('Joined fleet. Pick a folder to finish setup.');
+          }}
+        />
+      )}
     </div>
   );
 }
