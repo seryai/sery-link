@@ -11,6 +11,7 @@ mod export_import;
 mod history;
 mod keyring_store;
 mod metadata_cache;
+mod pairing;
 mod plugin;
 mod plugin_marketplace;
 mod plugin_runtime;
@@ -108,6 +109,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::start_auth_flow,
             commands::auth_with_key,
+            commands::pair_request,
+            commands::pair_status,
+            commands::pair_complete,
             commands::get_config,
             commands::save_config,
             commands::add_watched_folder,

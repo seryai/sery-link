@@ -15,6 +15,7 @@ use crate::events;
 use crate::history::{self, QueryHistoryEntry};
 use crate::keyring_store;
 use crate::metadata_cache::{CachedDataset, SearchResult, CacheStats, MetadataCache};
+use crate::pairing::{self, PairCompleteResponse, PairRequestResponse, PairStatusResponse};
 use crate::scanner::{self, DatasetMetadata};
 use crate::stats::{self, Stats};
 use crate::watcher::{self, WatcherHandle};
@@ -56,6 +57,37 @@ pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<Age
 pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
     auth::auth_with_workspace_key(key, display_name, config.cloud.api_url)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Pair-a-second-machine flow (SPEC_PAIR_FLOW.md)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn pair_request() -> Result<PairRequestResponse, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    pairing::pair_request(&config.cloud.api_url)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn pair_status(code: String) -> Result<PairStatusResponse, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    pairing::pair_status(&config.cloud.api_url, &code)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn pair_complete(
+    pair_code: String,
+    display_name: String,
+) -> Result<PairCompleteResponse, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    pairing::pair_complete(&config.cloud.api_url, &pair_code, &display_name)
         .await
         .map_err(|e| e.to_string())
 }
