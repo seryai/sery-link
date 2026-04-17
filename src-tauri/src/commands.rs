@@ -15,6 +15,7 @@ use crate::events;
 use crate::history::{self, QueryHistoryEntry};
 use crate::keyring_store;
 use crate::metadata_cache::{CachedDataset, SearchResult, CacheStats, MetadataCache};
+use crate::fleet::{self, FleetResponse};
 use crate::pairing::{self, PairCompleteResponse, PairRequestResponse, PairStatusResponse};
 use crate::scanner::{self, DatasetMetadata};
 use crate::stats::{self, Stats};
@@ -88,6 +89,18 @@ pub async fn pair_complete(
 ) -> Result<PairCompleteResponse, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
     pairing::pair_complete(&config.cloud.api_url, &pair_code, &display_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Fleet view (SPEC_FIRST_INSTALL.md §Screen 6)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_fleet() -> Result<FleetResponse, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    fleet::list_fleet(&config.cloud.api_url)
         .await
         .map_err(|e| e.to_string())
 }
