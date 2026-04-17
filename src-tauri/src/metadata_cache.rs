@@ -13,6 +13,7 @@ use duckdb::{Connection, params};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use crate::error::{AgentError, Result};
+use crate::schema_diff::{self, SchemaDiff};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedDataset {
@@ -314,6 +315,45 @@ impl MetadataCache {
         Ok(rows.next().transpose().map_err(|e| AgentError::Database(format!("Failed to fetch dataset: {}", e)))?)
     }
 
+    /// Compute the schema diff between what's cached for this (workspace, path)
+    /// and a newly-scanned schema. Returns an empty diff if the path isn't yet
+    /// cached (first-sync is not a schema change).
+    ///
+    /// Intended to be called by the scanner right before `upsert_dataset`:
+    /// the caller captures the returned diff (if non-empty) and persists it
+    /// as a user-visible notification.
+    ///
+    /// Errors only on DB failures. Unparseable schema_json silently treats
+    /// the old side as empty — if we can't parse what's cached, fabricating
+    /// a misleading diff would be worse than surfacing every column as "new."
+    /// In the latter case the caller will simply see added == new.len().
+    pub fn compute_schema_diff(
+        &self,
+        workspace_id: &str,
+        path: &str,
+        new_schema_json: Option<&str>,
+    ) -> Result<SchemaDiff> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT schema_json FROM datasets WHERE workspace_id = ? AND path = ?")
+            .map_err(|e| AgentError::Database(format!("prepare schema lookup: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![workspace_id, path], |row| row.get::<_, Option<String>>(0))
+            .map_err(|e| AgentError::Database(format!("query schema lookup: {}", e)))?;
+
+        let old_json: Option<String> = match rows.next() {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                return Err(AgentError::Database(format!("fetch schema row: {}", e)));
+            }
+            None => return Ok(SchemaDiff::default()),
+        };
+
+        let old = schema_diff::parse_schema_json(old_json.as_deref()).unwrap_or_default();
+        let new = schema_diff::parse_schema_json(new_schema_json).unwrap_or_default();
+        Ok(schema_diff::diff_schemas(&old, &new))
+    }
+
     /// Clear all cached datasets for a workspace
     pub fn clear_workspace(&mut self, workspace_id: &str) -> Result<()> {
         self.conn.execute(
@@ -390,5 +430,76 @@ mod tests {
         cache.clear_workspace("test-workspace").unwrap();
         let empty = cache.get_all("test-workspace").unwrap();
         assert_eq!(empty.len(), 0);
+    }
+
+    // Tests below use unique workspace_id per test so they don't interfere
+    // with each other or with test_cache_lifecycle. The existing test writes
+    // to the user's real data dir — not ideal, but matches the pattern;
+    // refactoring MetadataCache to take an explicit path is out of scope.
+
+    #[test]
+    fn compute_schema_diff_returns_empty_for_unknown_path() {
+        let cache = MetadataCache::new().unwrap();
+        // Nothing cached under this workspace — a brand-new dataset scan
+        // should produce no "change" notification (it's first sync).
+        let diff = cache
+            .compute_schema_diff(
+                "never-seen-workspace",
+                "/nothing/here.parquet",
+                Some(r#"[{"name":"id","type":"INTEGER","nullable":false}]"#),
+            )
+            .unwrap();
+        assert!(diff.is_empty(), "first-sync must not produce a change diff");
+    }
+
+    #[test]
+    fn compute_schema_diff_surfaces_real_change() {
+        let mut cache = MetadataCache::new().unwrap();
+        let ws = "schema-diff-change-test-ws";
+
+        let mut ds = test_dataset("sd-1", "orders");
+        ds.workspace_id = ws.to_string();
+        ds.path = "/data/orders.parquet".into();
+        ds.schema_json = Some(
+            r#"[{"name":"id","type":"INTEGER","nullable":false},{"name":"amount","type":"INTEGER","nullable":false}]"#.into()
+        );
+        cache.upsert_dataset(&ds).unwrap();
+
+        let new_schema = r#"[
+            {"name":"id","type":"INTEGER","nullable":false},
+            {"name":"amount","type":"VARCHAR","nullable":false},
+            {"name":"currency","type":"VARCHAR","nullable":true}
+        ]"#;
+        let diff = cache
+            .compute_schema_diff(ws, "/data/orders.parquet", Some(new_schema))
+            .unwrap();
+        assert_eq!(diff.added(), 1, "currency is new");
+        assert_eq!(diff.type_changed(), 1, "amount type flipped");
+        assert_eq!(diff.removed(), 0);
+
+        cache.clear_workspace(ws).unwrap();
+    }
+
+    #[test]
+    fn compute_schema_diff_noop_when_unchanged() {
+        let mut cache = MetadataCache::new().unwrap();
+        let ws = "schema-diff-noop-test-ws";
+
+        let mut ds = test_dataset("sd-2", "customers");
+        ds.workspace_id = ws.to_string();
+        ds.path = "/data/customers.parquet".into();
+        let schema = r#"[{"name":"id","type":"INTEGER","nullable":false}]"#;
+        ds.schema_json = Some(schema.into());
+        cache.upsert_dataset(&ds).unwrap();
+
+        let diff = cache
+            .compute_schema_diff(ws, "/data/customers.parquet", Some(schema))
+            .unwrap();
+        assert!(
+            diff.is_empty(),
+            "same-schema re-scan must not fire a change notification"
+        );
+
+        cache.clear_workspace(ws).unwrap();
     }
 }
