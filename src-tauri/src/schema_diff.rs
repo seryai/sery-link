@@ -152,6 +152,42 @@ fn change_name(c: &ColumnChange) -> &str {
     }
 }
 
+/// Parse a schema_json string (as produced by the scanner and stored in
+/// MetadataCache.schema_json) into the simpler `Vec<Column>` this module
+/// operates on.
+///
+/// The scanner serializes `ColumnSchema { name, col_type, nullable }`
+/// with serde field-rename `col_type -> "type"`. We only need name + type,
+/// so we deserialize into a minimal intermediate that ignores `nullable`.
+///
+/// Returns an empty vec (not an error) when the input is null, empty,
+/// or an empty array — those all mean "no known schema" at call sites.
+pub fn parse_schema_json(schema_json: Option<&str>) -> Result<Vec<Column>, serde_json::Error> {
+    let Some(text) = schema_json else {
+        return Ok(Vec::new());
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(Vec::new());
+    }
+
+    #[derive(Deserialize)]
+    struct Wire {
+        name: String,
+        #[serde(rename = "type")]
+        column_type: String,
+    }
+
+    let wire: Vec<Wire> = serde_json::from_str(trimmed)?;
+    Ok(wire
+        .into_iter()
+        .map(|w| Column {
+            name: w.name,
+            column_type: w.column_type,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +344,50 @@ mod tests {
         let d = diff_schemas(&old, &new);
         assert_eq!(d.added(), 0);
         assert_eq!(d.removed(), 2);
+    }
+
+    #[test]
+    fn parse_handles_scanner_serialized_schema() {
+        // Shape matches scanner::ColumnSchema { name, col_type, nullable }
+        // with serde field rename col_type -> "type".
+        let json = r#"[
+            {"name": "id", "type": "INTEGER", "nullable": false},
+            {"name": "email", "type": "VARCHAR", "nullable": true}
+        ]"#;
+        let cols = parse_schema_json(Some(json)).unwrap();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].name, "id");
+        assert_eq!(cols[0].column_type, "INTEGER");
+        assert_eq!(cols[1].name, "email");
+    }
+
+    #[test]
+    fn parse_returns_empty_for_none_empty_or_null() {
+        assert!(parse_schema_json(None).unwrap().is_empty());
+        assert!(parse_schema_json(Some("")).unwrap().is_empty());
+        assert!(parse_schema_json(Some("   ")).unwrap().is_empty());
+        assert!(parse_schema_json(Some("null")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_propagates_invalid_json_as_error() {
+        assert!(parse_schema_json(Some("{not json")).is_err());
+        assert!(parse_schema_json(Some(r#"[{"name": "x"}]"#)).is_err()); // missing "type"
+    }
+
+    #[test]
+    fn parse_plus_diff_detects_real_world_change() {
+        // End-to-end: scanner-shaped JSON → diff.
+        let old_json = r#"[{"name":"amount","type":"INTEGER","nullable":false}]"#;
+        let new_json = r#"[
+            {"name":"amount","type":"VARCHAR","nullable":false},
+            {"name":"currency","type":"VARCHAR","nullable":true}
+        ]"#;
+        let old = parse_schema_json(Some(old_json)).unwrap();
+        let new = parse_schema_json(Some(new_json)).unwrap();
+        let d = diff_schemas(&old, &new);
+        assert_eq!(d.added(), 1); // currency
+        assert_eq!(d.type_changed(), 1); // amount
+        assert_eq!(d.removed(), 0);
     }
 }
