@@ -12,6 +12,7 @@ import { HashRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation 
 import { invoke } from '@tauri-apps/api/core';
 import {
   BarChart3,
+  Bell,
   ChevronDown,
   Folder,
   Laptop,
@@ -34,6 +35,7 @@ import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
 import { FleetView } from './components/FleetView';
+import { Notifications } from './components/Notifications';
 import { AddMachineModal } from './components/AddMachineModal';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
@@ -249,6 +251,7 @@ function AppInner() {
               <Laptop className="h-4 w-4" />
               Fleet
             </NavLink>
+            <NotificationsNavLink />
 
             {/* Spacer to push More to bottom */}
             <div className="flex-1" />
@@ -327,6 +330,7 @@ function AppInner() {
             <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />
             <Route path="/fleet" element={<div className="p-8"><FleetView /></div>} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />
           </Routes>
@@ -359,6 +363,37 @@ function AppInner() {
         />
       )}
     </div>
+  );
+}
+
+// Sidebar link with an unread-count badge. Split out so it can read
+// from the store independently and avoid re-rendering the whole nav
+// on every notification arrival.
+function NotificationsNavLink() {
+  const unread = useAgentStore((s) =>
+    s.schemaNotifications.reduce((n, x) => n + (x.read ? 0 : 1), 0),
+  );
+  return (
+    <NavLink
+      to="/notifications"
+      className={({ isActive }) =>
+        `flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+          isActive
+            ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+        }`
+      }
+    >
+      <div className="flex items-center gap-3">
+        <Bell className="h-4 w-4" />
+        <span>Notifications</span>
+      </div>
+      {unread > 0 && (
+        <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+          {unread > 99 ? '99+' : unread}
+        </span>
+      )}
+    </NavLink>
   );
 }
 

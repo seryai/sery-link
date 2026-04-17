@@ -35,6 +35,7 @@ export function useAgentEvents() {
     prependHistory,
     setHistory,
     setReAuthRequired,
+    addSchemaNotification,
   } = useAgentStore();
   const toast = useToast();
 
@@ -63,10 +64,11 @@ export function useAgentEvents() {
     );
 
     // Schema-change notification — fires once per dataset whose shape
-    // drifted between scans. Surfaced as a toast for now; a dedicated
-    // notifications tab will render the full diff in a future PR.
+    // drifted between scans. Push into the store (so the Notifications
+    // view can render it) AND surface a transient toast.
     unsubs.push(
       listen<SchemaChangedPayload>(EVENT_NAMES.SCHEMA_CHANGED, (event) => {
+        addSchemaNotification(event.payload);
         const { dataset_name, added, removed, type_changed } = event.payload;
         const parts: string[] = [];
         if (added > 0) parts.push(`${added} added`);
