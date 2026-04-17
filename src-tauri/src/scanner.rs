@@ -39,6 +39,19 @@ pub struct DatasetMetadata {
     /// `None` for tabular files.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_markdown: Option<String>,
+
+    /// Up to 5 sample rows from the file, PII-scrubbed. Used by the
+    /// cloud LLM for better SQL grounding. See SPEC_BACKEND_UNBLOCK.md
+    /// §Metadata enrichment. `None` for documents + files that fail
+    /// sampling. Serialised only when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rows: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+
+    /// `true` if the sampler substituted redacted placeholders for any
+    /// PII-looking column values. Always sent so the backend knows to
+    /// caveat LLM answers that rely on sampled values.
+    #[serde(default)]
+    pub samples_redacted: bool,
 }
 
 /// File extensions classified as document (non-tabular) types.
@@ -251,10 +264,17 @@ fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata
             schema: vec![],
             last_modified,
             document_markdown,
+            sample_rows: None,
+            samples_redacted: false,
         })
     } else {
-        // Tabular files — DuckDB schema extraction
+        // Tabular files — DuckDB schema extraction + optional sampling
         let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
+        // Sample-row collection runs best-effort — a failure here MUST NOT
+        // block the sync. If duckdb can't open the file or the row shape
+        // is weird, fall back to (None, false).
+        let (sample_rows, samples_redacted) = extract_sample_rows(file_path, ext, &schema)
+            .unwrap_or((None, false));
         Ok(DatasetMetadata {
             relative_path,
             file_format: ext.to_string(),
@@ -263,6 +283,8 @@ fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata
             schema,
             last_modified,
             document_markdown: None,
+            sample_rows,
+            samples_redacted,
         })
     }
 }
@@ -488,6 +510,187 @@ fn extract_schema(
     };
 
     Ok((columns, row_count))
+}
+
+// ---------------------------------------------------------------------------
+// Sample-row collection (LLM grounding; PII-scrubbed)
+// ---------------------------------------------------------------------------
+
+/// Up to this many sample rows per file. Mirrors the server-side cap in
+/// api/app/api/v1/agent_metadata.py `_MAX_SAMPLE_ROWS`.
+const SAMPLE_ROW_LIMIT: usize = 5;
+
+/// Column names whose values get replaced with `<redacted>` in samples.
+/// Case-insensitive substring match — conservative by design.
+const PII_COLUMN_SIGNALS: &[&str] = &[
+    "email",
+    "ssn",
+    "credit",
+    "card",
+    "cvv",
+    "phone",
+    "tel",
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "auth",
+];
+
+fn is_pii_column(col_name: &str) -> bool {
+    let lower = col_name.to_ascii_lowercase();
+    PII_COLUMN_SIGNALS.iter().any(|p| lower.contains(p))
+}
+
+#[cfg(test)]
+mod pii_tests {
+    use super::is_pii_column;
+
+    #[test]
+    fn matches_common_pii_columns() {
+        assert!(is_pii_column("email"));
+        assert!(is_pii_column("Email"));
+        assert!(is_pii_column("user_email_address"));
+        assert!(is_pii_column("phone_number"));
+        assert!(is_pii_column("ssn"));
+        assert!(is_pii_column("credit_card"));
+        assert!(is_pii_column("cvv"));
+        assert!(is_pii_column("password_hash"));
+        assert!(is_pii_column("api_key"));
+        assert!(is_pii_column("ApiKey"));
+        assert!(is_pii_column("auth_token"));
+    }
+
+    #[test]
+    fn leaves_benign_columns_alone() {
+        assert!(!is_pii_column("date"));
+        assert!(!is_pii_column("amount"));
+        assert!(!is_pii_column("product_name"));
+        assert!(!is_pii_column("order_id"));
+        assert!(!is_pii_column("country"));
+        assert!(!is_pii_column("status"));
+    }
+}
+
+/// Best-effort sample-row extraction for tabular files.
+///
+/// Opens a fresh in-memory DuckDB, runs `SELECT * LIMIT 5`, converts the
+/// rows to JSON values, and substitutes `<redacted>` for PII-looking
+/// columns.
+///
+/// Returns:
+///   - `Ok((Some(samples), redacted_flag))` on success
+///   - `Ok((None, false))` if the file yields no rows (empty CSV etc.)
+///   - `Err(...)` on database errors (caller should .unwrap_or fall back)
+fn extract_sample_rows(
+    file_path: &Path,
+    ext: &str,
+    schema: &[ColumnSchema],
+) -> Result<(Option<Vec<serde_json::Map<String, serde_json::Value>>>, bool)> {
+    if schema.is_empty() {
+        return Ok((None, false));
+    }
+
+    let conn = Connection::open_in_memory()
+        .map_err(|e| AgentError::Database(format!("Failed to open DuckDB: {}", e)))?;
+
+    // Reuse the xlsx/csv → parquet conversion cache, same as extract_schema.
+    let (effective_path, effective_ext): (Cow<Path>, &str) = match ext {
+        "xlsx" | "xls" => {
+            let csv = excel::xlsx_to_csv(file_path)?;
+            let parquet = crate::csv::csv_to_parquet(&csv)?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        "csv" => {
+            let parquet = crate::csv::csv_to_parquet(file_path)?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        _ => (Cow::Borrowed(file_path), ext),
+    };
+    let path_str = effective_path.to_string_lossy();
+
+    let read_func = match effective_ext {
+        "parquet" => "read_parquet",
+        "csv" => "read_csv_auto",
+        other => {
+            return Err(AgentError::Database(format!(
+                "extract_sample_rows: unsupported format {}",
+                other
+            )));
+        }
+    };
+
+    let sample_sql = format!(
+        "SELECT * FROM {}('{}') LIMIT {}",
+        read_func, path_str, SAMPLE_ROW_LIMIT
+    );
+
+    let mut stmt = conn
+        .prepare(&sample_sql)
+        .map_err(|e| AgentError::Database(format!("Failed to prepare sample SQL: {}", e)))?;
+
+    // Pre-compute which column indices need redaction.
+    let redacted_indices: Vec<usize> = schema
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| if is_pii_column(&c.name) { Some(i) } else { None })
+        .collect();
+
+    let rows = stmt
+        .query_map([], |row| {
+            let mut obj = serde_json::Map::with_capacity(schema.len());
+            for (i, col) in schema.iter().enumerate() {
+                let value = if redacted_indices.contains(&i) {
+                    serde_json::Value::String("<redacted>".to_string())
+                } else {
+                    duckdb_cell_to_json(row, i)
+                };
+                obj.insert(col.name.clone(), value);
+            }
+            Ok(obj)
+        })
+        .map_err(|e| AgentError::Database(format!("Failed to query samples: {}", e)))?;
+
+    let mut samples: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+    for row in rows {
+        if let Ok(obj) = row {
+            samples.push(obj);
+        }
+        if samples.len() >= SAMPLE_ROW_LIMIT {
+            break;
+        }
+    }
+
+    if samples.is_empty() {
+        return Ok((None, false));
+    }
+
+    Ok((Some(samples), !redacted_indices.is_empty()))
+}
+
+/// Convert a single DuckDB cell at `idx` to a JSON value, trying a few
+/// common types. Anything we can't map cleanly becomes a string via
+/// Debug formatting so the LLM still gets *some* signal.
+fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_json::Value {
+    // Try in order of most specific → most lenient. The duckdb-rs crate
+    // returns an error when a type doesn't match, so we cascade.
+    if let Ok(v) = row.get::<_, Option<i64>>(idx) {
+        return v.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.get::<_, Option<f64>>(idx) {
+        return v
+            .and_then(|f| serde_json::Number::from_f64(f).map(serde_json::Value::Number))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.get::<_, Option<bool>>(idx) {
+        return v.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.get::<_, Option<String>>(idx) {
+        return v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
+    }
+    serde_json::Value::Null
 }
 
 // ---------------------------------------------------------------------------
