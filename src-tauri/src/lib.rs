@@ -20,6 +20,7 @@ mod recipe_executor;
 mod relationship_detector;
 mod scanner;
 mod schema_diff;
+mod schema_notifications;
 mod stats;
 mod tray;
 mod watcher;
@@ -151,6 +152,10 @@ pub fn run() {
             commands::clear_cached_workspace,
             commands::get_cache_stats,
             commands::compute_schema_diff,
+            commands::get_schema_notifications,
+            commands::mark_schema_notification_read,
+            commands::mark_all_schema_notifications_read,
+            commands::clear_schema_notifications,
             commands::detect_dataset_relationships,
             commands::export_configuration,
             commands::import_configuration,

@@ -40,7 +40,7 @@ import { AddMachineModal } from './components/AddMachineModal';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { CommandPalette } from './components/CommandPalette';
-import type { AgentConfig, AgentStats } from './types/events';
+import type { AgentConfig, AgentStats, StoredSchemaNotification } from './types/events';
 
 export default function App() {
   return (
@@ -69,6 +69,7 @@ function AppInner() {
     setAgentInfo,
     setConfig,
     setStats,
+    setSchemaNotifications,
   } = useAgentStore();
 
   // Check if current route is in More dropdown
@@ -130,6 +131,19 @@ function AppInner() {
               console.error('Failed to load stats:', err);
             }
 
+            // Hydrate the notifications store from disk so past schema
+            // changes survive app restart. Fire-and-forget — missing
+            // notifications don't block any other bootstrap step.
+            try {
+              const stored = await invoke<StoredSchemaNotification[]>(
+                'get_schema_notifications',
+                { limit: 200 },
+              );
+              if (!cancelled) setSchemaNotifications(stored);
+            } catch (err) {
+              console.error('Failed to load schema notifications:', err);
+            }
+
             // Fire-and-forget — the event listeners will surface success/failure
             invoke('start_websocket_tunnel').catch((err) =>
               console.error('WebSocket tunnel failed to start:', err),
@@ -158,7 +172,7 @@ function AppInner() {
     return () => {
       cancelled = true;
     };
-  }, [setAuthenticated, setAgentInfo, setConfig, setStats]);
+  }, [setAuthenticated, setAgentInfo, setConfig, setStats, setSchemaNotifications]);
 
   if (bootstrapping) {
     return (

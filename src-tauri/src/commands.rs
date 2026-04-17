@@ -231,18 +231,34 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                                 .and_then(|s| s.to_str())
                                 .unwrap_or(&ds.relative_path)
                                 .to_string();
-                            events::emit_schema_changed(
-                                &app,
-                                events::SchemaChanged {
-                                    workspace_id: workspace_id.to_string(),
-                                    dataset_path: ds.relative_path.clone(),
-                                    dataset_name,
-                                    added: diff.added() as u64,
-                                    removed: diff.removed() as u64,
-                                    type_changed: diff.type_changed() as u64,
-                                    diff,
-                                },
+                            // Persist first so the id the UI sees is the
+                            // same one stored on disk — this lets mark-read
+                            // work offline and across app restarts.
+                            let stored = crate::schema_notifications::record(
+                                workspace_id,
+                                &ds.relative_path,
+                                &dataset_name,
+                                diff.added() as u64,
+                                diff.removed() as u64,
+                                diff.type_changed() as u64,
+                                diff.clone(),
                             );
+                            if let Ok(stored) = stored {
+                                events::emit_schema_changed(
+                                    &app,
+                                    events::SchemaChanged {
+                                        id: stored.id,
+                                        received_at: stored.received_at,
+                                        workspace_id: workspace_id.to_string(),
+                                        dataset_path: ds.relative_path.clone(),
+                                        dataset_name,
+                                        added: diff.added() as u64,
+                                        removed: diff.removed() as u64,
+                                        type_changed: diff.type_changed() as u64,
+                                        diff,
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -803,6 +819,31 @@ pub async fn compute_schema_diff(
     cache
         .compute_schema_diff(&workspace_id, &path, new_schema_json.as_deref())
         .map_err(|e| e.to_string())
+}
+
+// ─── Schema-change notifications (persistent) ─────────────────────────────
+
+#[tauri::command]
+pub async fn get_schema_notifications(
+    limit: Option<usize>,
+) -> Result<Vec<crate::schema_notifications::StoredNotification>, String> {
+    crate::schema_notifications::load(limit.unwrap_or(200))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mark_schema_notification_read(id: String) -> Result<(), String> {
+    crate::schema_notifications::mark_read(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mark_all_schema_notifications_read() -> Result<(), String> {
+    crate::schema_notifications::mark_all_read().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_schema_notifications() -> Result<(), String> {
+    crate::schema_notifications::clear().map_err(|e| e.to_string())
 }
 
 // ─── Dataset Relationships ────────────────────────────────────────────────

@@ -74,6 +74,10 @@ export interface SchemaDiff {
 }
 
 export interface SchemaChangedPayload {
+  // Populated by the Rust side via schema_notifications::record so the
+  // store and the on-disk log agree on the same id — mark-read needs it.
+  id: string;
+  received_at: string; // RFC 3339
   workspace_id: string;
   dataset_path: string;
   dataset_name: string;
@@ -81,6 +85,12 @@ export interface SchemaChangedPayload {
   removed: number;
   type_changed: number;
   diff: SchemaDiff;
+}
+
+// The shape returned by get_schema_notifications. Same shape as
+// SchemaChangedPayload plus a persisted `read` flag.
+export interface StoredSchemaNotification extends SchemaChangedPayload {
+  read: boolean;
 }
 
 export interface SyncFailedPayload {
