@@ -150,6 +150,7 @@ pub fn run() {
             commands::upsert_cached_datasets,
             commands::clear_cached_workspace,
             commands::get_cache_stats,
+            commands::compute_schema_diff,
             commands::detect_dataset_relationships,
             commands::export_configuration,
             commands::import_configuration,
