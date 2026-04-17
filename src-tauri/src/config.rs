@@ -228,7 +228,18 @@ impl Config {
             .map(|home| home.join(".seryai"))
     }
 
+    /// Add a folder to the watch list, idempotent on path.
+    ///
+    /// If `path` is already watched, only the `recursive` flag is updated —
+    /// exclude_patterns / max_file_size_mb / scan history stay intact. This
+    /// prevents the onboarding-double-click bug (user picks the same folder
+    /// twice) from producing duplicate entries that cause double-scan +
+    /// double-upload.
     pub fn add_watched_folder(&mut self, path: String, recursive: bool) {
+        if let Some(existing) = self.watched_folders.iter_mut().find(|f| f.path == path) {
+            existing.recursive = recursive;
+            return;
+        }
         self.watched_folders.push(WatchedFolder {
             path,
             recursive,
@@ -314,6 +325,37 @@ mod tests {
         assert_eq!(config.watched_folders[0].path, "/path/to/folder");
         assert!(config.watched_folders[0].recursive);
         assert!(config.watched_folders[0].exclude_patterns.contains(&".git".to_string()));
+    }
+
+    #[test]
+    fn add_watched_folder_is_idempotent_on_path() {
+        let mut config = Config::default();
+        config.add_watched_folder("/data".to_string(), true);
+        // Mutate the existing entry — this simulates the scanner having
+        // populated it — and then re-add. The mutation must be preserved
+        // instead of being reset by the idempotent add.
+        config.watched_folders[0].last_scan_at = Some("2026-04-17T12:00:00Z".to_string());
+
+        config.add_watched_folder("/data".to_string(), true);
+
+        assert_eq!(config.watched_folders.len(), 1, "no duplicate entries");
+        assert_eq!(
+            config.watched_folders[0].last_scan_at.as_deref(),
+            Some("2026-04-17T12:00:00Z"),
+            "existing scan history must not be reset"
+        );
+    }
+
+    #[test]
+    fn add_watched_folder_updates_recursive_flag_on_re_add() {
+        let mut config = Config::default();
+        config.add_watched_folder("/data".to_string(), false);
+        assert!(!config.watched_folders[0].recursive);
+
+        // User toggled recursive in settings — re-adding should update.
+        config.add_watched_folder("/data".to_string(), true);
+        assert_eq!(config.watched_folders.len(), 1);
+        assert!(config.watched_folders[0].recursive);
     }
 
     #[test]
