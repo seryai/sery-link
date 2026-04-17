@@ -54,20 +54,36 @@ pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<Age
         .map_err(|e| e.to_string())
 }
 
+/// Persist workspace_id + agent_id to disk so offline-capable paths
+/// (scanner cache, schema-diff) don't have to round-trip /v1/agent/info
+/// on every call. Non-fatal on save failure — token persistence already
+/// happened in the keyring, so auth is still complete.
+fn persist_identity(workspace_id: &str, agent_id: &str) {
+    if let Ok(mut config) = Config::load() {
+        config.agent.workspace_id = Some(workspace_id.to_string());
+        config.agent.agent_id = Some(agent_id.to_string());
+        let _ = config.save();
+    }
+}
+
 #[tauri::command]
 pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    auth::bootstrap_workspace(display_name, config.cloud.api_url)
+    let token = auth::bootstrap_workspace(display_name, config.cloud.api_url)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    persist_identity(&token.workspace_id, &token.agent_id);
+    Ok(token)
 }
 
 #[tauri::command]
 pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    auth::auth_with_workspace_key(key, display_name, config.cloud.api_url)
+    let token = auth::auth_with_workspace_key(key, display_name, config.cloud.api_url)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    persist_identity(&token.workspace_id, &token.agent_id);
+    Ok(token)
 }
 
 // ---------------------------------------------------------------------------
@@ -96,9 +112,11 @@ pub async fn pair_complete(
     display_name: String,
 ) -> Result<PairCompleteResponse, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    pairing::pair_complete(&config.cloud.api_url, &pair_code, &display_name)
+    let token = pairing::pair_complete(&config.cloud.api_url, &pair_code, &display_name)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    persist_identity(&token.workspace_id, &token.agent_id);
+    Ok(token)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +210,47 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     let dataset_count = datasets.len() as u64;
     let duration_ms = started.elapsed().as_millis() as u64;
 
-    // 2. Sync to cloud (if we have a token).
+    // 2a. Compute schema diffs against the local cache and emit one
+    // schema_changed event per dataset whose schema shifted. Best-effort:
+    // diff failures must never block the sync. Requires a known
+    // workspace_id (persisted at auth time) — if we don't have one yet
+    // (never signed in), we skip the diff silently.
+    if let Ok(config_for_diff) = Config::load() {
+        if let Some(workspace_id) = config_for_diff.agent.workspace_id.as_deref() {
+            if let Ok(cache) = MetadataCache::new() {
+                for ds in &datasets {
+                    let schema_json = serde_json::to_string(&ds.schema).ok();
+                    if let Ok(diff) = cache.compute_schema_diff(
+                        workspace_id,
+                        &ds.relative_path,
+                        schema_json.as_deref(),
+                    ) {
+                        if !diff.is_empty() {
+                            let dataset_name = std::path::Path::new(&ds.relative_path)
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or(&ds.relative_path)
+                                .to_string();
+                            events::emit_schema_changed(
+                                &app,
+                                events::SchemaChanged {
+                                    workspace_id: workspace_id.to_string(),
+                                    dataset_path: ds.relative_path.clone(),
+                                    dataset_name,
+                                    added: diff.added() as u64,
+                                    removed: diff.removed() as u64,
+                                    type_changed: diff.type_changed() as u64,
+                                    diff,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2b. Sync to cloud (if we have a token).
     let result = if keyring_store::has_token() {
         let config = Config::load().map_err(|e| e.to_string())?;
         let token = keyring_store::get_token().map_err(|e| e.to_string())?;
@@ -202,6 +260,42 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     } else {
         Ok(serde_json::json!({ "skipped": true, "reason": "no token" }))
     };
+
+    // 2c. Populate the local cache so the next scan's diff has a baseline.
+    // Runs after the diff computation above but regardless of cloud sync,
+    // because the cache is a local-only offline-search surface. Best-effort:
+    // cache failures must never block the scan.
+    if let Ok(config_for_cache) = Config::load() {
+        if let Some(workspace_id) = config_for_cache.agent.workspace_id.as_deref() {
+            if let Ok(mut cache) = MetadataCache::new() {
+                let now = chrono::Utc::now();
+                for ds in &datasets {
+                    let schema_json = serde_json::to_string(&ds.schema).ok();
+                    let name = std::path::Path::new(&ds.relative_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&ds.relative_path)
+                        .to_string();
+                    // Deterministic local-only id: UNIQUE(workspace_id, path)
+                    // is the real key; this id is a stable display handle.
+                    let id = format!("{}::{}", workspace_id, ds.relative_path);
+                    let cached = crate::metadata_cache::CachedDataset {
+                        id,
+                        workspace_id: workspace_id.to_string(),
+                        name,
+                        path: ds.relative_path.clone(),
+                        file_format: ds.file_format.clone(),
+                        size_bytes: ds.size_bytes as i64,
+                        schema_json,
+                        tags: Vec::new(),
+                        description: None,
+                        last_synced: now,
+                    };
+                    let _ = cache.upsert_dataset(&cached);
+                }
+            }
+        }
+    }
 
     match result {
         Ok(resp) => {

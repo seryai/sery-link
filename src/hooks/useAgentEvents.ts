@@ -19,6 +19,7 @@ import {
   type QueryStarted,
   type ScanComplete,
   type ScanProgress,
+  type SchemaChangedPayload,
   type SyncCompletedPayload,
   type SyncFailedPayload,
   type WsStatus,
@@ -58,6 +59,22 @@ export function useAgentEvents() {
     unsubs.push(
       listen<ScanComplete>(EVENT_NAMES.SCAN_COMPLETE, (event) => {
         clearScanProgress(event.payload.folder);
+      }),
+    );
+
+    // Schema-change notification — fires once per dataset whose shape
+    // drifted between scans. Surfaced as a toast for now; a dedicated
+    // notifications tab will render the full diff in a future PR.
+    unsubs.push(
+      listen<SchemaChangedPayload>(EVENT_NAMES.SCHEMA_CHANGED, (event) => {
+        const { dataset_name, added, removed, type_changed } = event.payload;
+        const parts: string[] = [];
+        if (added > 0) parts.push(`${added} added`);
+        if (removed > 0) parts.push(`${removed} removed`);
+        if (type_changed > 0) parts.push(`${type_changed} type changed`);
+        toast.info(
+          `Schema changed: ${dataset_name} (${parts.join(', ') || 'no detail'})`,
+        );
       }),
     );
 

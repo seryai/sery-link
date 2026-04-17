@@ -42,6 +42,12 @@ pub struct AgentConfig {
     pub platform: String,
     pub hostname: String,
     pub agent_id: Option<String>,
+    // Persisted so the local cache + schema-diff path can key off a known
+    // workspace_id without a round-trip to /v1/agent/info on every scan.
+    // Populated by bootstrap_workspace, auth_with_key, and pair_complete
+    // when they return a fresh AgentToken.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +173,7 @@ impl Default for Config {
                 platform: std::env::consts::OS.to_string(),
                 hostname,
                 agent_id: None,
+                workspace_id: None,
             },
             watched_folders: Vec::new(),
             cloud: CloudConfig {

@@ -235,6 +235,7 @@ mod tests {
                 platform: "test".to_string(),
                 hostname: "test-host".to_string(),
                 agent_id: None,
+                workspace_id: None,
             },
             watched_folders: vec![test_folder()],
             cloud: crate::config::CloudConfig {
