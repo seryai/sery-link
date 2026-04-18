@@ -1,10 +1,17 @@
 # Sery Link — Workflow & UX Walkthrough
 
-**Status:** Shipped reality, not a proposal. Updated 2026-04-18.
+**Status:** Shipped reality, not a proposal. Updated 2026-04-18 (post local-first rework — commit `fa2cfce`).
 **Differs from:** [UX_PROPOSAL.md](./UX_PROPOSAL.md) and
 [FLUENT_UX_WORKFLOW_OPTIMIZATION.md](./FLUENT_UX_WORKFLOW_OPTIMIZATION.md)
 — those are aspirational/strategy docs for *future* iterations.
 This file shows what a user actually sees today.
+
+**Important recent change:** first run no longer contacts the cloud.
+The app stays fully local until the user explicitly clicks Connect
+in the StatusBar and pastes a workspace key (generated from
+`app.sery.ai/settings/workspace-keys`). This replaced the old silent
+anonymous-bootstrap flow. See §1 for the updated first-run UX and
+§2 for the StatusBar's local-only / connected branch.
 
 This walks a user through Sery Link end-to-end: first run, the main
 shell, every tab, the pair-a-machine flow, and the daily loop. It's
@@ -14,7 +21,7 @@ what ships.
 
 ---
 
-## 1. First-run flow
+## 1. First-run flow (local-first)
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -23,9 +30,9 @@ what ships.
 │                                                    │
 │               Welcome to Sery                      │
 │                                                    │
-│   Pick a folder to analyze. Your files never       │
-│   leave this machine — only your questions and     │
-│   the answers travel.                              │
+│   Pick a folder to index on this machine. Sery     │
+│   works fully offline until you decide to          │
+│   connect to the cloud.                            │
 │                                                    │
 │  ┌─────────────────────────────────────────────┐   │
 │  │  📁  Pick a folder                          │   │    primary CTA
@@ -35,57 +42,36 @@ what ships.
 │  │  Skip for now — I'll add folders later      │   │    secondary
 │  └─────────────────────────────────────────────┘   │
 │                                                    │
-│  I already have a Sery machine — join my fleet     │    text link
-│                                                    │
-│  🔒  No sign-up. No account. Nothing uploaded      │
-│      until you ask.                                │
+│  🔒  No sign-up. No account. 100% local until      │
+│      you say otherwise.                            │
 │                                                    │
 └────────────────────────────────────────────────────┘
 ```
 
-**Three branches:**
+**Two branches — both purely local, no cloud contact:**
 
-- **Pick a folder** → native picker → `bootstrap_workspace` silently
-  creates anonymous workspace + agent → folder added → scan + tunnel
-  start in background → lands on main shell.
-- **Skip** → same bootstrap path, no folder yet. User adds one later
-  from the Folders tab.
-- **I already have a Sery machine** → opens the `JoinFleetForm` modal
-  (below).
+- **Pick a folder** → native picker → `add_watched_folder` + `start_file_watcher` → lands on main shell. No token written, no backend call.
+- **Skip** → same local-only setup without a folder. User adds one later from the Folders tab.
 
-### JoinFleetForm
+**Where's the "I already have a Sery machine" option?** It moved. The workspace-key entry point is now the StatusBar's **Connect** button (see §2 + §7). Putting it in the first-run wizard mixed two decisions into one screen — "what do you want indexed here" and "how do you join a workspace" — and made the local-only path feel like a secondary option.
 
-```
-┌────────────────────────────────────────────────────┐
-│  Join Existing Fleet                          [×]  │
-│                                                    │
-│  On the machine already running Sery, open         │
-│  "Add another machine" and enter the code here.    │
-│                                                    │
-│  Pair code                                         │
-│  ┌─────────────────────────────────────────────┐   │
-│  │  XXX-XXX-XXX-XXX                            │   │    monospace
-│  └─────────────────────────────────────────────┘   │
-│  12 characters, hyphens optional                   │
-│                                                    │
-│  Name this machine                                 │
-│  ┌─────────────────────────────────────────────┐   │
-│  │  Home Desktop                               │   │
-│  └─────────────────────────────────────────────┘   │
-│                                                    │
-│                     [Cancel]    [ Connect  → ]     │
-└────────────────────────────────────────────────────┘
-```
+### ConnectModal (workspace-key path — see §7 for the full UX)
 
-Friendly error mapping (see `src/components/JoinFleetForm.tsx`):
-- 410 → "This code expired or is no longer valid."
-- 409 → "This code has already been used."
-- 400 → "The code looks wrong. Double-check the characters."
-- 429 → "Too many attempts. Wait a minute and try again."
-- network → "Can't reach Sery. Check your internet and retry."
+Opens from the StatusBar's **Connect** button. Key validates the
+`sery_k_` prefix + length, calls `auth_with_key`, starts the tunnel
+on success. Full walkthrough in §7.
 
-After success → *"You're in the fleet. Now pick a folder on **this**
-machine."* → same folder-pick UX → main shell.
+### Pair-code path (alternative for machine-2 users)
+
+The legacy `JoinFleetForm` modal still exists as an entry point for
+users who want a one-time pair code from an already-connected
+machine instead of copying a workspace key. It's reachable via:
+
+- Command palette (⌘K → "Join fleet" — not exposed in nav)
+- Or from the tray menu of machine #1: "Add Another Machine" → QR + 12-char code → paste on machine #2
+
+For new installs the workspace-key path is the default; pair codes
+are the safer-but-manual alternative.
 
 ---
 
@@ -115,7 +101,7 @@ machine."* → same folder-pick UX → main shell.
 
 - **Sidebar** — 5 primary tabs (Folders / Analytics / Results / Fleet /
   Notifications) + "More" dropdown (Settings, Privacy).
-- **StatusBar** — live connection status, machine count, queries-today.
+- **StatusBar** — see §2a below. Two distinct branches depending on whether the user has connected to Sery.ai Cloud yet.
 - **Tray icon** (menu bar / system tray) — always present, even when
   window closed:
   - Show Window
@@ -130,6 +116,30 @@ with a `border-b bg-white px-6 py-4` header band containing a `text-2xl`
 title + purple accent icon + subtitle, then a `flex-1 overflow-y-auto
 p-6` scrollable content area. See `components/Analytics.tsx` as the
 reference implementation.
+
+### 2a. StatusBar — two branches
+
+**Local-only (default after install):**
+
+```
+┌── 🚫☁️ Local only · Nothing has been uploaded ───  0 queries today  [ 🔗 Connect ]
+```
+
+- Gray pill, `CloudOff` icon, plain slate background.
+- **"Connect" button** is the *only* entry point for going from
+  local-only → connected. Clicking it opens the ConnectModal (§7).
+
+**Connected:**
+
+```
+┌── ☁️ ● Connected ─────────────────────────  84 queries today  a3f1c920  [ ↪ ]
+```
+
+- Green dot (or amber "Connecting…" / rose "Connection error").
+- Stats-today + short agent id (first 8 chars of UUID for support-
+  triage).
+- Small **Disconnect** button on the right — confirms with a
+  standard dialog, clears keyring, drops back to local-only.
 
 ---
 
@@ -169,10 +179,12 @@ comes from `scan_progress` events in `useAgentStore.scansInFlight`.
 
 ---
 
-## 4. Fleet — multi-machine awareness
+## 4. Devices — multi-machine awareness
+
+*Route is still `/fleet` internally; sidebar label and page title both now read "Devices" per the local-first rework.*
 
 ```
-┌─ 💻 Your Fleet ────────────────────────────────────────────────────────────────┐
+┌─ 💻 Your Devices ──────────────────────────────────────────────────────────────┐
 │    Every Sery machine connected to this workspace.  [+ Add another machine]  │
 ├───────────────────────────────────────────────────────────────────────────────┤
 │  ● MacBook Pro                         [ This machine ]   1,204 files  340MB │
@@ -184,6 +196,25 @@ comes from `scan_progress` events in `useAgentStore.scansInFlight`.
 │  ○ Office Laptop                                         412 files  65 MB    │
 │    macOS 14 · office-mbp                                                      │
 │    (last seen 2 h ago)                                                        │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Local-only state:** when the user hasn't connected yet, this page
+shows a cloud-off empty state instead of the list above:
+
+```
+┌─ 💻 Your Devices ──────────────────────────────────────────────────────────────┐
+│                                                                               │
+│                        ☁️⃠                                                     │
+│                                                                               │
+│               Connect to see your devices                                    │
+│                                                                               │
+│  Sery is running locally on this machine. To pair it with your                │
+│  other machines and query across them, connect to Sery.ai with a              │
+│  workspace key.                                                               │
+│                                                                               │
+│                    [ 🔗 Connect to Sery.ai ]                                 │
+│                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -274,10 +305,59 @@ cache-hit rate.
 
 ---
 
-## 7. Pair a second machine
+## 7. Connect to Sery.ai Cloud
 
-Initiated from machine #1 via tray → Add Another Machine… OR Fleet →
-**+ Add another machine**:
+Primary entry point: the StatusBar's **Connect** button (local-only
+state only). Also reachable from the empty Fleet/Devices page.
+
+```
+┌────────────────────────────────────────────────────┐
+│  🔑 Connect to Sery.ai                         [×]│
+│                                                    │
+│  Paste a workspace key to enable cross-machine     │
+│  queries, the fleet view, and cloud sync.          │
+│                                                    │
+│  Workspace key                                     │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  sery_k_XXXXXXXXXXXXXXXXXXXX                │   │    monospace
+│  └─────────────────────────────────────────────┘   │
+│  Starts with sery_k_. Generated on the web         │
+│  dashboard.                                        │
+│                                                    │
+│  Name this machine                                 │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  My MacBook                                 │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                    │
+│  ┌─────────────────────────────────────────────┐   │
+│  │ Don't have a workspace key yet?             │   │
+│  │ ➔ Open the dashboard to create one          │   │    external link
+│  └─────────────────────────────────────────────┘   │
+│                                                    │
+│                     [Cancel]    [ Connect  → ]     │
+└────────────────────────────────────────────────────┘
+```
+
+**Flow:**
+1. User generates a key in the web dashboard (**Settings →
+   Workspace keys** — see `app-dashboard/src/app/settings/workspace-keys/page.tsx`). Key shown once; copy it.
+2. In Sery Link → StatusBar **Connect** → paste key → click Connect.
+3. `auth_with_key` command hits `/v1/agent/auth/key`, persists
+   the 30-day token to the OS keyring.
+4. WebSocket tunnel starts; Fleet view populates; schema-change
+   broadcast wiring becomes active.
+5. Modal closes, StatusBar flips to "Connected."
+
+**Friendly error mapping:**
+- 401 → "That key isn't recognized. Double-check you copied the whole thing, including the `sery_k_` prefix."
+- 403 → "That key has been revoked. Generate a fresh one in the dashboard."
+- 429 → "Too many attempts. Wait a minute and try again."
+- network / timeout → "Can't reach Sery.ai. Check your internet and try again."
+
+### 7a. Alternative: pair code (for adding machine #2, #3, …)
+
+Initiated from an already-connected machine via tray → Add Another
+Machine… OR Devices view → **+ Add another machine**:
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -422,7 +502,8 @@ That evening:
 | Thing | File |
 |---|---|
 | Onboarding wizard | `src/components/OnboardingWizard.tsx` |
-| Join-fleet form | `src/components/JoinFleetForm.tsx` |
+| Connect modal (workspace key) | `src/components/ConnectModal.tsx` |
+| Join-fleet form (pair code) | `src/components/JoinFleetForm.tsx` |
 | Main app shell | `src/App.tsx` |
 | Sidebar + route wiring | `src/App.tsx` |
 | Folders page | `src/components/FolderList.tsx` |
