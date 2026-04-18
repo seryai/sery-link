@@ -12,7 +12,6 @@ mod fleet;
 mod history;
 mod keyring_store;
 mod metadata_cache;
-mod pairing;
 mod plugin;
 mod plugin_marketplace;
 mod plugin_runtime;
@@ -113,9 +112,6 @@ pub fn run() {
             commands::start_auth_flow,
             commands::auth_with_key,
             commands::bootstrap_workspace,
-            commands::pair_request,
-            commands::pair_status,
-            commands::pair_complete,
             commands::list_fleet,
             commands::get_config,
             commands::save_config,

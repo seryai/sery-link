@@ -202,12 +202,17 @@ interface FolderCardProps {
 }
 
 function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCardProps) {
+  const navigate = useNavigate();
   const toast = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
   const [rescanning, setRescanning] = useState(false);
 
   const scanning = !!scan;
   const progress = scan && scan.total > 0 ? scan.current / scan.total : 0;
+
+  const openDetail = () => {
+    navigate(`/folders/${encodeURIComponent(folder.path)}`);
+  };
 
   const rescan = async () => {
     setRescanning(true);
@@ -243,7 +248,18 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
   };
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
+    <div
+      onClick={openDetail}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openDetail();
+        }
+      }}
+      className="group relative cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:border-purple-300 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-700"
+    >
       {/* Header row */}
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
@@ -268,7 +284,10 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
 
         <div className="flex shrink-0 items-center gap-1">
           <button
-            onClick={rescan}
+            onClick={(e) => {
+              e.stopPropagation();
+              void rescan();
+            }}
             disabled={scanning || rescanning}
             title="Rescan now"
             className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
@@ -279,7 +298,10 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
           </button>
           <div className="relative">
             <button
-              onClick={() => setMenuOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((v) => !v);
+              }}
               title="More actions"
               className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
             >
@@ -289,18 +311,27 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
               <>
                 <div
                   className="fixed inset-0 z-10"
-                  onClick={() => setMenuOpen(false)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                  }}
                 />
                 <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   <button
-                    onClick={reveal}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void reveal();
+                    }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700"
                   >
                     <FolderOpen className="h-4 w-4" />
                     Reveal in Finder
                   </button>
                   <button
-                    onClick={remove}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void remove();
+                    }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -363,7 +394,10 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
       {/* Analyze button - only show if folder has been scanned */}
       {folder.last_scan_stats && folder.last_scan_stats.datasets > 0 && onNavigateToAnalytics && (
         <button
-          onClick={() => onNavigateToAnalytics(folder.path)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onNavigateToAnalytics(folder.path);
+          }}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-4 py-2.5 text-sm font-semibold text-purple-700 transition-colors hover:bg-purple-100 hover:border-purple-300 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 dark:hover:border-purple-700"
         >
           <Sparkles className="h-4 w-4" />
