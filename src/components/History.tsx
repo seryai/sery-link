@@ -130,103 +130,109 @@ export function History() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl p-8">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">
-            Query Results
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            All queries executed on your local data, with results and performance metrics.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowStats(!showStats)}
-            disabled={history.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            <BarChart3 className="h-4 w-4" />
-            {showStats ? 'Hide' : 'Stats'}
-          </button>
-          <button
-            onClick={handleExport}
-            disabled={filtered.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            <Download className="h-4 w-4" />
-            Export
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={history.length === 0}
-            className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            <Trash2 className="h-4 w-4" />
-            Clear
-          </button>
-        </div>
-      </div>
-
-      {/* Statistics */}
-      {showStats && <Statistics history={history} />}
-
-      {/* Filter bar */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-800 dark:bg-slate-900">
-          <FilterPill
-            label="All"
-            count={counts.all}
-            active={filter === 'all'}
-            onClick={() => setFilter('all')}
-          />
-          <FilterPill
-            label="Success"
-            count={counts.ok}
-            active={filter === 'success'}
-            onClick={() => setFilter('success')}
-          />
-          <FilterPill
-            label="Errors"
-            count={counts.err}
-            active={filter === 'error'}
-            onClick={() => setFilter('error')}
-          />
-        </div>
-
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search file path, SQL, or error…"
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
-          />
+      <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+              <Clock className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              Query Results
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              All queries executed on your local data, with results and performance metrics.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowStats(!showStats)}
+              disabled={history.length === 0}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <BarChart3 className="h-4 w-4" />
+              {showStats ? 'Hide' : 'Stats'}
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Download className="h-4 w-4" />
+              Export
+            </button>
+            <button
+              onClick={handleClear}
+              disabled={history.length === 0}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Trash2 className="h-4 w-4" />
+              Clear
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* List */}
-      {filtered.length === 0 ? (
-        <EmptyState hasAny={history.length > 0} />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          {filtered.map((entry, idx) => {
-            const id = `${entry.query_id ?? 'anon'}-${entry.timestamp}-${idx}`;
-            const isOpen = expanded.has(id);
-            return (
-              <HistoryRow
-                key={id}
-                entry={entry}
-                isOpen={isOpen}
-                onToggle={() => toggle(id)}
-                isLast={idx === filtered.length - 1}
-              />
-            );
-          })}
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {/* Statistics */}
+        {showStats && <Statistics history={history} />}
+
+        {/* Filter bar */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-800 dark:bg-slate-900">
+            <FilterPill
+              label="All"
+              count={counts.all}
+              active={filter === 'all'}
+              onClick={() => setFilter('all')}
+            />
+            <FilterPill
+              label="Success"
+              count={counts.ok}
+              active={filter === 'success'}
+              onClick={() => setFilter('success')}
+            />
+            <FilterPill
+              label="Errors"
+              count={counts.err}
+              active={filter === 'error'}
+              onClick={() => setFilter('error')}
+            />
+          </div>
+
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search file path, SQL, or error…"
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
+            />
+          </div>
         </div>
-      )}
+
+        {/* List */}
+        {filtered.length === 0 ? (
+          <EmptyState hasAny={history.length > 0} />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            {filtered.map((entry, idx) => {
+              const id = `${entry.query_id ?? 'anon'}-${entry.timestamp}-${idx}`;
+              const isOpen = expanded.has(id);
+              return (
+                <HistoryRow
+                  key={id}
+                  entry={entry}
+                  isOpen={isOpen}
+                  onToggle={() => toggle(id)}
+                  isLast={idx === filtered.length - 1}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

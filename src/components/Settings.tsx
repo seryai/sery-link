@@ -178,68 +178,79 @@ export function Settings() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-          <SettingsIcon className="h-6 w-6 text-slate-700 dark:text-slate-300" />
-          Settings
-        </h1>
-        {dirty && (
-          <button
-            onClick={save}
-            disabled={saving}
-            className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
-          >
-            {saving ? (
-              <RefreshCw className="h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
-            {saving ? 'Saving…' : 'Save changes'}
-          </button>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header */}
+      <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+              <SettingsIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              Settings
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              Manage your Sery Link preferences, sync behavior, and plugins.
+            </p>
+          </div>
+          {dirty && (
+            <button
+              onClick={save}
+              disabled={saving}
+              className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+            >
+              {saving ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {/* Tab bar */}
+        <div className="mb-6 flex gap-1 border-b border-slate-200 dark:border-slate-800">
+          <TabButton active={tab === 'general'} onClick={() => setTab('general')}>
+            General
+          </TabButton>
+          <TabButton active={tab === 'sync'} onClick={() => setTab('sync')}>
+            Sync
+          </TabButton>
+          <TabButton active={tab === 'app'} onClick={() => setTab('app')}>
+            App
+          </TabButton>
+          <TabButton active={tab === 'plugins'} onClick={() => setTab('plugins')}>
+            Plugins
+          </TabButton>
+          <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')}>
+            Marketplace
+          </TabButton>
+          <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
+            About
+          </TabButton>
+        </div>
+
+        {/* Panels */}
+        {tab === 'general' && (
+          <GeneralPanel draft={draft} setDraft={setDraft} />
+        )}
+        {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
+        {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
+        {tab === 'plugins' && <PluginsPanel />}
+        {tab === 'marketplace' && <MarketplacePanel />}
+        {tab === 'about' && (
+          <AboutPanel
+            draft={draft}
+            agentId={agentInfo?.agent_id}
+            workspaceId={agentInfo?.workspace_id}
+            onLogout={logout}
+            onExport={exportConfig}
+            onImport={importConfig}
+          />
         )}
       </div>
-
-      {/* Tab bar */}
-      <div className="mb-6 flex gap-1 border-b border-slate-200 dark:border-slate-800">
-        <TabButton active={tab === 'general'} onClick={() => setTab('general')}>
-          General
-        </TabButton>
-        <TabButton active={tab === 'sync'} onClick={() => setTab('sync')}>
-          Sync
-        </TabButton>
-        <TabButton active={tab === 'app'} onClick={() => setTab('app')}>
-          App
-        </TabButton>
-        <TabButton active={tab === 'plugins'} onClick={() => setTab('plugins')}>
-          Plugins
-        </TabButton>
-        <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')}>
-          Marketplace
-        </TabButton>
-        <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
-          About
-        </TabButton>
-      </div>
-
-      {/* Panels */}
-      {tab === 'general' && (
-        <GeneralPanel draft={draft} setDraft={setDraft} />
-      )}
-      {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
-      {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
-      {tab === 'plugins' && <PluginsPanel />}
-      {tab === 'marketplace' && <MarketplacePanel />}
-      {tab === 'about' && (
-        <AboutPanel
-          draft={draft}
-          agentId={agentInfo?.agent_id}
-          workspaceId={agentInfo?.workspace_id}
-          onLogout={logout}
-          onExport={exportConfig}
-          onImport={importConfig}
-        />
-      )}
     </div>
   );
 }

@@ -29,47 +29,52 @@ export function Notifications() {
     [schemaNotifications],
   );
 
-  if (schemaNotifications.length === 0) {
-    return <EmptyState />;
-  }
-
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-            Schema changes
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            {schemaNotifications.length} total
-            {unreadCount > 0 ? ` · ${unreadCount} unread` : ''}
-          </p>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header */}
+      <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+              <Bell className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              Schema changes
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {schemaNotifications.length} total
+              {unreadCount > 0 ? ` · ${unreadCount} unread` : ''}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={markAllRead}
+              disabled={unreadCount === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Mark all read
+            </button>
+            <button
+              onClick={clearAll}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Clear
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={markAllRead}
-            disabled={unreadCount === 0}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            <Check className="h-3.5 w-3.5" />
-            Mark all read
-          </button>
-          <button
-            onClick={clearAll}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Clear
-          </button>
-        </div>
-      </header>
+      </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        <ul className="space-y-3">
-          {schemaNotifications.map((n) => (
-            <NotificationCard key={n.id} notification={n} />
-          ))}
-        </ul>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {schemaNotifications.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <ul className="space-y-3">
+            {schemaNotifications.map((n) => (
+              <NotificationCard key={n.id} notification={n} />
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

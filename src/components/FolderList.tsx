@@ -84,60 +84,66 @@ export function FolderList() {
   );
 
   return (
-    <div className="mx-auto max-w-5xl p-8">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
-      <div className="mb-6 flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">
-            Watched folders
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            {folders.length === 0
-              ? 'Add a folder to start analyzing your local data.'
-              : `${folders.length} folder${folders.length === 1 ? '' : 's'} · ${totalDatasets} dataset${totalDatasets === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {totalDatasets > 0 && (
+      <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+              <FolderIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              Watched folders
+            </h1>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+              {folders.length === 0
+                ? 'Add a folder to start analyzing your local data.'
+                : `${folders.length} folder${folders.length === 1 ? '' : 's'} · ${totalDatasets} dataset${totalDatasets === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {totalDatasets > 0 && (
+              <button
+                onClick={() => setShowGraph(true)}
+                className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                title="Visualize dataset relationships"
+              >
+                <Network className="h-4 w-4" />
+                Show Relationships
+              </button>
+            )}
             <button
-              onClick={() => setShowGraph(true)}
-              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-              title="Visualize dataset relationships"
+              onClick={addFolder}
+              disabled={busy}
+              className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+              title="Read-only access — your files are never modified"
             >
-              <Network className="h-4 w-4" />
-              Show Relationships
+              <Plus className="h-4 w-4" />
+              Watch Folder
             </button>
-          )}
-          <button
-            onClick={addFolder}
-            disabled={busy}
-            className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
-            title="Read-only access — your files are never modified"
-          >
-            <Plus className="h-4 w-4" />
-            Watch Folder
-          </button>
+          </div>
         </div>
       </div>
 
-      {folders.length === 0 ? (
-        <EmptyState onAdd={addFolder} busy={busy} />
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2">
-          {folders.map((folder) => (
-            <FolderCard
-              key={folder.path}
-              folder={folder}
-              scan={scansInFlight[folder.path]}
-              onChanged={reloadConfig}
-              onNavigateToAnalytics={(folderPath) => {
-                const encodedPath = encodeURIComponent(folderPath);
-                navigate(`/analytics/${encodedPath}`);
-              }}
-            />
-          ))}
-        </div>
-      )}
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {folders.length === 0 ? (
+          <EmptyState onAdd={addFolder} busy={busy} />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+            {folders.map((folder) => (
+              <FolderCard
+                key={folder.path}
+                folder={folder}
+                scan={scansInFlight[folder.path]}
+                onChanged={reloadConfig}
+                onNavigateToAnalytics={(folderPath) => {
+                  const encodedPath = encodeURIComponent(folderPath);
+                  navigate(`/analytics/${encodedPath}`);
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Relationship Graph Modal */}
       {showGraph && (
