@@ -235,7 +235,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                             // same one stored on disk — this lets mark-read
                             // work offline and across app restarts.
                             let origin = config_for_diff.agent.agent_id.clone();
-                            let stored = crate::schema_notifications::record_with_origin(
+                            let stored = crate::schema_notifications::record(
                                 workspace_id,
                                 &ds.relative_path,
                                 &dataset_name,

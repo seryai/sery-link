@@ -381,7 +381,7 @@ impl WebSocketClient {
         // "this change happened on my laptop" vs "on my desktop."
         let tagged_name = format!("{} (from {})", dataset_name, origin_agent);
 
-        if let Ok(stored) = crate::schema_notifications::record_with_origin(
+        if let Ok(stored) = crate::schema_notifications::record(
             &workspace_id,
             &dataset_path,
             &tagged_name,
