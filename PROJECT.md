@@ -402,6 +402,13 @@ Sidebar:
 Old: flat nav, all items equal weight, recipes buried 2 levels deep in Settings.
 New: hierarchical — primary workflow (Folders → Analytics → Results) vs. secondary config (More).
 
+### Current shipped UX (for a complete walkthrough)
+See [UX_WALKTHROUGH.md](./UX_WALKTHROUGH.md) for the end-to-end
+user-facing flow: first run, main shell, every tab, pair-a-machine
+modal, daily loop, and UX design principles. That document reflects
+shipped reality (updated 2026-04-18); this section captures the
+strategic direction that got us there.
+
 ### Open UX direction (from independent review, April 2026)
 See independent UX analysis in `archive/2026-04/` (OBSIDIAN_INSPIRED_IMPROVEMENTS, NAVIGATION_BEFORE_AFTER, UX_RESTRUCTURE_SUMMARY). Three strategic paths under consideration for next iteration:
 - **Path A (Utility):** Menu-bar-first, web dashboard remains primary chat UI. Sery Link = data connector.
