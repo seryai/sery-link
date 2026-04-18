@@ -12,10 +12,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Bell, Laptop } from 'lucide-react';
+import { Bell, CloudOff, Laptop, Link as LinkIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAgentStore } from '../stores/agentStore';
 import { AddMachineModal } from './AddMachineModal';
+import { ConnectModal } from './ConnectModal';
 
 type FleetAgent = {
   agent_id: string;
@@ -44,12 +45,19 @@ interface Props {
 }
 
 export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
+  const authenticated = useAgentStore((s) => s.authenticated);
   const [fleet, setFleet] = useState<FleetResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
 
   const fetchFleet = useCallback(async () => {
+    if (!authenticated) {
+      setFleet(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -61,15 +69,18 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [onFleetUpdated]);
+  }, [authenticated, onFleetUpdated]);
 
   // Initial load + poll every 15s so online/offline transitions surface
   // without a manual refresh. 15s keeps Redis presence (30s TTL) visible.
+  // Polling is skipped while unauthenticated — no point hitting an
+  // endpoint that requires a token.
   useEffect(() => {
     fetchFleet();
+    if (!authenticated) return;
     const id = window.setInterval(fetchFleet, 15_000);
     return () => window.clearInterval(id);
-  }, [fetchFleet]);
+  }, [authenticated, fetchFleet]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -79,13 +90,13 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
           <div>
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
               <Laptop className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-              Your Fleet
+              Your Devices
             </h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
               Every Sery machine connected to this workspace.
             </p>
           </div>
-          {!hideAddButton && (
+          {authenticated && !hideAddButton && (
             <button
               onClick={() => setShowAddModal(true)}
               className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
@@ -99,13 +110,39 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
 
-      {loading && !fleet && (
+      {!authenticated && (
+        <div className="flex h-full flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 p-12 text-center dark:border-slate-700">
+          <CloudOff className="h-10 w-10 text-slate-400 dark:text-slate-600" />
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              Connect to see your devices
+            </h2>
+            <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">
+              Sery is running locally on this machine. To pair it with
+              your other machines and query across them, connect to
+              Sery.ai with a workspace key.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowConnectModal(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          >
+            <LinkIcon className="h-4 w-4" />
+            Connect to Sery.ai
+          </button>
+          {showConnectModal && (
+            <ConnectModal onClose={() => setShowConnectModal(false)} />
+          )}
+        </div>
+      )}
+
+      {authenticated && loading && !fleet && (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
           Loading fleet…
         </div>
       )}
 
-      {error && !loading && (
+      {authenticated && error && !loading && (
         <div className="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
           Couldn't load fleet. {error}{' '}
           <button className="underline" onClick={fetchFleet}>
@@ -114,7 +151,7 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
         </div>
       )}
 
-      {fleet && fleet.agents.length === 0 && !loading && (
+      {authenticated && fleet && fleet.agents.length === 0 && !loading && (
         <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
           <p className="text-sm text-slate-600 dark:text-slate-400">
             No machines yet. Your workspace is empty.
@@ -130,7 +167,7 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
         </div>
       )}
 
-      {fleet && fleet.agents.length > 0 && (
+      {authenticated && fleet && fleet.agents.length > 0 && (
         <FleetList agents={fleet.agents} />
       )}
       </div>

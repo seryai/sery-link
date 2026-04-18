@@ -104,36 +104,51 @@ function AppInner() {
     };
   }, [showMoreDropdown]);
 
-  // Bootstrap: existing token? → load config + stats, start tunnel + watcher
+  // Bootstrap on launch.
+  //
+  // Local-first: we always load config + stats + start the file
+  // watcher so local scanning works even when the user has never
+  // connected to the cloud. Only cloud-specific pieces (tunnel,
+  // cached agent info, schema-notification hydration) are gated on
+  // `has_token` being true.
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
       try {
-        const hasToken = await invoke<boolean>('has_token');
+        // 1. Always-on local state: config (theme, first_run flag,
+        //    watched folders), stats (queries-today, etc.).
+        try {
+          const config = await invoke<AgentConfig>('get_config');
+          if (!cancelled) setConfig(config);
+        } catch (err) {
+          console.error('Failed to load config:', err);
+        }
+        try {
+          const stats = await invoke<AgentStats>('get_stats');
+          if (!cancelled) setStats(stats);
+        } catch (err) {
+          console.error('Failed to load stats:', err);
+        }
+
+        // 2. Local file watcher — runs in both local-only AND
+        //    connected mode. The watcher only dispatches cloud sync
+        //    inside sync_folder when a token is present (see
+        //    src-tauri/src/watcher.rs).
+        invoke('start_file_watcher').catch((err) =>
+          console.error('File watcher failed to start:', err),
+        );
+
+        // 3. Cloud-only pieces — gated on an existing token. New
+        //    installs skip this entire block until the user clicks
+        //    Connect from the StatusBar.
+        const hasToken = await invoke<boolean>('has_token').catch(() => false);
         if (hasToken) {
           const agentInfo = await invoke<AgentToken | null>('get_agent_info');
-          if (agentInfo) {
+          if (agentInfo && !cancelled) {
             setAgentInfo(agentInfo);
             setAuthenticated(true);
 
-            try {
-              const config = await invoke<AgentConfig>('get_config');
-              if (!cancelled) setConfig(config);
-            } catch (err) {
-              console.error('Failed to load config:', err);
-            }
-
-            try {
-              const stats = await invoke<AgentStats>('get_stats');
-              if (!cancelled) setStats(stats);
-            } catch (err) {
-              console.error('Failed to load stats:', err);
-            }
-
-            // Hydrate the notifications store from disk so past schema
-            // changes survive app restart. Fire-and-forget — missing
-            // notifications don't block any other bootstrap step.
             try {
               const stored = await invoke<StoredSchemaNotification[]>(
                 'get_schema_notifications',
@@ -144,21 +159,9 @@ function AppInner() {
               console.error('Failed to load schema notifications:', err);
             }
 
-            // Fire-and-forget — the event listeners will surface success/failure
             invoke('start_websocket_tunnel').catch((err) =>
               console.error('WebSocket tunnel failed to start:', err),
             );
-            invoke('start_file_watcher').catch((err) =>
-              console.error('File watcher failed to start:', err),
-            );
-          }
-        } else {
-          // No token — still try to load config so theme/onboarding state is set
-          try {
-            const config = await invoke<AgentConfig>('get_config');
-            if (!cancelled) setConfig(config);
-          } catch (err) {
-            console.error('Failed to load config:', err);
           }
         }
       } catch (err) {
@@ -263,7 +266,7 @@ function AppInner() {
               }
             >
               <Laptop className="h-4 w-4" />
-              Fleet
+              Devices
             </NavLink>
             <NotificationsNavLink />
 
