@@ -343,7 +343,7 @@ function AppInner() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />
-            <Route path="/fleet" element={<div className="p-8"><FleetView /></div>} />
+            <Route path="/fleet" element={<FleetView />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />
