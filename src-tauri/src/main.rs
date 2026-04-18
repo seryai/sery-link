@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    SeryLink_lib::run()
+    sery_link_lib::run()
 }

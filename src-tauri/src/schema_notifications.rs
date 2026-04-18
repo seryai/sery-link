@@ -67,30 +67,12 @@ fn path() -> Result<PathBuf> {
 /// don't want it re-appearing as unread three seconds later. If a
 /// genuinely new state landing later matters, the next scan will
 /// observe a different diff (not dedupable) and surface cleanly.
+///
+/// `origin_agent_id` identifies which fleet member observed the
+/// change. Callers that don't know (or don't care — e.g. tests)
+/// pass `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn record(
-    workspace_id: &str,
-    dataset_path: &str,
-    dataset_name: &str,
-    added: u64,
-    removed: u64,
-    type_changed: u64,
-    diff: SchemaDiff,
-) -> Result<StoredNotification> {
-    record_with_origin(
-        workspace_id,
-        dataset_path,
-        dataset_name,
-        added,
-        removed,
-        type_changed,
-        diff,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn record_with_origin(
     workspace_id: &str,
     dataset_path: &str,
     dataset_name: &str,
@@ -350,6 +332,31 @@ mod tests {
                     column_type: "VARCHAR".into(),
                 },
             ],
+        )
+    }
+
+    /// Test-only wrapper — forwards to the real `record` with
+    /// `origin_agent_id = None`. Keeps the existing test call shapes
+    /// unchanged and avoids a production dead-code warning on a
+    /// convenience wrapper nobody would call at runtime.
+    fn record(
+        workspace_id: &str,
+        dataset_path: &str,
+        dataset_name: &str,
+        added: u64,
+        removed: u64,
+        type_changed: u64,
+        diff: SchemaDiff,
+    ) -> Result<StoredNotification> {
+        super::record(
+            workspace_id,
+            dataset_path,
+            dataset_name,
+            added,
+            removed,
+            type_changed,
+            diff,
+            None,
         )
     }
 
