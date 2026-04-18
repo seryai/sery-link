@@ -25,18 +25,17 @@ import { useAgentStore, type AgentToken } from './stores/agentStore';
 import seryLogo from './assets/sery-logo.svg';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
-import { useTrayAddMachineListener } from './hooks/useTrayEvents';
 import { ToastProvider } from './components/Toast';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
+import { FolderDetail } from './components/FolderDetail';
 import { Analytics } from './components/Analytics';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
 import { FleetView } from './components/FleetView';
 import { Notifications } from './components/Notifications';
-import { AddMachineModal } from './components/AddMachineModal';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { CommandPalette } from './components/CommandPalette';
@@ -57,11 +56,7 @@ function AppInner() {
   const location = useLocation();
   const [showMoreDropdown, setShowMoreDropdown] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
-  const [showAddMachineModal, setShowAddMachineModal] = useState(false);
 
-  // Tray menu → React bridge. Clicking "Add Another Machine…" in the
-  // macOS/Windows tray fires this event; open the pair modal in response.
-  useTrayAddMachineListener(() => setShowAddMachineModal(true));
   const {
     agentInfo,
     config,
@@ -266,7 +261,7 @@ function AppInner() {
               }
             >
               <Laptop className="h-4 w-4" />
-              Devices
+              Machines
             </NavLink>
             <NotificationsNavLink />
 
@@ -343,6 +338,7 @@ function AppInner() {
           <Routes>
             <Route path="/" element={<Navigate to="/folders" replace />} />
             <Route path="/folders" element={<FolderList />} />
+            <Route path="/folders/:folderId" element={<FolderDetail />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />
@@ -369,16 +365,6 @@ function AppInner() {
           setShowMoreDropdown(false);
         }}
       />
-      {showAddMachineModal && (
-        <AddMachineModal
-          onClose={() => setShowAddMachineModal(false)}
-          onPaired={() => {
-            // New machine joined — jump to the fleet so the user sees
-            // it in context.
-            navigate('/fleet');
-          }}
-        />
-      )}
     </div>
   );
 }

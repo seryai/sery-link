@@ -11,7 +11,6 @@ import {
   Folder,
   FolderOpen,
   Laptop,
-  Plus,
   RefreshCw,
   Settings as SettingsIcon,
   Shield,
@@ -96,7 +95,7 @@ export function CommandPalette({
       },
       {
         id: 'nav-fleet',
-        label: 'Go to Fleet',
+        label: 'Go to Machines',
         description: 'See all the machines connected to this workspace',
         icon: <Laptop className="h-4 w-4" />,
         keywords: ['fleet', 'machines', 'devices', 'agents', 'pair', 'navigate'],
@@ -105,22 +104,6 @@ export function CommandPalette({
           setIsOpen(false);
         },
         section: 'navigation',
-      },
-      {
-        id: 'add-machine',
-        label: 'Add Another Machine',
-        description: 'Pair a second machine via QR code or pair code',
-        icon: <Plus className="h-4 w-4" />,
-        keywords: ['pair', 'add machine', 'connect machine', 'fleet', 'qr'],
-        action: () => {
-          // Route through /fleet — the FleetView page has the "Add a
-          // machine" button which opens AddMachineModal. Avoids duplicating
-          // the modal-trigger wiring in two places. (The tray menu uses
-          // a Tauri event for the same effect.)
-          onNavigate('fleet');
-          setIsOpen(false);
-        },
-        section: 'actions',
       },
       {
         id: 'nav-privacy',

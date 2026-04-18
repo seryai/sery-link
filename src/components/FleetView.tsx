@@ -1,12 +1,13 @@
-// Fleet view — "My Devices" list.
+// Machines view — "My Machines" list.
 //
 // Calls the list_fleet Tauri command (wraps GET /v1/agent/workspace/fleet
 // on the backend). Renders one row per agent with live online status,
-// dataset count, storage used, and an "Add another machine" entry point
-// that opens <AddMachineModal>.
+// dataset count, and storage used.
 //
-// Self-contained: no router changes, no parent-component dependencies.
-// Parent decides where to render it (settings tab, dedicated route, etc.).
+// Adding a new machine: users generate a workspace key on the web
+// dashboard (Settings → Workspace keys) and paste it into Sery Link's
+// ConnectModal on the new machine. The one-time pair-code flow was
+// removed in favor of the single workspace-key path.
 //
 // Paired backend: api/app/api/v1/fleet.py.
 
@@ -15,7 +16,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { Bell, CloudOff, Laptop, Link as LinkIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAgentStore } from '../stores/agentStore';
-import { AddMachineModal } from './AddMachineModal';
 import { ConnectModal } from './ConnectModal';
 
 type FleetAgent = {
@@ -49,7 +49,6 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
   const [fleet, setFleet] = useState<FleetResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
 
   const fetchFleet = useCallback(async () => {
@@ -97,12 +96,15 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
             </p>
           </div>
           {authenticated && !hideAddButton && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+            <a
+              href="https://app.sery.ai/settings/workspace-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+              title="Open the dashboard to create a workspace key. Paste it into Sery Link on your other machines to pair them."
             >
               + Add another machine
-            </button>
+            </a>
           )}
         </div>
       </div>
@@ -154,15 +156,21 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
       {authenticated && fleet && fleet.agents.length === 0 && !loading && (
         <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            No machines yet. Your workspace is empty.
+            Only this machine is connected so far.
+          </p>
+          <p className="mt-2 max-w-md mx-auto text-xs text-slate-500 dark:text-slate-400">
+            To pair another machine, generate a workspace key on the
+            dashboard and paste it into Sery Link on the new machine.
           </p>
           {!hideAddButton && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="mt-4 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+            <a
+              href="https://app.sery.ai/settings/workspace-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-block rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
             >
-              Add your first machine
-            </button>
+              Open dashboard → create key
+            </a>
           )}
         </div>
       )}
@@ -171,17 +179,6 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
         <FleetList agents={fleet.agents} />
       )}
       </div>
-
-      {showAddModal && (
-        <AddMachineModal
-          onClose={() => setShowAddModal(false)}
-          onPaired={() => {
-            // A new machine just joined — refresh the list so the user
-            // sees it appear immediately, not on the next 15s tick.
-            fetchFleet();
-          }}
-        />
-      )}
     </div>
   );
 }

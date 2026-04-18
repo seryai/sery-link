@@ -17,7 +17,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 // ---------------------------------------------------------------------------
@@ -28,19 +28,10 @@ const MI_STATUS: &str = "status_header";
 const MI_QUERIES_TODAY: &str = "stats_today";
 const MI_SHOW: &str = "show_window";
 const MI_HIDE: &str = "hide_window";
-const MI_ADD_MACHINE: &str = "add_machine";
 const MI_PAUSE_SYNC: &str = "pause_sync";
 const MI_RESUME_SYNC: &str = "resume_sync";
 const MI_OPEN_WEB: &str = "open_web";
 const MI_QUIT: &str = "quit";
-
-/// Event emitted to the frontend when the tray's "Add another machine"
-/// item is clicked. React code that wants to surface the pair flow
-/// should listen for this via `listen("tray:show-add-machine", ...)`.
-///
-/// The handler also pops the main window so the modal has somewhere to
-/// render.
-pub const EVENT_SHOW_ADD_MACHINE: &str = "tray:show-add-machine";
 
 // ---------------------------------------------------------------------------
 // Global tray handle — tray events come in on background threads so we need
@@ -143,13 +134,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
 
     let show = MenuItem::with_id(app, MI_SHOW, "Show Sery Link", true, Some("CmdOrCtrl+1"))?;
     let hide = MenuItem::with_id(app, MI_HIDE, "Hide Window", true, None::<&str>)?;
-    let add_machine = MenuItem::with_id(
-        app,
-        MI_ADD_MACHINE,
-        "Add Another Machine…",
-        true,
-        None::<&str>,
-    )?;
 
     let sep2 = PredefinedMenuItem::separator(app)?;
 
@@ -174,7 +158,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
             &sep1,
             &show,
             &hide,
-            &add_machine,
             &sep2,
             &sync_toggle,
             &open_web,
@@ -220,16 +203,6 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     match event.id.as_ref() {
         MI_SHOW => show_main_window(app),
         MI_HIDE => hide_main_window(app),
-        MI_ADD_MACHINE => {
-            // Ensure the main window is visible before asking the frontend to
-            // render the modal — otherwise users would click the menu item
-            // from a hidden-window state and nothing would appear.
-            show_main_window(app);
-            // Emit the event — the frontend listener decides how to render.
-            // eat the error: failing to emit just means no modal opens;
-            // the menu click shouldn't crash the app.
-            let _ = app.emit(EVENT_SHOW_ADD_MACHINE, ());
-        }
         MI_PAUSE_SYNC => set_paused(app, true),
         MI_RESUME_SYNC => set_paused(app, false),
         MI_OPEN_WEB => {
