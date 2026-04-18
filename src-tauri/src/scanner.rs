@@ -188,7 +188,21 @@ fn scan_folder_blocking(
 
         match extract_metadata(path, folder_path) {
             Ok(metadata) => datasets.push(metadata),
-            Err(e) => eprintln!("[scanner] failed to extract metadata from {:?}: {}", path, e),
+            Err(e) => {
+                // Full extraction failed — most commonly because DuckDB's
+                // CSV sniffer rejected a file it couldn't parse, or an
+                // Excel file was corrupted. We still want the user to see
+                // the file exists in the folder detail view, just without
+                // queryable schema. Build a minimal DatasetMetadata from
+                // the filesystem-level info we DO have.
+                eprintln!(
+                    "[scanner] schema extraction failed for {:?} — degrading to file-only entry: {}",
+                    path, e
+                );
+                if let Ok(fallback) = extract_minimal_metadata(path, folder_path) {
+                    datasets.push(fallback);
+                }
+            }
         }
     }
 
@@ -230,6 +244,44 @@ fn is_excluded(path: &Path, base: &str, patterns: &[Pattern]) -> bool {
         }
     }
     false
+}
+
+/// Last-resort metadata builder for files whose schema extraction blew up
+/// (malformed CSV, corrupted Excel, permission denied mid-read). Returns
+/// just the file-system facts so the file still surfaces in the Folder
+/// detail view — user can see it exists, decide whether to investigate.
+///
+/// Errors only when the filesystem itself can't tell us about the file.
+fn extract_minimal_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata> {
+    let file_metadata = fs::metadata(file_path)
+        .map_err(|e| AgentError::FileSystem(format!("Failed to read file metadata: {}", e)))?;
+    let relative_path = file_path
+        .strip_prefix(base_path)
+        .map_err(|e| AgentError::FileSystem(format!("Failed to get relative path: {}", e)))?
+        .to_string_lossy()
+        .to_string();
+    let ext = file_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let last_modified = file_metadata
+        .modified()
+        .ok()
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+    Ok(DatasetMetadata {
+        relative_path,
+        file_format: ext,
+        size_bytes: file_metadata.len(),
+        row_count_estimate: None,
+        schema: vec![],
+        last_modified,
+        document_markdown: None,
+        sample_rows: None,
+        samples_redacted: false,
+    })
 }
 
 fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata> {
