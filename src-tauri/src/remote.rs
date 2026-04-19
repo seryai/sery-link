@@ -36,7 +36,15 @@ pub struct RemoteHeadInfo {
 /// Errors only when the HEAD request itself fails (network, DNS). A
 /// 2xx with no Last-Modified / Content-Length is a success with
 /// `None` fields — the server is allowed to omit them.
+///
+/// Returns `Ok(default)` immediately for s3:// URLs — reqwest can't
+/// sign AWS requests and the scan cache tolerates missing freshness
+/// hints. S3 object metadata can still be fetched via DuckDB if we
+/// need it later.
 pub async fn head_probe(url: &str) -> Result<RemoteHeadInfo> {
+    if crate::url::is_s3_url(url) {
+        return Ok(RemoteHeadInfo::default());
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         // Follow redirects — many CDNs 301 to a signed URL.
@@ -114,6 +122,14 @@ pub fn scan_remote_blocking(
     // queries. Runs once per scan — cheap.
     install_httpfs(&conn)?;
 
+    // S3 URLs need credentials pushed into the connection before the
+    // query. Loaded from the keyring entry the UI wrote when the
+    // source was added. A missing entry is a user-visible error —
+    // we can't silently try an anonymous fetch against a private bucket.
+    if crate::url::is_s3_url(url) {
+        apply_s3_credentials(&conn, url)?;
+    }
+
     let escaped_url = url.replace('\'', "''");
 
     // Trace so a crash mid-fetch tells us which URL tripped things.
@@ -152,10 +168,30 @@ pub fn scan_remote_blocking(
     })
 }
 
+/// Push stored S3 credentials into this DuckDB session via the legacy
+/// `SET s3_*` syntax. Called by any remote query path that touches an
+/// `s3://` URL — scanner and profile both share this.
+///
+/// Public so `commands::profile_remote` can reuse the same statements
+/// without duplicating the keyring lookup.
+pub(crate) fn apply_s3_credentials(conn: &Connection, url: &str) -> Result<()> {
+    let creds = crate::remote_creds::load(url)
+        .map_err(|e| AgentError::Config(format!("lookup s3 creds: {}", e)))?
+        .ok_or_else(|| {
+            AgentError::Config(format!(
+                "no S3 credentials saved for {}. Remove and re-add the source.",
+                url
+            ))
+        })?;
+    let sql = crate::remote_creds::duckdb_setters(&creds);
+    conn.execute_batch(&sql)
+        .map_err(|e| AgentError::Database(format!("set s3 creds: {}", e)))
+}
+
 /// Load DuckDB's httpfs extension. No-op if it's already installed in
 /// the user's DuckDB extension directory (the download only happens on
 /// first ever call, then it's cached in `~/.duckdb/extensions/`).
-fn install_httpfs(conn: &Connection) -> Result<()> {
+pub(crate) fn install_httpfs(conn: &Connection) -> Result<()> {
     // INSTALL before LOAD — bundled DuckDB only ships the core; the
     // httpfs extension is downloaded from extensions.duckdb.org on
     // first use and cached in the user's home dir.

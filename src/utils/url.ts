@@ -8,7 +8,15 @@
 
 export function isRemoteUrl(path: string): boolean {
   const lower = path.trim().toLowerCase();
-  return lower.startsWith('http://') || lower.startsWith('https://');
+  return (
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('s3://')
+  );
+}
+
+export function isS3Url(path: string): boolean {
+  return path.trim().toLowerCase().startsWith('s3://');
 }
 
 /// Pull a user-meaningful display name out of a URL. Mirrors

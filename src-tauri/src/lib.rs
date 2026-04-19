@@ -18,6 +18,7 @@ mod plugin_runtime;
 mod recipe_executor;
 mod relationship_detector;
 mod remote;
+mod remote_creds;
 mod scan_cache;
 mod scanner;
 mod url;

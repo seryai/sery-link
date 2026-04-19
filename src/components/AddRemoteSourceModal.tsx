@@ -7,13 +7,21 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Globe, Loader2, X } from 'lucide-react';
+import { Globe, KeyRound, Loader2, X } from 'lucide-react';
 import { useToast } from './Toast';
+import { isS3Url } from '../utils/url';
 
 interface AddRemoteSourceModalProps {
   open: boolean;
   onClose: () => void;
   onAdded: (url: string) => void;
+}
+
+interface S3Credentials {
+  access_key_id: string;
+  secret_access_key: string;
+  region: string;
+  session_token?: string;
 }
 
 export function AddRemoteSourceModal({
@@ -22,21 +30,45 @@ export function AddRemoteSourceModal({
   onAdded,
 }: AddRemoteSourceModalProps) {
   const [url, setUrl] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [region, setRegion] = useState('us-east-1');
+  const [sessionToken, setSessionToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
 
   if (!open) return null;
 
-  const insecure = url.trim().toLowerCase().startsWith('http://');
+  const trimmedUrl = url.trim();
+  const isS3 = isS3Url(trimmedUrl);
+  const insecure = trimmedUrl.toLowerCase().startsWith('http://');
+
+  const resetForm = () => {
+    setUrl('');
+    setAccessKey('');
+    setSecretKey('');
+    setRegion('us-east-1');
+    setSessionToken('');
+    setError(null);
+  };
 
   const submit = async () => {
     setError(null);
     setBusy(true);
     try {
-      const normalised = await invoke<string>('add_remote_source', { url });
-      toast.success('Remote source added');
-      setUrl('');
+      const args: { url: string; credentials?: S3Credentials } = { url };
+      if (isS3) {
+        args.credentials = {
+          access_key_id: accessKey.trim(),
+          secret_access_key: secretKey.trim(),
+          region: region.trim(),
+          session_token: sessionToken.trim() || undefined,
+        };
+      }
+      const normalised = await invoke<string>('add_remote_source', args);
+      toast.success(isS3 ? 'S3 source added' : 'Remote source added');
+      resetForm();
       onAdded(normalised);
       onClose();
     } catch (err) {
@@ -45,6 +77,14 @@ export function AddRemoteSourceModal({
       setBusy(false);
     }
   };
+
+  const canSubmit =
+    !busy &&
+    trimmedUrl !== '' &&
+    (!isS3 ||
+      (accessKey.trim() !== '' &&
+        secretKey.trim() !== '' &&
+        region.trim() !== ''));
 
   return (
     <div
@@ -83,19 +123,83 @@ export function AddRemoteSourceModal({
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && url.trim() && !busy) submit();
+            if (e.key === 'Enter' && canSubmit) submit();
           }}
-          placeholder="https://example.com/data.csv"
+          placeholder="https://example.com/data.csv  or  s3://bucket/path/file.parquet"
           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
         />
 
-        {insecure && url.trim() !== '' && (
+        {insecure && trimmedUrl !== '' && (
           <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
             This URL uses <span className="font-mono">http://</span> — the
             connection isn't encrypted. OK for local or internal endpoints,
             but prefer <span className="font-mono">https://</span> for public
             data.
           </p>
+        )}
+
+        {isS3 && (
+          <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+              <KeyRound className="h-3.5 w-3.5" />
+              AWS credentials
+            </div>
+            <p className="mb-3 text-xs text-purple-800/80 dark:text-purple-200/80">
+              Keys are saved to your macOS Keychain and used only to read this
+              bucket. They never leave your machine — queries run in DuckDB on
+              your laptop.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Access key ID
+                </span>
+                <input
+                  type="text"
+                  value={accessKey}
+                  onChange={(e) => setAccessKey(e.target.value)}
+                  placeholder="AKIA…"
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Secret access key
+                </span>
+                <input
+                  type="password"
+                  value={secretKey}
+                  onChange={(e) => setSecretKey(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Region
+                </span>
+                <input
+                  type="text"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  placeholder="us-east-1"
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Session token (optional)
+                </span>
+                <input
+                  type="password"
+                  value={sessionToken}
+                  onChange={(e) => setSessionToken(e.target.value)}
+                  placeholder="Only for temporary STS creds"
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+                />
+              </label>
+            </div>
+          </div>
         )}
 
         {error && (
@@ -108,13 +212,14 @@ export function AddRemoteSourceModal({
           <strong className="text-slate-800 dark:text-slate-200">
             What works:
           </strong>{' '}
-          public HTTPS links to <code>.csv</code> or <code>.parquet</code>{' '}
-          files. No login required.
+          public HTTPS links to <code>.csv</code>/<code>.parquet</code>,{' '}
+          and <code>s3://bucket/path/file.parquet</code>-style S3 objects
+          (with AWS keys).
           <br />
           <strong className="text-slate-800 dark:text-slate-200">
             Not yet:
           </strong>{' '}
-          S3 / GCS buckets (need credentials), Google Sheets, databases.
+          full S3 bucket listing, GCS / Azure, Google Sheets, databases.
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-2">
@@ -127,7 +232,7 @@ export function AddRemoteSourceModal({
           </button>
           <button
             onClick={submit}
-            disabled={busy || url.trim() === ''}
+            disabled={!canSubmit}
             className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
