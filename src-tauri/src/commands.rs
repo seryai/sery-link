@@ -417,7 +417,6 @@ pub async fn profile_dataset(
 }
 
 fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<ColumnProfile>, String> {
-    use duckdb::Connection;
     use std::borrow::Cow;
     use std::path::{Path, PathBuf};
 
@@ -472,60 +471,86 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     };
 
     let path_str = effective_path.to_string_lossy().replace('\'', "''");
+
+    // Run the DuckDB work inside catch_unwind. duckdb-rs occasionally
+    // panics inside its C bindings (e.g. when Statement::column_names()
+    // is called before the query has been executed — the original
+    // version of this function hit exactly that panic). catch_unwind
+    // catches Rust panics (not foreign exceptions) and converts them
+    // into a normal error so the frontend shows a friendly message
+    // instead of the whole spawn_blocking task aborting.
+    let read_func_owned = read_func.to_string();
+    let path_owned = path_str;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        run_summarize(&read_func_owned, &path_owned)
+    }));
+
+    match result {
+        Ok(r) => r,
+        Err(_payload) => Err(
+            "profile panicked inside DuckDB — this file may be malformed or use \
+             an unsupported type. Try re-scanning the folder."
+                .to_string(),
+        ),
+    }
+}
+
+/// Execute SUMMARIZE and materialize the result into `ColumnProfile` rows.
+/// Split out of `profile_blocking` so the whole DuckDB interaction sits
+/// inside a single `catch_unwind` boundary.
+///
+/// Columns are accessed by NAME inside the per-row closure rather than
+/// via `Statement::column_names()` — the latter panicked in duckdb-rs
+/// when called before the statement had been stepped.
+fn run_summarize(read_func: &str, path_str: &str) -> Result<Vec<ColumnProfile>, String> {
+    use duckdb::Connection;
+
     let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
-
-    // SUMMARIZE returns a multi-column result with fixed semantics across
-    // DuckDB 1.x. We address columns by name so a version bump that
-    // reorders them doesn't silently misread data. Not every column is
-    // relevant to every type, so most fields are Option<_>.
-    let sql = format!("SUMMARIZE SELECT * FROM {}('{}')", read_func, path_str);
+    // Wrap SUMMARIZE in a regular SELECT. Running `SUMMARIZE <query>`
+    // as a top-level statement goes through a code path in duckdb-rs
+    // that panicked inside `raw_statement.rs` at line 239
+    // (`Option::unwrap()` on None) because the column metadata wasn't
+    // populated the same way as a normal result set. Wrapping it as a
+    // subquery makes DuckDB treat it as an ordinary SELECT and the
+    // column info arrives before we start iterating rows.
+    let sql = format!(
+        "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
+        read_func, path_str
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-
-    // Index by column name so we don't depend on positional ordering.
-    let column_names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let idx = |name: &str| column_names.iter().position(|n| n == name);
-
-    let name_idx = idx("column_name").ok_or("missing column_name")?;
-    let type_idx = idx("column_type").ok_or("missing column_type")?;
-    let count_idx = idx("count");
-    let null_pct_idx = idx("null_percentage");
-    let approx_unique_idx = idx("approx_unique");
-    let min_idx = idx("min");
-    let max_idx = idx("max");
-    let avg_idx = idx("avg");
-    let std_idx = idx("std");
 
     let rows = stmt
         .query_map([], |row| {
-            let get_opt_string = |i: Option<usize>| -> Option<String> {
-                i.and_then(|idx| row.get::<_, Option<String>>(idx).ok().flatten())
+            // Helpers that return None on any lookup/conversion error
+            // (wrong-type column, absent column, null). This way a
+            // version bump that drops or renames one SUMMARIZE column
+            // just leaves that field blank instead of breaking the
+            // whole profile.
+            let str_by_name = |name: &str| -> Option<String> {
+                row.get::<_, Option<String>>(name).ok().flatten()
             };
-            let get_opt_i64 = |i: Option<usize>| -> Option<i64> {
-                i.and_then(|idx| row.get::<_, Option<i64>>(idx).ok().flatten())
+            let i64_by_name = |name: &str| -> Option<i64> {
+                row.get::<_, Option<i64>>(name).ok().flatten()
             };
-            let get_opt_f64 = |i: Option<usize>| -> Option<f64> {
-                i.and_then(|idx| row.get::<_, Option<f64>>(idx).ok().flatten())
+            let f64_by_name = |name: &str| -> Option<f64> {
+                row.get::<_, Option<f64>>(name).ok().flatten()
             };
 
             Ok(ColumnProfile {
-                column_name: row.get::<_, String>(name_idx).unwrap_or_default(),
-                column_type: row.get::<_, String>(type_idx).unwrap_or_default(),
-                count: get_opt_i64(count_idx),
+                column_name: str_by_name("column_name").unwrap_or_default(),
+                column_type: str_by_name("column_type").unwrap_or_default(),
+                count: i64_by_name("count"),
                 // null_percentage is DECIMAL in DuckDB; the rust binding
-                // reads it as f64 via Option<f64>. If that fails we fall
-                // back to parsing the string representation.
-                null_percentage: get_opt_f64(null_pct_idx).or_else(|| {
-                    get_opt_string(null_pct_idx).and_then(|s| s.parse::<f64>().ok())
+                // may not deserialise that as f64 directly, so we also
+                // try reading it as a string and parsing.
+                null_percentage: f64_by_name("null_percentage").or_else(|| {
+                    str_by_name("null_percentage").and_then(|s| s.parse::<f64>().ok())
                 }),
-                approx_unique: get_opt_i64(approx_unique_idx),
-                min: get_opt_string(min_idx),
-                max: get_opt_string(max_idx),
-                avg: get_opt_string(avg_idx),
-                std: get_opt_string(std_idx),
+                approx_unique: i64_by_name("approx_unique"),
+                min: str_by_name("min"),
+                max: str_by_name("max"),
+                avg: str_by_name("avg"),
+                std: str_by_name("std"),
             })
         })
         .map_err(|e| e.to_string())?;
