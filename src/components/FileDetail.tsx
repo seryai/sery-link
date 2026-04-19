@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { isRemoteUrl } from '../utils/url';
 import type {
   ColumnProfile,
   DatasetMetadataPayload as DatasetMetadata,
@@ -193,13 +194,15 @@ export function FileDetail() {
               <ArrowLeft className="h-3.5 w-3.5" />
               Folder
             </button>
-            <button
-              onClick={reveal}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-              Show in Finder
-            </button>
+            {!isRemoteUrl(folderPath) && (
+              <button
+                onClick={reveal}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+                Show in Finder
+              </button>
+            )}
           </div>
         </div>
 

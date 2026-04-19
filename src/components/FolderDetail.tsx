@@ -23,6 +23,7 @@ import {
   Database,
   FileText,
   Folder as FolderIcon,
+  Globe,
   Loader2,
   RefreshCw,
   Search,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { filenameFromUrl, isRemoteUrl } from '../utils/url';
 import {
   EVENT_NAMES,
   type DatasetScannedPayload,
@@ -243,8 +245,16 @@ export function FolderDetail() {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-              <FolderIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-              <span className="truncate">{folderBasename(folderPath)}</span>
+              {isRemoteUrl(folderPath) ? (
+                <Globe className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              ) : (
+                <FolderIcon className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+              )}
+              <span className="truncate">
+                {isRemoteUrl(folderPath)
+                  ? filenameFromUrl(folderPath)
+                  : folderBasename(folderPath)}
+              </span>
             </h1>
             <p
               className="mt-1 truncate text-sm text-slate-500 dark:text-slate-400"
@@ -274,13 +284,15 @@ export function FolderDetail() {
               />
               Rescan
             </button>
-            <button
-              onClick={revealFolder}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-            >
-              <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-              Open in Finder
-            </button>
+            {!isRemoteUrl(folderPath) && (
+              <button
+                onClick={revealFolder}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+                Open in Finder
+              </button>
+            )}
           </div>
         </div>
       </div>

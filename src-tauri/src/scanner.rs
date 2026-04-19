@@ -133,6 +133,9 @@ pub type DatasetCb = Box<dyn Fn(usize, usize, &DatasetMetadata) + Send + Sync>;
 /// Simple scan — no progress callback, resolves the watched-folder settings
 /// from config so exclude patterns and file size limits are honoured.
 pub async fn scan_folder(folder_path: &str) -> Result<Vec<DatasetMetadata>> {
+    if crate::url::is_remote_url(folder_path) {
+        return scan_remote_folder(folder_path, None, None).await;
+    }
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
@@ -151,6 +154,9 @@ pub async fn scan_folder_with_events(
     progress: Option<ProgressCb>,
     on_dataset: Option<DatasetCb>,
 ) -> Result<Vec<DatasetMetadata>> {
+    if crate::url::is_remote_url(folder_path) {
+        return scan_remote_folder(folder_path, progress, on_dataset).await;
+    }
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
@@ -158,6 +164,75 @@ pub async fn scan_folder_with_events(
     })
     .await
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
+}
+
+/// URL-based "folder" scan. A remote source is always one file (Phase A),
+/// so we skip the rayon fan-out and run one HEAD probe + one DuckDB
+/// DESCRIBE query. Produces exactly one `DatasetMetadata` that ends up
+/// in the scan cache keyed on (url, "", last_modified_secs,
+/// content_length) — same shape as a local file, just with synthetic
+/// cache values.
+async fn scan_remote_folder(
+    url: &str,
+    progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
+) -> Result<Vec<DatasetMetadata>> {
+    if let Some(cb) = &progress {
+        cb(1, 1, url);
+    }
+
+    let head = match crate::remote::head_probe(url).await {
+        Ok(h) => h,
+        Err(e) => {
+            // A HEAD failure is not fatal by itself — the server may
+            // just not support HEAD. Fall back to empty freshness hints
+            // and let the DuckDB query decide whether the URL is
+            // actually reachable.
+            eprintln!("[scanner] HEAD probe failed for {}: {} — continuing", url, e);
+            crate::remote::RemoteHeadInfo::default()
+        }
+    };
+
+    let url_owned = url.to_string();
+    let head_owned = head.clone();
+    let metadata = tokio::task::spawn_blocking(move || {
+        // Serve from cache first when the (url, mtime, size) key matches —
+        // avoids a second DuckDB hit on subsequent FolderDetail visits.
+        let cache_hit = crate::scan_cache::with_cache(|c| {
+            c.get(
+                &url_owned,
+                "",
+                head_owned.last_modified_secs.unwrap_or(0),
+                head_owned.content_length.unwrap_or(0),
+            )
+        })
+        .flatten();
+        if let Some(hit) = cache_hit {
+            return Ok(hit);
+        }
+
+        let meta = crate::remote::scan_remote_blocking(&url_owned, &head_owned)?;
+
+        // Persist so next time we short-circuit — same freshness key as
+        // the cache hit path above.
+        let _ = crate::scan_cache::with_cache(|c| {
+            c.put(
+                &url_owned,
+                "",
+                head_owned.last_modified_secs.unwrap_or(0),
+                head_owned.content_length.unwrap_or(0),
+                &meta,
+            )
+        });
+        Ok::<_, AgentError>(meta)
+    })
+    .await
+    .map_err(|e| AgentError::FileSystem(format!("Remote scan task failed: {}", e)))??;
+
+    if let Some(cb) = &on_dataset {
+        cb(1, 1, &metadata);
+    }
+    Ok(vec![metadata])
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +923,19 @@ fn extract_schema(
 /// api/app/api/v1/agent_metadata.py `_MAX_SAMPLE_ROWS`.
 const SAMPLE_ROW_LIMIT: usize = 5;
 
+/// Crate-visible accessor for the sample-row cap. Remote sources
+/// (`remote::scan_remote_blocking`) reuse this so local and URL-based
+/// files cap at the same N.
+pub(crate) fn sample_row_limit() -> usize {
+    SAMPLE_ROW_LIMIT
+}
+
+/// Crate-visible wrapper so the remote scanner can reuse the same PII
+/// redaction heuristic without duplicating the signal list.
+pub(crate) fn is_pii_column_name(name: &str) -> bool {
+    is_pii_column(name)
+}
+
 /// Column names whose values get replaced with `<redacted>` in samples.
 /// Case-insensitive substring match — conservative by design.
 const PII_COLUMN_SIGNALS: &[&str] = &[
@@ -1158,7 +1246,7 @@ fn extract_sample_rows(
 /// Convert a single DuckDB cell at `idx` to a JSON value, trying a few
 /// common types. Anything we can't map cleanly becomes a string via
 /// Debug formatting so the LLM still gets *some* signal.
-fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_json::Value {
+pub(crate) fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_json::Value {
     // Try in order of most specific → most lenient. The duckdb-rs crate
     // returns an error when a type doesn't match, so we cascade.
     if let Ok(v) = row.get::<_, Option<i64>>(idx) {
