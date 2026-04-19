@@ -59,6 +59,24 @@ export interface DatasetScannedPayload {
   dataset: DatasetMetadataPayload;
 }
 
+// Mirror of Rust SearchMatchReason — tagged union for the UI badges.
+export type SearchMatchReason =
+  | { kind: 'filename' }
+  | { kind: 'column'; name: string; col_type: string }
+  | { kind: 'content'; snippet: string };
+
+export interface SearchMatch {
+  folder_path: string;
+  relative_path: string;
+  file_format: string;
+  size_bytes: number;
+  last_modified: string;
+  row_count_estimate: number | null;
+  column_count: number;
+  match_reasons: SearchMatchReason[];
+  score: number;
+}
+
 export interface WsStatus {
   status: 'online' | 'connecting' | 'offline' | 'error';
   detail: string | null;

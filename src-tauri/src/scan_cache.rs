@@ -58,6 +58,17 @@ pub struct ScanCache {
     conn: Connection,
 }
 
+/// One cached row: a single file's metadata plus the folder it lives in.
+/// Returned by [`ScanCache::get_all_entries`] for global search; the
+/// caller (`search_all_folders`) ranks matches by filename / column /
+/// content against this flat list.
+#[derive(Debug, Clone)]
+pub struct CachedEntry {
+    pub folder_path: String,
+    pub relative_path: String,
+    pub metadata: DatasetMetadata,
+}
+
 impl ScanCache {
     /// Open or create the persistent scan cache DB.
     pub fn new() -> Result<Self> {
@@ -194,6 +205,45 @@ impl ScanCache {
                     }
                 }
                 Err(_) => continue,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Return every cached row across every folder. Used by the global
+    /// search page to score datasets by filename / column / content
+    /// match without reopening files on disk. JSON rows that fail to
+    /// parse are silently dropped — the scanner will rewrite them on
+    /// the next visit.
+    pub fn get_all_entries(&self) -> Result<Vec<CachedEntry>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT folder_path, relative_path, metadata_json
+                 FROM scan_cache",
+            )
+            .map_err(|e| AgentError::Database(format!("prepare all-entries query: {}", e)))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| AgentError::Database(format!("execute all-entries query: {}", e)))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok((folder_path, relative_path, metadata_json)) = row {
+                if let Ok(metadata) = serde_json::from_str::<DatasetMetadata>(&metadata_json) {
+                    out.push(CachedEntry {
+                        folder_path,
+                        relative_path,
+                        metadata,
+                    });
+                }
             }
         }
         Ok(out)

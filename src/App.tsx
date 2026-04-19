@@ -17,6 +17,7 @@ import {
   Folder,
   Laptop,
   Loader2,
+  Search,
   Settings as SettingsIcon,
   Shield,
   Sparkles,
@@ -30,6 +31,7 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
 import { FolderDetail } from './components/FolderDetail';
+import { SearchPage } from './components/SearchPage';
 import { Analytics } from './components/Analytics';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
@@ -212,6 +214,19 @@ function AppInner() {
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
             <NavLink
+              to="/search"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Search className="h-4 w-4" />
+              Find
+            </NavLink>
+            <NavLink
               to="/folders"
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -336,7 +351,8 @@ function AppInner() {
         {/* Main content */}
         <main className="flex-1 overflow-auto">
           <Routes>
-            <Route path="/" element={<Navigate to="/folders" replace />} />
+            <Route path="/" element={<Navigate to="/search" replace />} />
+            <Route path="/search" element={<SearchPage />} />
             <Route path="/folders" element={<FolderList />} />
             <Route path="/folders/:folderId" element={<FolderDetail />} />
             <Route path="/analytics" element={<Analytics />} />
