@@ -15,7 +15,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ArrowLeft,
-  BarChart3,
   Database,
   FileText,
   Folder as FolderIcon,
@@ -99,31 +98,47 @@ export function FileDetail() {
     }
   };
 
-  const runProfile = async () => {
-    if (!folderPath || !relativePath) return;
-    setProfileLoading(true);
-    setProfileError(null);
-    try {
-      const result = await invoke<ColumnProfile[]>('profile_dataset', {
-        folderPath,
-        relativePath,
-      });
-      setProfile(result);
-    } catch (err) {
-      setProfileError(String(err));
-      setProfile(null);
-    } finally {
-      setProfileLoading(false);
-    }
-  };
-
-  // Reset profile when we navigate to a different file — otherwise the
-  // old file's stats would linger behind until the user clicks again.
+  // Auto-load column stats on mount for tabular files. No click needed —
+  // when the user lands here they want to know about the file, so stats
+  // appear inline next to the schema. Documents (docx/pptx/html) skip
+  // this because there are no columns to profile.
+  //
+  // SUMMARIZE is fast on parquet and small CSVs (sub-second). For very
+  // large files it can take a few seconds — the schema still renders
+  // immediately and stats fill in when ready, so the page isn't blank
+  // while we wait.
   useEffect(() => {
+    // Reset whenever the file changes so old stats don't linger.
     setProfile(null);
     setProfileError(null);
     setProfileLoading(false);
-  }, [folderPath, relativePath]);
+
+    if (!folderPath || !relativePath) return;
+    if (!dataset || dataset.schema.length === 0) return;
+    if (isDocumentFormat(dataset.file_format)) return;
+
+    let cancelled = false;
+    setProfileLoading(true);
+    (async () => {
+      try {
+        const result = await invoke<ColumnProfile[]>('profile_dataset', {
+          folderPath,
+          relativePath,
+        });
+        if (cancelled) return;
+        setProfile(result);
+      } catch (err) {
+        if (cancelled) return;
+        setProfileError(String(err));
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [folderPath, relativePath, dataset]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -185,21 +200,6 @@ export function FileDetail() {
               <SquareArrowOutUpRight className="h-3.5 w-3.5" />
               Show in Finder
             </button>
-            {dataset && !isDocumentFormat(dataset.file_format) && (
-              <button
-                onClick={runProfile}
-                disabled={profileLoading}
-                className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
-                title="Compute per-column stats for this file"
-              >
-                {profileLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <BarChart3 className="h-3.5 w-3.5" />
-                )}
-                {profile ? 'Refresh profile' : 'Profile this file'}
-              </button>
-            )}
           </div>
         </div>
 
@@ -279,67 +279,18 @@ export function FileDetail() {
 
         {dataset && (
           <div className="space-y-4">
-            {/* Profile — only rendered when the user asks. Appears first
-                so when they come back after clicking "Profile", the
-                stats are the first thing they see. */}
-            {profileError && (
-              <div className="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-                Couldn't compute profile: {profileError}
-              </div>
-            )}
-            {profileLoading && !profile && (
-              <div className="flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white py-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Profiling {dataset.schema.length}{' '}
-                {dataset.schema.length === 1 ? 'column' : 'columns'}…
-              </div>
-            )}
-            {profile && profile.length > 0 && (
-              <ProfileSection profile={profile} />
-            )}
-
-            {/* Schema — tabular only */}
+            {/* One unified "Columns" section. Shows schema immediately
+                (from the scan cache) and fills in computed stats as
+                they arrive. No separate "profile" / "schema" split —
+                the user sees one table that answers "what's in each
+                column?" */}
             {dataset.schema.length > 0 && (
-              <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-                <header className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  Schema
-                </header>
-                <div className="overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-medium">
-                          Column
-                        </th>
-                        <th className="px-4 py-2 text-left font-medium">
-                          Type
-                        </th>
-                        <th className="px-4 py-2 text-left font-medium">
-                          Nullable
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                      {dataset.schema.map((c, i) => (
-                        <tr
-                          key={i}
-                          className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                        >
-                          <td className="px-4 py-2 font-mono text-slate-900 dark:text-slate-100">
-                            {c.name}
-                          </td>
-                          <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
-                            {c.type}
-                          </td>
-                          <td className="px-4 py-2 text-slate-500 dark:text-slate-500">
-                            {c.nullable ? 'yes' : 'no'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+              <ColumnsSection
+                schema={dataset.schema}
+                profile={profile}
+                profileLoading={profileLoading}
+                profileError={profileError}
+              />
             )}
 
             {/* Sample rows */}
@@ -392,70 +343,135 @@ export function FileDetail() {
   );
 }
 
-// ─── Profile section ──────────────────────────────────────────────────
+// ─── Columns section ──────────────────────────────────────────────────
 
-function ProfileSection({ profile }: { profile: ColumnProfile[] }) {
+// Unified "columns" table. Shows schema (name + type) immediately from
+// cache, then adds Empty / Unique values / Min / Max / Avg inline as
+// stats arrive. One table, one mental model — instead of the previous
+// split where "Schema" and "Profile" were separate sections that
+// duplicated the column list.
+//
+// User-facing labels are deliberately non-jargon: "Empty" instead of
+// "Null %", "Unique values" instead of "approx_unique". DuckDB terms
+// leak into column_type (VARCHAR/BIGINT etc) — that's a separate
+// follow-up worth doing if real users find it confusing.
+function ColumnsSection({
+  schema,
+  profile,
+  profileLoading,
+  profileError,
+}: {
+  schema: { name: string; type: string; nullable: boolean }[];
+  profile: ColumnProfile[] | null;
+  profileLoading: boolean;
+  profileError: string | null;
+}) {
+  // Index the profile by column name so we can join schema rows with
+  // their stats in O(1) per row. Stats may arrive after the schema is
+  // already on screen, so an empty profile just means "stats still
+  // loading" — not "no stats at all".
+  const profileByName = new Map<string, ColumnProfile>();
+  for (const p of profile ?? []) {
+    profileByName.set(p.column_name, p);
+  }
+
   return (
-    <section className="rounded-lg border border-purple-200 bg-white dark:border-purple-900/60 dark:bg-slate-900">
-      <header className="border-b border-purple-200 bg-purple-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
-        Column profile · {profile.length}{' '}
-        {profile.length === 1 ? 'column' : 'columns'}
+    <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex items-center justify-between border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <span>
+          Columns · {schema.length}
+        </span>
+        {profileLoading && (
+          <span className="flex items-center gap-1 text-[11px] font-normal normal-case text-slate-400">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Computing stats…
+          </span>
+        )}
       </header>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
             <tr>
-              <th className="px-4 py-2 text-left font-medium">Column</th>
+              <th className="px-4 py-2 text-left font-medium">Name</th>
               <th className="px-4 py-2 text-left font-medium">Type</th>
-              <th className="px-4 py-2 text-right font-medium">Null %</th>
-              <th className="px-4 py-2 text-right font-medium">Unique</th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Percentage of rows where this column is empty / blank"
+              >
+                Empty
+              </th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Approximate number of distinct values in this column"
+              >
+                Unique values
+              </th>
               <th className="px-4 py-2 text-right font-medium">Min</th>
               <th className="px-4 py-2 text-right font-medium">Max</th>
-              <th className="px-4 py-2 text-right font-medium">Avg</th>
+              <th className="px-4 py-2 text-right font-medium">Average</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-            {profile.map((p, i) => (
-              <tr
-                key={i}
-                className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
-              >
-                <td className="px-4 py-2 font-mono text-slate-900 dark:text-slate-100">
-                  {p.column_name}
-                </td>
-                <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
-                  {p.column_type}
-                </td>
-                <td
-                  className={`px-4 py-2 text-right tabular-nums ${nullPctColor(p.null_percentage)}`}
+            {schema.map((col, i) => {
+              const stats = profileByName.get(col.name);
+              return (
+                <tr
+                  key={i}
+                  className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
                 >
-                  {formatPercent(p.null_percentage)}
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums text-slate-700 dark:text-slate-300">
-                  {p.approx_unique !== null
-                    ? p.approx_unique.toLocaleString()
-                    : '—'}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
-                  {truncate(p.min, 24)}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
-                  {truncate(p.max, 24)}
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
-                  {truncate(p.avg, 12)}
-                </td>
-              </tr>
-            ))}
+                  <td className="px-4 py-2 font-mono text-slate-900 dark:text-slate-100">
+                    {col.name}
+                  </td>
+                  <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
+                    {col.type}
+                  </td>
+                  <td
+                    className={`px-4 py-2 text-right tabular-nums ${nullPctColor(stats?.null_percentage ?? null)}`}
+                  >
+                    {formatStat(
+                      stats ? formatPercent(stats.null_percentage) : null,
+                      profileLoading,
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-slate-700 dark:text-slate-300">
+                    {formatStat(
+                      stats?.approx_unique !== undefined &&
+                        stats?.approx_unique !== null
+                        ? stats.approx_unique.toLocaleString()
+                        : null,
+                      profileLoading,
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                    {formatStat(truncate(stats?.min ?? null, 24), profileLoading)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                    {formatStat(truncate(stats?.max ?? null, 24), profileLoading)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                    {formatStat(truncate(stats?.avg ?? null, 12), profileLoading)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      <p className="border-t border-slate-200 bg-slate-50 px-4 py-2 text-[11px] text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
-        Stats computed locally via DuckDB. "Unique" is an approximate
-        count using HyperLogLog for performance.
-      </p>
+      {profileError && (
+        <p className="border-t border-rose-200 bg-rose-50 px-4 py-2 text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+          Couldn't compute stats: {profileError}
+        </p>
+      )}
     </section>
   );
+}
+
+/// Placeholder for a stats cell while the profile is still loading.
+/// Once it arrives we render the real value; if the profile failed or
+/// doesn't cover this column we show an em-dash so the layout is stable.
+function formatStat(value: string | null, loading: boolean): string {
+  if (value !== null) return value;
+  return loading ? '…' : '—';
 }
 
 function formatPercent(v: number | null): string {
