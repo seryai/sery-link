@@ -1,0 +1,318 @@
+//! Remote data sources (Phase A — public HTTPS URLs).
+//!
+//! This module owns the "scan a URL" path. It mirrors what `scanner.rs`
+//! does for local files but:
+//!   * Skips the filesystem walk — the URL is a single file, not a folder.
+//!   * Uses a HEAD request to establish a freshness signal (Last-Modified
+//!     + Content-Length) for the scan cache, since URLs have no `fs::metadata`.
+//!   * Runs DuckDB's `read_csv_auto` / `read_parquet` directly on the URL
+//!     via the httpfs extension, which we load lazily per-connection.
+//!
+//! Everything produced here lands in the same `DatasetMetadata` shape as
+//! local files, so FolderDetail, FileDetail, search, and the scan cache
+//! all work unchanged downstream.
+
+use crate::error::{AgentError, Result};
+use crate::scanner::{ColumnSchema, DatasetMetadata};
+use duckdb::Connection;
+use std::time::Duration;
+
+/// Result of probing a URL with HEAD. Values are best-effort — servers
+/// don't have to return them, so both fields are optional and the
+/// caller should treat missing data as "unknown, cache conservatively".
+#[derive(Debug, Clone, Default)]
+pub struct RemoteHeadInfo {
+    /// `Last-Modified` header parsed as Unix seconds, or `None` if the
+    /// server didn't send it / we couldn't parse it.
+    pub last_modified_secs: Option<i64>,
+    /// `Content-Length` header as bytes.
+    pub content_length: Option<i64>,
+}
+
+/// Blocking HEAD request with a short timeout. Used by the scanner to
+/// fill `(mtime_secs, size_bytes)` on the scan cache key when the
+/// source is a URL instead of a file.
+///
+/// Errors only when the HEAD request itself fails (network, DNS). A
+/// 2xx with no Last-Modified / Content-Length is a success with
+/// `None` fields — the server is allowed to omit them.
+pub async fn head_probe(url: &str) -> Result<RemoteHeadInfo> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        // Follow redirects — many CDNs 301 to a signed URL.
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| AgentError::Network(format!("build client: {}", e)))?;
+
+    let resp = client
+        .head(url)
+        .send()
+        .await
+        .map_err(|e| AgentError::Network(format!("HEAD {}: {}", url, e)))?;
+
+    if !resp.status().is_success() {
+        return Err(AgentError::Network(format!(
+            "HEAD {} returned {}",
+            url,
+            resp.status()
+        )));
+    }
+
+    let last_modified_secs = resp
+        .headers()
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_http_date);
+
+    let content_length = resp
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok());
+
+    Ok(RemoteHeadInfo {
+        last_modified_secs,
+        content_length,
+    })
+}
+
+/// Synchronous schema + sample extraction for a remote URL via DuckDB.
+/// Expected to run inside `tokio::task::spawn_blocking` since DuckDB's
+/// Rust binding is sync.
+///
+/// The `last_modified_secs` / `content_length` come from a prior
+/// `head_probe` and land in the returned `DatasetMetadata` as its
+/// `size_bytes` + `last_modified`. They're metadata-only — they don't
+/// change how DuckDB reads the file.
+pub fn scan_remote_blocking(
+    url: &str,
+    head: &RemoteHeadInfo,
+) -> Result<DatasetMetadata> {
+    // Determine how to read the URL. DuckDB's httpfs extension gives us
+    // `read_parquet('https://…')`, `read_csv_auto('https://…')`, etc.
+    // We dispatch on the URL extension; unrecognised extensions fall
+    // back to read_csv_auto which is the most permissive.
+    let ext = crate::url::extension_from_url(url);
+    let (read_func, file_format): (&str, &str) = match ext.as_str() {
+        "parquet" => ("read_parquet", "parquet"),
+        "csv" | "tsv" => ("read_csv_auto", "csv"),
+        // xlsx-over-HTTP requires downloading the whole file first
+        // (calamine doesn't stream). Defer to Phase B.
+        other => {
+            return Err(AgentError::Database(format!(
+                "unsupported remote file type: {}. Phase A supports csv / parquet URLs",
+                if other.is_empty() { "unknown" } else { other }
+            )));
+        }
+    };
+
+    let conn = Connection::open_in_memory()
+        .map_err(|e| AgentError::Database(format!("open DuckDB: {}", e)))?;
+
+    // Load httpfs on this fresh connection. INSTALL is a no-op if the
+    // extension is already downloaded; LOAD makes it available for
+    // queries. Runs once per scan — cheap.
+    install_httpfs(&conn)?;
+
+    let escaped_url = url.replace('\'', "''");
+
+    // Trace so a crash mid-fetch tells us which URL tripped things.
+    eprintln!("[remote-scan] ▶ {}", url);
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    let schema = extract_remote_schema(&conn, read_func, &escaped_url)?;
+    let row_count = count_remote_rows(&conn, read_func, &escaped_url).unwrap_or(-1);
+    let (sample_rows, samples_redacted) =
+        extract_remote_samples(&conn, read_func, &escaped_url, &schema)
+            .unwrap_or((None, false));
+
+    eprintln!("[remote-scan] ✓ {} ({} cols)", url, schema.len());
+
+    // Synthesise a `DatasetMetadata` that matches what local files
+    // produce, so FolderDetail / FileDetail / search all render it
+    // identically.
+    let relative_path = crate::url::infer_filename_from_url(url);
+    let last_modified = head
+        .last_modified_secs
+        .and_then(|secs| chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0))
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let size_bytes = head.content_length.unwrap_or(0).max(0) as u64;
+
+    Ok(DatasetMetadata {
+        relative_path,
+        file_format: file_format.to_string(),
+        size_bytes,
+        row_count_estimate: if row_count >= 0 { Some(row_count) } else { None },
+        schema,
+        last_modified,
+        document_markdown: None,
+        sample_rows,
+        samples_redacted,
+    })
+}
+
+/// Load DuckDB's httpfs extension. No-op if it's already installed in
+/// the user's DuckDB extension directory (the download only happens on
+/// first ever call, then it's cached in `~/.duckdb/extensions/`).
+fn install_httpfs(conn: &Connection) -> Result<()> {
+    // INSTALL before LOAD — bundled DuckDB only ships the core; the
+    // httpfs extension is downloaded from extensions.duckdb.org on
+    // first use and cached in the user's home dir.
+    conn.execute_batch(
+        "INSTALL httpfs; LOAD httpfs;",
+    )
+    .map_err(|e| AgentError::Database(format!("load httpfs: {}", e)))
+}
+
+fn extract_remote_schema(
+    conn: &Connection,
+    read_func: &str,
+    escaped_url: &str,
+) -> Result<Vec<ColumnSchema>> {
+    // DESCRIBE over the remote URL pulls only the Parquet footer (or
+    // sniffs the first CSV rows) — we don't download the whole file.
+    let sql = format!("DESCRIBE SELECT * FROM {}('{}')", read_func, escaped_url);
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AgentError::Database(format!("prepare DESCRIBE: {}", e)))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| AgentError::Database(format!("query DESCRIBE: {}", e)))?;
+
+    let mut columns = Vec::new();
+    for row in rows {
+        if let Ok((name, col_type)) = row {
+            columns.push(ColumnSchema {
+                name,
+                col_type,
+                nullable: true,
+            });
+        }
+    }
+    Ok(columns)
+}
+
+fn count_remote_rows(conn: &Connection, read_func: &str, escaped_url: &str) -> Result<i64> {
+    // COUNT(*) over a remote file is expensive for CSV (streams the
+    // whole body) but cheap for parquet (metadata). Ignore failures —
+    // a row count of -1 shows up as "unknown" in the UI.
+    let sql = format!("SELECT COUNT(*) FROM {}('{}')", read_func, escaped_url);
+    conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
+        .map_err(|e| AgentError::Database(format!("COUNT(*): {}", e)))
+}
+
+/// Best-effort sample rows for the cloud agent / UI preview. Same
+/// shape as `scanner::extract_sample_rows` so the downstream rendering
+/// is identical. PII scrubbing reuses the local helper via a public
+/// re-export.
+fn extract_remote_samples(
+    conn: &Connection,
+    read_func: &str,
+    escaped_url: &str,
+    schema: &[ColumnSchema],
+) -> Result<(
+    Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+    bool,
+)> {
+    if schema.is_empty() {
+        return Ok((None, false));
+    }
+
+    let sql = format!(
+        "SELECT * FROM {}('{}') LIMIT {}",
+        read_func,
+        escaped_url,
+        crate::scanner::sample_row_limit()
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AgentError::Database(format!("prepare samples: {}", e)))?;
+
+    let redacted_indices: Vec<usize> = schema
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            if crate::scanner::is_pii_column_name(&c.name) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let rows = stmt
+        .query_map([], |row| {
+            let mut obj = serde_json::Map::with_capacity(schema.len());
+            for (i, col) in schema.iter().enumerate() {
+                let value = if redacted_indices.contains(&i) {
+                    serde_json::Value::String("<redacted>".to_string())
+                } else {
+                    crate::scanner::duckdb_cell_to_json(row, i)
+                };
+                obj.insert(col.name.clone(), value);
+            }
+            Ok(obj)
+        })
+        .map_err(|e| AgentError::Database(format!("query samples: {}", e)))?;
+
+    let mut samples: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+    for row in rows {
+        if let Ok(obj) = row {
+            samples.push(obj);
+        }
+        if samples.len() >= crate::scanner::sample_row_limit() {
+            break;
+        }
+    }
+
+    if samples.is_empty() {
+        return Ok((None, false));
+    }
+    Ok((Some(samples), !redacted_indices.is_empty()))
+}
+
+/// Parse an HTTP `Last-Modified` value (RFC 7231 IMF-fixdate) to Unix
+/// seconds. Tolerant of the handful of historically-valid formats —
+/// on failure returns `None` so the caller treats the freshness as
+/// unknown.
+fn parse_http_date(s: &str) -> Option<i64> {
+    // Try the modern RFC 7231 format first; fall back to the legacy
+    // RFC 850 form.
+    let formats = &[
+        "%a, %d %b %Y %H:%M:%S GMT",      // IMF-fixdate
+        "%A, %d-%b-%y %H:%M:%S GMT",      // RFC 850
+        "%a %b %e %H:%M:%S %Y",            // asctime
+    ];
+    for fmt in formats {
+        if let Ok(dt) = chrono::DateTime::parse_from_str(s, fmt) {
+            return Some(dt.timestamp());
+        }
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_http_date_handles_rfc7231() {
+        // Epoch-style check so the tests don't depend on the machine TZ.
+        let ts = parse_http_date("Wed, 21 Oct 2015 07:28:00 GMT").unwrap();
+        // 2015-10-21 07:28:00 UTC == 1445412480 seconds since epoch.
+        assert_eq!(ts, 1445412480);
+    }
+
+    #[test]
+    fn parse_http_date_returns_none_on_junk() {
+        assert!(parse_http_date("").is_none());
+        assert!(parse_http_date("not a date").is_none());
+        assert!(parse_http_date("2015-10-21").is_none());
+    }
+}

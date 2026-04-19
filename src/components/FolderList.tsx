@@ -14,6 +14,7 @@ import {
   Database,
   FolderOpen,
   Folder as FolderIcon,
+  Globe,
   Loader2,
   MoreVertical,
   Plus,
@@ -22,12 +23,15 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { AddRemoteSourceModal } from './AddRemoteSourceModal';
+import { filenameFromUrl, isRemoteUrl } from '../utils/url';
 import type { AgentConfig, WatchedFolder } from '../types/events';
 
 export function FolderList() {
   const { config, setConfig, scansInFlight } = useAgentStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [remoteOpen, setRemoteOpen] = useState(false);
 
   const reloadConfig = async () => {
     try {
@@ -96,6 +100,14 @@ export function FolderList() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setRemoteOpen(true)}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              title="Paste a public HTTPS URL to a CSV or Parquet file"
+            >
+              <Globe className="h-4 w-4" />
+              Add URL
+            </button>
+            <button
               onClick={addFolder}
               disabled={busy}
               className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
@@ -126,6 +138,18 @@ export function FolderList() {
         )}
       </div>
 
+      <AddRemoteSourceModal
+        open={remoteOpen}
+        onClose={() => setRemoteOpen(false)}
+        onAdded={async (url) => {
+          await reloadConfig();
+          // Kick off the initial scan so the user sees the schema
+          // immediately — same pattern as the filesystem add flow.
+          invoke('rescan_folder', { folderPath: url }).catch((err) => {
+            console.error('Initial remote scan failed:', err);
+          });
+        }}
+      />
     </div>
   );
 }
@@ -237,14 +261,20 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/40">
-            <FolderIcon className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+            {isRemoteUrl(folder.path) ? (
+              <Globe className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+            ) : (
+              <FolderIcon className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <div
               className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100"
               title={folder.path}
             >
-              {folderBasename(folder.path)}
+              {isRemoteUrl(folder.path)
+                ? filenameFromUrl(folder.path)
+                : folderBasename(folder.path)}
             </div>
             <div
               className="truncate text-xs text-slate-500 dark:text-slate-400"
@@ -290,16 +320,18 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
                   }}
                 />
                 <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void reveal();
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700"
-                  >
-                    <FolderOpen className="h-4 w-4" />
-                    Reveal in Finder
-                  </button>
+                  {!isRemoteUrl(folder.path) && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void reveal();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700"
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                      Reveal in Finder
+                    </button>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -308,7 +340,7 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
                   >
                     <Trash2 className="h-4 w-4" />
-                    Remove folder
+                    {isRemoteUrl(folder.path) ? 'Remove source' : 'Remove folder'}
                   </button>
                 </div>
               </>

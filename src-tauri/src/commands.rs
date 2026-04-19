@@ -152,6 +152,29 @@ pub async fn add_watched_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Register a public HTTPS URL as a remote data source. Stored in the
+/// same `watched_folders` list as local folders — the URL itself is
+/// the `path`. `is_remote_url()` discriminates downstream.
+///
+/// Phase A: public URLs only (no credentials, no bucket listing). The
+/// initial scan happens on the frontend side via `rescan_folder` after
+/// this command returns, so users see progress/errors in the same UI
+/// that handles local folders.
+#[tauri::command]
+pub async fn add_remote_source(url: String) -> Result<String, String> {
+    let validation = crate::url::validate_url(&url);
+    let normalised = match validation {
+        crate::url::UrlValidation::Ok { normalised, .. } => normalised,
+        crate::url::UrlValidation::Invalid { reason } => return Err(reason),
+    };
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.add_watched_folder(normalised.clone(), false);
+    config.save().map_err(|e| e.to_string())?;
+    // No file watcher restart — URLs aren't on the filesystem.
+    Ok(normalised)
+}
+
 #[tauri::command]
 pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
@@ -420,6 +443,14 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     use std::borrow::Cow;
     use std::path::{Path, PathBuf};
 
+    // Remote source branch — the folder_path IS the URL and
+    // relative_path is just a display filename we synthesized at scan
+    // time. We hand the URL straight to DuckDB after loading httpfs;
+    // Parquet and CSV are the two formats Phase A supports.
+    if crate::url::is_remote_url(folder_path) {
+        return profile_remote(folder_path);
+    }
+
     // Compose the absolute file path. `relative_path` comes from the scan
     // cache (which the frontend populated via scan_folder) so it's
     // trusted input — we still guard against path traversal by requiring
@@ -493,6 +524,85 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
                 .to_string(),
         ),
     }
+}
+
+/// Profile a remote URL. Loads httpfs in the session and runs the
+/// same SUMMARIZE pattern against `read_parquet` / `read_csv_auto`
+/// pointed at the URL. Wrapped in catch_unwind to match the local
+/// path's panic safety.
+fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
+    let ext = crate::url::extension_from_url(url);
+    let read_func = match ext.as_str() {
+        "parquet" => "read_parquet",
+        "csv" | "tsv" => "read_csv_auto",
+        other => {
+            return Err(format!(
+                "can't profile remote {} files — Phase A supports csv / parquet URLs",
+                if other.is_empty() { "unknown" } else { other }
+            ));
+        }
+    };
+    let escaped = url.replace('\'', "''");
+    let read_func_owned = read_func.to_string();
+    let escaped_owned = escaped;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        run_remote_summarize(&read_func_owned, &escaped_owned)
+    }));
+    match result {
+        Ok(r) => r,
+        Err(_) => Err(
+            "profile panicked inside DuckDB — the URL may be unreachable \
+             or serving an unexpected format."
+                .to_string(),
+        ),
+    }
+}
+
+fn run_remote_summarize(read_func: &str, escaped_url: &str) -> Result<Vec<ColumnProfile>, String> {
+    use duckdb::Connection;
+    let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    // Install + load httpfs — we're on a fresh connection so the
+    // extension isn't loaded by default.
+    conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
+        .map_err(|e| format!("load httpfs: {}", e))?;
+    let sql = format!(
+        "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
+        read_func, escaped_url
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let str_by_name = |name: &str| -> Option<String> {
+                row.get::<_, Option<String>>(name).ok().flatten()
+            };
+            let i64_by_name = |name: &str| -> Option<i64> {
+                row.get::<_, Option<i64>>(name).ok().flatten()
+            };
+            let f64_by_name = |name: &str| -> Option<f64> {
+                row.get::<_, Option<f64>>(name).ok().flatten()
+            };
+            Ok(ColumnProfile {
+                column_name: str_by_name("column_name").unwrap_or_default(),
+                column_type: str_by_name("column_type").unwrap_or_default(),
+                count: i64_by_name("count"),
+                null_percentage: f64_by_name("null_percentage").or_else(|| {
+                    str_by_name("null_percentage").and_then(|s| s.parse::<f64>().ok())
+                }),
+                approx_unique: i64_by_name("approx_unique"),
+                min: str_by_name("min"),
+                max: str_by_name("max"),
+                avg: str_by_name("avg"),
+                std: str_by_name("std"),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(p) = row {
+            out.push(p);
+        }
+    }
+    Ok(out)
 }
 
 /// Execute SUMMARIZE and materialize the result into `ColumnProfile` rows.
@@ -944,11 +1054,18 @@ pub async fn start_file_watcher() -> Result<(), String> {
         return Ok(());
     }
 
+    // Only LOCAL folders go through notify — URLs are Phase-A remote
+    // sources and don't live on the filesystem. notify::Watcher::watch
+    // would error on a non-filesystem path.
     let folder_paths: Vec<String> = config
         .watched_folders
         .iter()
+        .filter(|f| !crate::url::is_remote_url(&f.path))
         .map(|f| f.path.clone())
         .collect();
+    if folder_paths.is_empty() {
+        return Ok(());
+    }
 
     let handle = watcher::start_watcher(folder_paths)
         .await
@@ -979,11 +1096,18 @@ pub async fn restart_file_watcher() -> Result<(), String> {
         return Ok(());
     }
 
+    // Only LOCAL folders go through notify — URLs are Phase-A remote
+    // sources and don't live on the filesystem. notify::Watcher::watch
+    // would error on a non-filesystem path.
     let folder_paths: Vec<String> = config
         .watched_folders
         .iter()
+        .filter(|f| !crate::url::is_remote_url(&f.path))
         .map(|f| f.path.clone())
         .collect();
+    if folder_paths.is_empty() {
+        return Ok(());
+    }
 
     let handle = watcher::start_watcher(folder_paths)
         .await

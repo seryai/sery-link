@@ -17,8 +17,10 @@ mod plugin_marketplace;
 mod plugin_runtime;
 mod recipe_executor;
 mod relationship_detector;
+mod remote;
 mod scan_cache;
 mod scanner;
+mod url;
 mod schema_diff;
 mod schema_notifications;
 mod stats;
@@ -117,6 +119,7 @@ pub fn run() {
             commands::get_config,
             commands::save_config,
             commands::add_watched_folder,
+            commands::add_remote_source,
             commands::remove_watched_folder,
             commands::scan_folder,
             commands::search_all_folders,
