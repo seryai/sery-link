@@ -92,6 +92,13 @@ interface AgentState {
   markSchemaNotificationRead: (id: string) => Promise<void>;
   markAllSchemaNotificationsRead: () => Promise<void>;
   clearSchemaNotifications: () => Promise<void>;
+
+  // Global search state — lifted out of SearchPage so the query + last
+  // results survive navigating away and back via the sidebar.
+  searchQuery: string;
+  searchResults: import('../types/events').SearchMatch[];
+  setSearchQuery: (q: string) => void;
+  setSearchResults: (results: import('../types/events').SearchMatch[]) => void;
   setLoading: (value: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -110,6 +117,8 @@ const initial = {
   reAuthRequired: false,
   onboardingComplete: false,
   schemaNotifications: [] as SchemaNotification[],
+  searchQuery: '',
+  searchResults: [] as import('../types/events').SearchMatch[],
   isLoading: false,
   error: null,
 };
@@ -148,6 +157,8 @@ export const useAgentStore = create<AgentState>((set) => ({
     }),
   setReAuthRequired: (v) => set({ reAuthRequired: v }),
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
+  setSearchQuery: (q) => set({ searchQuery: q }),
+  setSearchResults: (results) => set({ searchResults: results }),
   setSchemaNotifications: (entries) =>
     set({ schemaNotifications: entries.slice(0, MAX_NOTIFICATIONS_KEEP) }),
   addSchemaNotification: (payload) =>

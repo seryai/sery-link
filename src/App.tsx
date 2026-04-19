@@ -31,6 +31,7 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
 import { FolderDetail } from './components/FolderDetail';
+import { FileDetail } from './components/FileDetail';
 import { SearchPage } from './components/SearchPage';
 import { Analytics } from './components/Analytics';
 import { History } from './components/History';
@@ -355,6 +356,10 @@ function AppInner() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/folders" element={<FolderList />} />
             <Route path="/folders/:folderId" element={<FolderDetail />} />
+            <Route
+              path="/folders/:folderId/files/:filePath"
+              element={<FileDetail />}
+            />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />

@@ -25,6 +25,7 @@ import {
   SquareArrowOutUpRight,
   Type,
 } from 'lucide-react';
+import { useAgentStore } from '../stores/agentStore';
 import type { SearchMatch, SearchMatchReason } from '../types/events';
 
 // Debounce before firing the backend query. 180 ms feels instant while
@@ -33,17 +34,22 @@ import type { SearchMatch, SearchMatchReason } from '../types/events';
 const DEBOUNCE_MS = 180;
 
 export function SearchPage() {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchMatch[]>([]);
+  // Query + results live in the global store so switching tabs and
+  // coming back doesn't wipe the user's search — it felt broken that
+  // typing a long query, clicking Folders, and returning cleared
+  // everything. `loading` and `error` stay local since they're only
+  // meaningful while this page is mounted.
+  const { searchQuery, searchResults, setSearchQuery, setSearchResults } =
+    useAgentStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequest = useRef(0);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const trimmed = query.trim();
+    const trimmed = searchQuery.trim();
     if (!trimmed) {
-      setResults([]);
+      setSearchResults([]);
       setLoading(false);
       setError(null);
       return;
@@ -59,26 +65,27 @@ export function SearchPage() {
         // Drop the result if a newer query has already been kicked off —
         // otherwise a slow initial query can clobber a faster later one.
         if (requestId !== latestRequest.current) return;
-        setResults(next);
+        setSearchResults(next);
         setError(null);
       } catch (err) {
         if (requestId !== latestRequest.current) return;
         setError(String(err));
-        setResults([]);
+        setSearchResults([]);
       } finally {
         if (requestId === latestRequest.current) setLoading(false);
       }
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [query]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <SearchHeader
-        query={query}
-        onQueryChange={setQuery}
-        resultCount={results.length}
+        query={searchQuery}
+        onQueryChange={setSearchQuery}
+        resultCount={searchResults.length}
         loading={loading}
       />
       <div className="flex-1 overflow-hidden">
@@ -86,16 +93,20 @@ export function SearchPage() {
           <div className="m-6 rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
             Search failed: {error}
           </div>
-        ) : query.trim() === '' ? (
+        ) : searchQuery.trim() === '' ? (
           <EmptyPrompt />
-        ) : results.length === 0 && !loading ? (
-          <NoResults query={query} />
+        ) : searchResults.length === 0 && !loading ? (
+          <NoResults query={searchQuery} />
         ) : (
           <SearchResults
-            results={results}
+            results={searchResults}
             onOpen={(match) =>
+              // Navigate to the FILE detail (new drill-down level), not
+              // the containing folder. The file route encodes both the
+              // folder path and the relative file path so the file
+              // detail page can find its cached row without ambiguity.
               navigate(
-                `/folders/${encodeURIComponent(match.folder_path)}`,
+                `/folders/${encodeURIComponent(match.folder_path)}/files/${encodeURIComponent(match.relative_path)}`,
               )
             }
           />

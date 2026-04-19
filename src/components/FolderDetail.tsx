@@ -19,7 +19,6 @@ import { listen } from '@tauri-apps/api/event';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowLeft,
-  ChevronDown,
   ChevronRight,
   Database,
   FileText,
@@ -62,7 +61,6 @@ export function FolderDetail() {
   }>({ running: false, current: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const initialLoadRef = useRef(false);
 
   const datasets = useMemo(
@@ -203,15 +201,6 @@ export function FolderDetail() {
   const revealFolder = async () => {
     try {
       await invoke('reveal_in_finder', { path: folderPath });
-    } catch (err) {
-      toast.error(`Couldn't open: ${err}`);
-    }
-  };
-
-  const revealDataset = async (relativePath: string) => {
-    try {
-      const full = `${folderPath.replace(/\/$/, '')}/${relativePath}`;
-      await invoke('reveal_in_finder', { path: full });
     } catch (err) {
       toast.error(`Couldn't open: ${err}`);
     }
@@ -366,9 +355,7 @@ export function FolderDetail() {
         filtered={filtered}
         scanRunning={scanState.running}
         search={search}
-        expandedId={expandedId}
-        setExpandedId={setExpandedId}
-        revealDataset={revealDataset}
+        folderPath={folderPath}
       />
     </div>
   );
@@ -376,44 +363,42 @@ export function FolderDetail() {
 
 // ─── Virtualized list ─────────────────────────────────────────────────────
 
-// Extracted so the virtualizer's ref and measurement logic don't pollute
-// FolderDetail. At thousands of files the flat map-render in the old
-// implementation melted the DOM — @tanstack/react-virtual only mounts
-// the rows currently in view (± an overscan) and measures each row's
-// real height on mount so expand/collapse still looks right.
+// The virtualizer (@tanstack/react-virtual) only mounts the rows
+// currently in view plus an overscan, so folders with thousands of
+// files still scroll smoothly. Each row is a link to FileDetail —
+// the drill-down content (schema, samples, markdown) lives on the
+// dedicated file page now instead of an inline expansion.
 function VirtualizedDatasetList({
   filtered,
   scanRunning,
   search,
-  expandedId,
-  setExpandedId,
-  revealDataset,
+  folderPath,
 }: {
   filtered: DatasetMetadata[];
   scanRunning: boolean;
   search: string;
-  expandedId: string | null;
-  setExpandedId: (id: string | null) => void;
-  revealDataset: (relativePath: string) => void;
+  folderPath: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
-  // Collapsed rows are ~72px (two-line label + padding + 8px gap to next
-  // row). The first estimate only needs to be close — the virtualizer
-  // replaces it with the real measurement the moment each row mounts.
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 72,
-    overscan: 6,
+    overscan: 8,
     // Keying by relative_path keeps row identity stable when the
-    // dataset list reshuffles during a live scan — without this the
-    // virtualizer would lose expanded-row state every time a new
-    // dataset_scanned event landed.
+    // dataset list reshuffles during a live scan.
     getItemKey: (index) => filtered[index]?.relative_path ?? index,
   });
 
   const items = virtualizer.getVirtualItems();
+
+  const openFile = (relativePath: string) => {
+    navigate(
+      `/folders/${encodeURIComponent(folderPath)}/files/${encodeURIComponent(relativePath)}`,
+    );
+  };
 
   return (
     <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
@@ -445,8 +430,6 @@ function VirtualizedDatasetList({
           {items.map((virtualRow) => {
             const d = filtered[virtualRow.index];
             if (!d) return null;
-            const id = d.relative_path;
-            const isOpen = expandedId === id;
             return (
               <div
                 key={virtualRow.key}
@@ -463,9 +446,7 @@ function VirtualizedDatasetList({
               >
                 <DatasetRow
                   dataset={d}
-                  isOpen={isOpen}
-                  onToggle={() => setExpandedId(isOpen ? null : id)}
-                  onLocate={() => revealDataset(d.relative_path)}
+                  onOpen={() => openFile(d.relative_path)}
                 />
               </div>
             );
@@ -480,14 +461,10 @@ function VirtualizedDatasetList({
 
 function DatasetRow({
   dataset,
-  isOpen,
-  onToggle,
-  onLocate,
+  onOpen,
 }: {
   dataset: DatasetMetadata;
-  isOpen: boolean;
-  onToggle: () => void;
-  onLocate: () => void;
+  onOpen: () => void;
 }) {
   const isDoc = isDocumentFormat(dataset.file_format);
   const icon = isDoc ? (
@@ -497,139 +474,46 @@ function DatasetRow({
   );
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white transition-colors dark:border-slate-800 dark:bg-slate-900">
-      <button
-        onClick={onToggle}
-        className="block w-full text-left"
-        aria-expanded={isOpen}
-      >
-        <div className="flex items-center gap-3 px-4 py-3">
-          {isOpen ? (
-            <ChevronDown className="h-4 w-4 flex-shrink-0 text-slate-400" />
-          ) : (
-            <ChevronRight className="h-4 w-4 flex-shrink-0 text-slate-400" />
-          )}
-          {icon}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-              {dataset.relative_path}
-            </div>
-            <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span className="uppercase">{dataset.file_format}</span>
-              {dataset.row_count_estimate !== null && (
-                <>
-                  <span>·</span>
-                  <span>{dataset.row_count_estimate.toLocaleString()} rows</span>
-                </>
-              )}
-              {dataset.schema.length > 0 && (
-                <>
-                  <span>·</span>
-                  <span>
-                    {dataset.schema.length} {dataset.schema.length === 1 ? 'col' : 'cols'}
-                  </span>
-                </>
-              )}
-              <span>·</span>
-              <span>{formatBytes(dataset.size_bytes)}</span>
-              <span>·</span>
-              <span title={dataset.last_modified}>{formatRelativeTime(dataset.last_modified)}</span>
-            </div>
+    <button
+      onClick={onOpen}
+      className="group block w-full rounded-lg border border-slate-200 bg-white text-left transition-all hover:border-purple-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-700"
+    >
+      <div className="flex items-center gap-3 px-4 py-3">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+            {dataset.relative_path}
           </div>
-        </div>
-      </button>
-
-      {isOpen && (
-        <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
-          {/* Action row */}
-          <div className="mb-3 flex items-center gap-2">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onLocate();
-              }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-            >
-              <SquareArrowOutUpRight className="h-3 w-3" />
-              Show in Finder
-            </button>
-          </div>
-
-          {/* Schema */}
-          {dataset.schema.length > 0 && (
-            <div className="mb-3">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Schema
-              </div>
-              <div className="overflow-hidden rounded-md border border-slate-200 dark:border-slate-800">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                    <tr>
-                      <th className="px-3 py-1.5 text-left font-medium">Column</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Type</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Nullable</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                    {dataset.schema.map((c, i) => (
-                      <tr key={i}>
-                        <td className="px-3 py-1.5 font-mono text-slate-900 dark:text-slate-100">
-                          {c.name}
-                        </td>
-                        <td className="px-3 py-1.5 text-slate-600 dark:text-slate-400">
-                          {c.type}
-                        </td>
-                        <td className="px-3 py-1.5 text-slate-500 dark:text-slate-500">
-                          {c.nullable ? 'yes' : 'no'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Sample rows */}
-          {dataset.sample_rows && dataset.sample_rows.length > 0 && (
-            <div className="mb-3">
-              <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Sample rows
-                {dataset.samples_redacted && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal normal-case text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
-                    PII redacted
-                  </span>
-                )}
-              </div>
-              <pre className="overflow-x-auto rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] text-slate-700 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
-                {JSON.stringify(dataset.sample_rows, null, 2)}
-              </pre>
-            </div>
-          )}
-
-          {/* Document markdown */}
-          {dataset.document_markdown && (
-            <div>
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Extracted text (first 2000 chars)
-              </div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
-                {dataset.document_markdown.slice(0, 2000)}
-                {dataset.document_markdown.length > 2000 && '\n…'}
-              </pre>
-            </div>
-          )}
-
-          {dataset.schema.length === 0 &&
-            !dataset.sample_rows &&
-            !dataset.document_markdown && (
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                No schema or sample data extracted.
-              </p>
+          <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <span className="uppercase">{dataset.file_format}</span>
+            {dataset.row_count_estimate !== null && (
+              <>
+                <span>·</span>
+                <span>{dataset.row_count_estimate.toLocaleString()} rows</span>
+              </>
             )}
+            {dataset.schema.length > 0 && (
+              <>
+                <span>·</span>
+                <span>
+                  {dataset.schema.length} {dataset.schema.length === 1 ? 'col' : 'cols'}
+                </span>
+              </>
+            )}
+            <span>·</span>
+            <span>{formatBytes(dataset.size_bytes)}</span>
+            <span>·</span>
+            <span title={dataset.last_modified}>
+              {formatRelativeTime(dataset.last_modified)}
+            </span>
+          </div>
         </div>
-      )}
-    </div>
+        <ChevronRight
+          className="h-4 w-4 flex-shrink-0 text-slate-300 transition group-hover:text-purple-500 dark:text-slate-600"
+          strokeWidth={1.5}
+        />
+      </div>
+    </button>
   );
 }
 
