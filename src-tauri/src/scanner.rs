@@ -166,13 +166,30 @@ pub async fn scan_folder_with_events(
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
 }
 
-/// URL-based "folder" scan. A remote source is always one file (Phase A),
-/// so we skip the rayon fan-out and run one HEAD probe + one DuckDB
-/// DESCRIBE query. Produces exactly one `DatasetMetadata` that ends up
-/// in the scan cache keyed on (url, "", last_modified_secs,
-/// content_length) — same shape as a local file, just with synthetic
-/// cache values.
+/// URL-based "folder" scan. Dispatches on URL shape:
+///   * Single-object URL → one HEAD probe + one DuckDB DESCRIBE.
+///   * S3 listing URL (prefix or glob) → enumerate via `glob()` and
+///     fan out a DESCRIBE per matching object.
+///
+/// Each object ends up in the scan cache keyed on (folder_path,
+/// relative_path, mtime, size) — same shape as local files. For
+/// listings the `folder_path` is the user-facing bucket/prefix URL
+/// and `relative_path` is the S3 key below it, so the cache and
+/// FolderDetail / search paths all work unchanged.
 async fn scan_remote_folder(
+    url: &str,
+    progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
+) -> Result<Vec<DatasetMetadata>> {
+    if crate::url::is_s3_listing(url) {
+        scan_s3_listing(url, progress, on_dataset).await
+    } else {
+        scan_remote_single(url, progress, on_dataset).await
+    }
+}
+
+/// Single-URL remote scan — Phase A + B1 path.
+async fn scan_remote_single(
     url: &str,
     progress: Option<ProgressCb>,
     on_dataset: Option<DatasetCb>,
@@ -233,6 +250,137 @@ async fn scan_remote_folder(
         cb(1, 1, &metadata);
     }
     Ok(vec![metadata])
+}
+
+/// S3 bucket listing scan — enumerates objects under a prefix or glob
+/// pattern, then scans each one. Emits `dataset_scanned` events as
+/// each object completes so FolderDetail streams rows in.
+///
+/// Creds are keyed on the LISTING URL (not each enumerated object),
+/// so `scan_remote_blocking_with_creds` receives the listing URL as
+/// the `creds_source`.
+async fn scan_s3_listing(
+    listing_url: &str,
+    progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
+) -> Result<Vec<DatasetMetadata>> {
+    // Step 1: enumerate objects (blocking — DuckDB is sync).
+    let listing_owned = listing_url.to_string();
+    let objects = tokio::task::spawn_blocking(move || {
+        crate::remote::list_s3_blocking(&listing_owned)
+    })
+    .await
+    .map_err(|e| AgentError::FileSystem(format!("S3 list task failed: {}", e)))??;
+
+    let total = objects.len();
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Step 2: scan each object sequentially. Parallel fan-out via
+    // rayon is tempting but DuckDB file-cache contention + S3 rate
+    // limits make serial safer for B2. The dataset_scanned events
+    // stream rows to the UI so users see progress even without
+    // parallelism.
+    let mut datasets: Vec<DatasetMetadata> = Vec::with_capacity(total);
+    for (idx, obj) in objects.into_iter().enumerate() {
+        if let Some(cb) = &progress {
+            cb(idx + 1, total, &obj.url);
+        }
+
+        let obj_url = obj.url.clone();
+        let listing_key = listing_url.to_string();
+        let head = crate::remote::RemoteHeadInfo {
+            last_modified_secs: obj.last_modified_secs,
+            content_length: obj.size_bytes,
+        };
+
+        // Per-file scan. Cache key uses the LISTING URL as folder and
+        // the object URL's filename portion as the relative path —
+        // matches the local-folder convention where folder_path is
+        // the root and relative_path is below it.
+        let listing_for_cache = listing_key.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let relative = crate::url::infer_filename_from_url(&obj_url);
+
+            // Cache fast path.
+            let hit = crate::scan_cache::with_cache(|c| {
+                c.get(
+                    &listing_for_cache,
+                    &relative,
+                    head.last_modified_secs.unwrap_or(0),
+                    head.content_length.unwrap_or(0),
+                )
+            })
+            .flatten();
+            if let Some(meta) = hit {
+                return Ok::<_, AgentError>(meta);
+            }
+
+            let mut meta = crate::remote::scan_remote_blocking_with_creds(
+                &obj_url,
+                &head,
+                &listing_key,
+            )?;
+            // Use the relative-key form so FolderDetail's row label
+            // shows the object's key below the prefix rather than the
+            // filename alone (e.g. `2024/sales.parquet`, not just
+            // `sales.parquet`). Re-derive from the URL+listing pair.
+            meta.relative_path =
+                relative_key(&obj_url, &listing_for_cache).unwrap_or(relative);
+
+            let _ = crate::scan_cache::with_cache(|c| {
+                c.put(
+                    &listing_for_cache,
+                    &meta.relative_path,
+                    head.last_modified_secs.unwrap_or(0),
+                    head.content_length.unwrap_or(0),
+                    &meta,
+                )
+            });
+            Ok(meta)
+        })
+        .await
+        .map_err(|e| {
+            AgentError::FileSystem(format!("S3 object scan task failed: {}", e))
+        })?;
+
+        match result {
+            Ok(meta) => {
+                if let Some(cb) = &on_dataset {
+                    cb(idx + 1, total, &meta);
+                }
+                datasets.push(meta);
+            }
+            Err(e) => {
+                // One bad object shouldn't kill the whole listing —
+                // most commonly it's an Access Denied on a specific
+                // prefix. Log and continue.
+                eprintln!("[scanner] scan failed for {}: {} — skipping", listing_url, e);
+            }
+        }
+    }
+
+    Ok(datasets)
+}
+
+/// Derive the S3 "relative path" of an object URL under its listing
+/// URL. Strips scheme+bucket+common-prefix so FolderDetail shows the
+/// part that varies between objects.
+fn relative_key(object_url: &str, listing_url: &str) -> Option<String> {
+    // Strip the leading glob pattern so `s3://bucket/prefix/*.parquet`
+    // acts like `s3://bucket/prefix/` for comparison purposes.
+    let base = if listing_url.contains('*') {
+        match listing_url.rsplit_once('/') {
+            Some((root, _)) => format!("{}/", root),
+            None => listing_url.to_string(),
+        }
+    } else if listing_url.ends_with('/') {
+        listing_url.to_string()
+    } else {
+        format!("{}/", listing_url)
+    };
+    object_url.strip_prefix(&base).map(|s| s.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -987,6 +1135,57 @@ mod pii_tests {
         assert!(!is_pii_column("order_id"));
         assert!(!is_pii_column("country"));
         assert!(!is_pii_column("status"));
+    }
+}
+
+#[cfg(test)]
+mod relative_key_tests {
+    use super::relative_key;
+
+    #[test]
+    fn strips_bucket_prefix_from_object_url() {
+        assert_eq!(
+            relative_key(
+                "s3://my-bucket/sales/2024/jan.parquet",
+                "s3://my-bucket/sales/",
+            ),
+            Some("2024/jan.parquet".to_string())
+        );
+    }
+
+    #[test]
+    fn adds_trailing_slash_when_listing_url_lacks_one() {
+        // User pasted `s3://bucket/prefix` (no trailing /) — we still
+        // want the derived relative path to drop the prefix correctly.
+        assert_eq!(
+            relative_key("s3://my-bucket/sales/jan.parquet", "s3://my-bucket/sales"),
+            Some("jan.parquet".to_string())
+        );
+    }
+
+    #[test]
+    fn strips_glob_tail_from_listing_url() {
+        // For `s3://bucket/path/*.parquet`, everything up to the last
+        // `/` is the effective folder; the relative path is the object
+        // name below that root.
+        assert_eq!(
+            relative_key(
+                "s3://my-bucket/sales/jan.parquet",
+                "s3://my-bucket/sales/*.parquet",
+            ),
+            Some("jan.parquet".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_when_object_url_is_outside_listing() {
+        // Defensive — if DuckDB's glob ever returns something that
+        // isn't actually under the listing prefix, we'd rather get
+        // None than misattribute it.
+        assert_eq!(
+            relative_key("s3://other-bucket/file.parquet", "s3://my-bucket/"),
+            None
+        );
     }
 }
 
