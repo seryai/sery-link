@@ -84,13 +84,17 @@ export function FolderDetail() {
     }
   };
 
-  // Mount: paint from cache, then kick off a background rescan.
+  // Mount: paint from cache. Only kick off a rescan automatically when
+  // the cache is empty (first visit) — otherwise the cached rows are
+  // the source of truth and the file watcher keeps them fresh as files
+  // change. If the user wants a forced refresh they can click Rescan.
   useEffect(() => {
     if (!folderPath) return;
     let cancelled = false;
     initialLoadRef.current = true;
 
     (async () => {
+      let hadCache = false;
       try {
         const cached = await invoke<DatasetMetadata[]>(
           'get_cached_folder_metadata',
@@ -100,11 +104,16 @@ export function FolderDetail() {
         const map = new Map<string, DatasetMetadata>();
         for (const d of cached) map.set(d.relative_path, d);
         setDatasetMap(map);
+        hadCache = cached.length > 0;
       } catch (err) {
         console.error('Failed to load cached folder metadata:', err);
       }
       if (cancelled) return;
-      void startRescan();
+      if (!hadCache) {
+        // First visit to this folder — nothing cached yet, so trigger
+        // the initial scan so the user sees their files.
+        void startRescan();
+      }
     })();
 
     return () => {
