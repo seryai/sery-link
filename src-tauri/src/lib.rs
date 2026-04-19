@@ -120,6 +120,7 @@ pub fn run() {
             commands::remove_watched_folder,
             commands::scan_folder,
             commands::search_all_folders,
+            commands::profile_dataset,
             commands::get_cached_folder_metadata,
             commands::rescan_folder,
             commands::sync_metadata,

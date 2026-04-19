@@ -376,6 +376,169 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<DatasetMetadata>, St
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Per-file profiling — used by the FileDetail page's "Profile this file"
+// action to show per-column stats (null %, unique count, min/max/avg) without
+// writing or seeing any SQL. Thin wrapper around DuckDB's SUMMARIZE.
+// ---------------------------------------------------------------------------
+
+/// One row of DuckDB's SUMMARIZE output, lightly renamed for the UI. Values
+/// are strings (DuckDB emits min/max as VARCHAR so all column types are
+/// representable) so the frontend doesn't need to worry about numeric
+/// precision or timestamp formatting.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ColumnProfile {
+    pub column_name: String,
+    pub column_type: String,
+    pub count: Option<i64>,
+    pub null_percentage: Option<f64>,
+    pub approx_unique: Option<i64>,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub avg: Option<String>,
+    pub std: Option<String>,
+}
+
+/// Compute per-column stats for a file under a watched folder. Runs
+/// locally (no cloud). Tabular formats only — docx/pptx/html have no
+/// columnar structure to profile, so the command errors.
+///
+/// Reuses the existing Parquet cache: CSV/XLSX files go through the
+/// same `csv_to_parquet` pipeline we already use for schema extraction,
+/// so a second SUMMARIZE pass on the same file is cheap.
+#[tauri::command]
+pub async fn profile_dataset(
+    folder_path: String,
+    relative_path: String,
+) -> Result<Vec<ColumnProfile>, String> {
+    tokio::task::spawn_blocking(move || profile_blocking(&folder_path, &relative_path))
+        .await
+        .map_err(|e| format!("profile task failed: {}", e))?
+}
+
+fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<ColumnProfile>, String> {
+    use duckdb::Connection;
+    use std::borrow::Cow;
+    use std::path::{Path, PathBuf};
+
+    // Compose the absolute file path. `relative_path` comes from the scan
+    // cache (which the frontend populated via scan_folder) so it's
+    // trusted input — we still guard against path traversal by requiring
+    // the final path to start with the folder path.
+    let full_path: PathBuf = Path::new(folder_path).join(relative_path);
+    if !full_path.starts_with(folder_path) {
+        return Err("invalid relative path".to_string());
+    }
+    if !full_path.exists() {
+        return Err(format!("file not found: {}", full_path.display()));
+    }
+
+    let ext = full_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Route CSV / XLSX through the Parquet cache so SUMMARIZE runs on
+    // a columnar format — orders of magnitude faster, and the cache
+    // was already built during the scan anyway.
+    let (effective_path, effective_ext): (Cow<Path>, &str) = match ext.as_str() {
+        "xlsx" | "xls" => {
+            let csv = crate::excel::xlsx_to_csv(&full_path).map_err(|e| e.to_string())?;
+            let parquet = crate::csv::csv_to_parquet(&csv).map_err(|e| e.to_string())?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        "csv" => {
+            let parquet = crate::csv::csv_to_parquet(&full_path).map_err(|e| e.to_string())?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        "parquet" => (Cow::Borrowed(full_path.as_path()), "parquet"),
+        other => {
+            return Err(format!(
+                "can't profile {} files — stats are only available for tabular data",
+                other
+            ));
+        }
+    };
+
+    let read_func = match effective_ext {
+        "parquet" => "read_parquet",
+        _ => {
+            return Err(format!(
+                "unsupported format after conversion: {}",
+                effective_ext
+            ))
+        }
+    };
+
+    let path_str = effective_path.to_string_lossy().replace('\'', "''");
+    let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+
+    // SUMMARIZE returns a multi-column result with fixed semantics across
+    // DuckDB 1.x. We address columns by name so a version bump that
+    // reorders them doesn't silently misread data. Not every column is
+    // relevant to every type, so most fields are Option<_>.
+    let sql = format!("SUMMARIZE SELECT * FROM {}('{}')", read_func, path_str);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    // Index by column name so we don't depend on positional ordering.
+    let column_names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let idx = |name: &str| column_names.iter().position(|n| n == name);
+
+    let name_idx = idx("column_name").ok_or("missing column_name")?;
+    let type_idx = idx("column_type").ok_or("missing column_type")?;
+    let count_idx = idx("count");
+    let null_pct_idx = idx("null_percentage");
+    let approx_unique_idx = idx("approx_unique");
+    let min_idx = idx("min");
+    let max_idx = idx("max");
+    let avg_idx = idx("avg");
+    let std_idx = idx("std");
+
+    let rows = stmt
+        .query_map([], |row| {
+            let get_opt_string = |i: Option<usize>| -> Option<String> {
+                i.and_then(|idx| row.get::<_, Option<String>>(idx).ok().flatten())
+            };
+            let get_opt_i64 = |i: Option<usize>| -> Option<i64> {
+                i.and_then(|idx| row.get::<_, Option<i64>>(idx).ok().flatten())
+            };
+            let get_opt_f64 = |i: Option<usize>| -> Option<f64> {
+                i.and_then(|idx| row.get::<_, Option<f64>>(idx).ok().flatten())
+            };
+
+            Ok(ColumnProfile {
+                column_name: row.get::<_, String>(name_idx).unwrap_or_default(),
+                column_type: row.get::<_, String>(type_idx).unwrap_or_default(),
+                count: get_opt_i64(count_idx),
+                // null_percentage is DECIMAL in DuckDB; the rust binding
+                // reads it as f64 via Option<f64>. If that fails we fall
+                // back to parsing the string representation.
+                null_percentage: get_opt_f64(null_pct_idx).or_else(|| {
+                    get_opt_string(null_pct_idx).and_then(|s| s.parse::<f64>().ok())
+                }),
+                approx_unique: get_opt_i64(approx_unique_idx),
+                min: get_opt_string(min_idx),
+                max: get_opt_string(max_idx),
+                avg: get_opt_string(avg_idx),
+                std: get_opt_string(std_idx),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(p) = row {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}
+
 /// Read every cached dataset for a folder without touching disk beyond
 /// the scan cache. Used by `FolderDetail` to paint instantly — rows will
 /// be reconciled against fresh data via `dataset_scanned` events once the

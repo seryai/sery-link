@@ -77,6 +77,22 @@ export interface SearchMatch {
   score: number;
 }
 
+// Output of the `profile_dataset` Tauri command — one per column in the
+// file. Values are strings so the frontend doesn't have to deal with
+// numeric precision or timestamp formatting; DuckDB's SUMMARIZE emits
+// min/max/avg/std as VARCHAR so all column types are representable.
+export interface ColumnProfile {
+  column_name: string;
+  column_type: string;
+  count: number | null;
+  null_percentage: number | null;
+  approx_unique: number | null;
+  min: string | null;
+  max: string | null;
+  avg: string | null;
+  std: string | null;
+}
+
 export interface WsStatus {
   status: 'online' | 'connecting' | 'offline' | 'error';
   detail: string | null;
