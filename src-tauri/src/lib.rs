@@ -17,6 +17,7 @@ mod plugin_marketplace;
 mod plugin_runtime;
 mod recipe_executor;
 mod relationship_detector;
+mod scan_cache;
 mod scanner;
 mod schema_diff;
 mod schema_notifications;
@@ -118,6 +119,7 @@ pub fn run() {
             commands::add_watched_folder,
             commands::remove_watched_folder,
             commands::scan_folder,
+            commands::get_cached_folder_metadata,
             commands::rescan_folder,
             commands::sync_metadata,
             commands::has_token,

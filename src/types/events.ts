@@ -5,6 +5,7 @@
 export const EVENT_NAMES = {
   SCAN_PROGRESS: 'scan_progress',
   SCAN_COMPLETE: 'scan_complete',
+  DATASET_SCANNED: 'dataset_scanned',
   SCHEMA_CHANGED: 'schema_changed',
   WS_STATUS: 'ws_status',
   QUERY_STARTED: 'query_started',
@@ -30,6 +31,32 @@ export interface ScanComplete {
   errors: number;
   total_bytes: number;
   duration_ms: number;
+}
+
+// Mirror of Rust DatasetMetadata + events::DatasetScanned.
+export interface ColumnSchemaPayload {
+  name: string;
+  type: string;
+  nullable: boolean;
+}
+
+export interface DatasetMetadataPayload {
+  relative_path: string;
+  file_format: string;
+  size_bytes: number;
+  row_count_estimate: number | null;
+  schema: ColumnSchemaPayload[];
+  last_modified: string;
+  document_markdown?: string;
+  sample_rows?: Record<string, unknown>[];
+  samples_redacted: boolean;
+}
+
+export interface DatasetScannedPayload {
+  folder: string;
+  index: number;
+  total: number;
+  dataset: DatasetMetadataPayload;
 }
 
 export interface WsStatus {

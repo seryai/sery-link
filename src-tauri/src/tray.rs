@@ -95,20 +95,26 @@ pub fn set_state<R: Runtime>(app: &AppHandle<R>, state: &str) {
     refresh(app);
 }
 
-/// Rebuild the tray menu with current state + stats. Safe to call from any
-/// thread.
+/// Rebuild the tray menu with current state + stats.
+///
+/// Dispatches the actual AppKit work (NSStatusItem mutation via
+/// `set_menu` / `set_tooltip`) to the main thread. Calling those from a
+/// background tokio worker — which is what happens when the watcher's
+/// sync_folder flips the tray to "syncing" — throws an Obj-C exception
+/// on macOS that unwinds through Rust and aborts the process. The
+/// `app.run_on_main_thread` hop keeps the operation on the one thread
+/// AppKit is happy with.
 pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
-    let state = TRAY_STATE.read().map(|s| s.clone()).unwrap_or_default();
-
-    // Rebuild the menu so the status header and "queries today" line reflect
-    // the latest snapshot. Tauri 2's menu API doesn't let us mutate individual
-    // items from arbitrary threads, so a full rebuild is the simplest path.
-    if let Some(tray) = app.tray_by_id("main") {
-        if let Ok(menu) = build_menu(app, &state) {
-            let _ = tray.set_menu(Some(menu));
+    let app_clone = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = TRAY_STATE.read().map(|s| s.clone()).unwrap_or_default();
+        if let Some(tray) = app_clone.tray_by_id("main") {
+            if let Ok(menu) = build_menu(&app_clone, &state) {
+                let _ = tray.set_menu(Some(menu));
+            }
+            let _ = tray.set_tooltip(Some(tooltip_for(&state)));
         }
-        let _ = tray.set_tooltip(Some(tooltip_for(&state)));
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------

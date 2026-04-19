@@ -110,6 +110,14 @@ pub struct SyncConfig {
     pub auto_sync_on_change: bool,
     #[serde(default = "default_fallback_scan")]
     pub fallback_scan_interval_seconds: u64,
+    /// Per-extension scan-depth overrides. Keys are bare extensions (no dot,
+    /// lowercase e.g. `"html"`); values are `"full" | "content" | "shallow"`.
+    /// Empty by default — the scanner uses its built-in defaults
+    /// (see `scanner::default_tier_for`). Users bump `html` to Content if
+    /// they care about saved-page text, or demote `csv` to Shallow for
+    /// folders of throwaway exports.
+    #[serde(default)]
+    pub scan_tier_overrides: std::collections::HashMap<String, String>,
 }
 
 fn default_fallback_scan() -> u64 {
@@ -191,6 +199,7 @@ impl Default for Config {
                 interval_seconds: 300,
                 auto_sync_on_change: true,
                 fallback_scan_interval_seconds: default_fallback_scan(),
+                scan_tier_overrides: std::collections::HashMap::new(),
             },
             app: AppConfig::default(),
         }

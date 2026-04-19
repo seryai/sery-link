@@ -57,6 +57,57 @@ pub struct DatasetMetadata {
 /// File extensions classified as document (non-tabular) types.
 const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb"];
 
+/// How much work the scanner should do for a given file.
+///
+/// - `Full`: extract schema, row count, and sample rows. Only makes sense for
+///   tabular formats where every column matters to downstream query.
+/// - `Content`: extract markdown text but skip schema/samples. For docs where
+///   searchable content is the whole point.
+/// - `Shallow`: record file-system facts only (path, size, mtime). Used for
+///   formats where content extraction is expensive per-file (sidecar spawn,
+///   full-document parse) and the marginal signal isn't worth the wall-time —
+///   the user can still find the file by name and locate it in Finder.
+///
+/// Defaults per-extension live in [`default_tier_for`]; users override via
+/// `config.sync.scan_tier_overrides`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanTier {
+    Full,
+    Content,
+    Shallow,
+}
+
+/// Map an extension to the default tier. Tuned for the common case: tabular
+/// files are cheap + valuable so go Full; DOCX/PPTX are slow per-file but
+/// document content is usually the reason someone's scanning them, so Content;
+/// HTML and IPYNB are often dumped in bulk (saved pages, notebook exports)
+/// and each one pays the sidecar spawn cost for questionable value, so
+/// Shallow. An unrecognised extension falls through to Shallow — we'll still
+/// index the filename but won't waste time trying to parse it.
+fn default_tier_for(ext: &str) -> ScanTier {
+    match ext {
+        "parquet" | "csv" | "xlsx" | "xls" => ScanTier::Full,
+        "docx" | "pptx" => ScanTier::Content,
+        "html" | "htm" | "ipynb" => ScanTier::Shallow,
+        _ => ScanTier::Shallow,
+    }
+}
+
+/// Resolve the tier for a given extension, honouring user overrides from
+/// config. Override values are matched case-insensitively against the tier
+/// names; anything unrecognised is ignored.
+fn tier_for(ext: &str, overrides: &std::collections::HashMap<String, String>) -> ScanTier {
+    if let Some(raw) = overrides.get(ext) {
+        match raw.to_ascii_lowercase().as_str() {
+            "full" => return ScanTier::Full,
+            "content" => return ScanTier::Content,
+            "shallow" => return ScanTier::Shallow,
+            _ => {} // unknown → fall through to default
+        }
+    }
+    default_tier_for(ext)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnSchema {
     pub name: String,
@@ -69,6 +120,12 @@ pub struct ColumnSchema {
 /// of the `ScanProgress` event so the watcher can adapt it trivially.
 pub type ProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
 
+/// Callback invoked once per file immediately after its metadata has been
+/// extracted (cache hit or miss). The callback receives the 1-based index,
+/// total file count, and the dataset itself — giving progressive UIs
+/// everything they need to render rows as they land.
+pub type DatasetCb = Box<dyn Fn(usize, usize, &DatasetMetadata) + Send + Sync>;
+
 // ---------------------------------------------------------------------------
 // Public scan entry points
 // ---------------------------------------------------------------------------
@@ -79,22 +136,25 @@ pub async fn scan_folder(folder_path: &str) -> Result<Vec<DatasetMetadata>> {
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
-        scan_folder_blocking(&owned, &settings, None)
+        scan_folder_blocking(&owned, &settings, None, None)
     })
     .await
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
 }
 
-/// Scan with a progress callback. Used by the rescan command + watcher when
-/// the UI wants to show a live progress bar.
-pub async fn scan_folder_with_progress(
+/// Scan with both a per-file progress callback AND a per-dataset callback
+/// that fires after each file's metadata is extracted. Used by
+/// `rescan_folder` so FolderDetail can stream rows in as they land instead
+/// of waiting for the whole folder to finish.
+pub async fn scan_folder_with_events(
     folder_path: &str,
-    progress: ProgressCb,
+    progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
 ) -> Result<Vec<DatasetMetadata>> {
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
-        scan_folder_blocking(&owned, &settings, Some(progress))
+        scan_folder_blocking(&owned, &settings, progress, on_dataset)
     })
     .await
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
@@ -108,12 +168,19 @@ pub async fn scan_folder_with_progress(
 struct FolderSettings {
     exclude_patterns: Vec<Pattern>,
     max_file_size_bytes: u64,
+    /// Extension → tier overrides, inherited from `config.sync.scan_tier_overrides`.
+    /// Empty map means "use the default tier for every extension".
+    tier_overrides: std::collections::HashMap<String, String>,
 }
 
 fn load_folder_settings(folder_path: &str) -> FolderSettings {
     // Pull the matching WatchedFolder from config; fall back to sane defaults
     // when the folder isn't registered (e.g. a one-shot CLI scan).
     let config = Config::load().ok();
+    let tier_overrides = config
+        .as_ref()
+        .map(|c| c.sync.scan_tier_overrides.clone())
+        .unwrap_or_default();
     let folder: Option<WatchedFolder> = config.and_then(|c| {
         c.watched_folders
             .into_iter()
@@ -124,6 +191,7 @@ fn load_folder_settings(folder_path: &str) -> FolderSettings {
         Some(f) => FolderSettings {
             exclude_patterns: compile_patterns(&f.exclude_patterns),
             max_file_size_bytes: f.max_file_size_mb.saturating_mul(1024 * 1024),
+            tier_overrides,
         },
         None => FolderSettings {
             exclude_patterns: compile_patterns(&[
@@ -134,6 +202,7 @@ fn load_folder_settings(folder_path: &str) -> FolderSettings {
                 "~$*".to_string(),
             ]),
             max_file_size_bytes: 1024 * 1024 * 1024, // 1 GB default
+            tier_overrides,
         },
     }
 }
@@ -145,11 +214,160 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
         .collect()
 }
 
+/// Hard cap on concurrent scanner workers. Each worker opens a DuckDB
+/// in-memory database (schema + sample extraction) and, for docx/pptx,
+/// can fork a MarkItDown Python sidecar.
+///
+/// Set to 1 after repeated crashes on macOS with the message
+/// "Rust cannot catch foreign exceptions, aborting" during parallel
+/// scans. Multiple rayon workers concurrently calling
+/// `Connection::open_in_memory()` appear to trip a DuckDB internal
+/// race that throws a C++ exception — once that exception unwinds
+/// through a Rust frame, the runtime aborts the whole process.
+/// Serial DuckDB access eliminates the race. The rayon/parallel
+/// plumbing is kept in place so we can re-enable once we've isolated
+/// a safe-to-parallelise call site.
+const MAX_SCAN_WORKERS: usize = 1;
+
+/// Global serialisation point for MarkItDown sidecar spawns. We saw the
+/// crash specifically when many workers forked Python processes in
+/// parallel — each one pulls in ~100 MB of interpreter + dependencies.
+/// A single mutex means at most one sidecar runs at a time; the per-doc
+/// wall-time cost is linear in file count but the process stays alive.
+/// Tabular extraction and the cheaper anytomd fallback stay parallel.
+static SIDECAR_GUARD: once_cell::sync::Lazy<std::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(()));
+
+pub(crate) fn lock_sidecar() -> std::sync::MutexGuard<'static, ()> {
+    // Poisoned lock is fine — the inner `()` has no invariants to
+    // break. Recover and move on.
+    SIDECAR_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Extract metadata for a single file. Split out of the parallel loop
+/// body so we can wrap the call site in `std::panic::catch_unwind` —
+/// the closure syntax made that awkward inline. Returns `None` if the
+/// file should be skipped from the final list (size cap, missing fs
+/// metadata, or total failure).
+fn scan_one(
+    entry: &walkdir::DirEntry,
+    folder_path: &str,
+    settings: &FolderSettings,
+    done: &std::sync::atomic::AtomicUsize,
+    total: usize,
+    progress: Option<&ProgressCb>,
+    on_dataset: Option<&DatasetCb>,
+) -> Option<DatasetMetadata> {
+    use std::sync::atomic::Ordering;
+
+    let path = entry.path();
+    let file_metadata = fs::metadata(path).ok()?;
+
+    // Enforce the file size cap — oversized files are logged and
+    // skipped so one bad file doesn't take the whole scan down.
+    if file_metadata.len() > settings.max_file_size_bytes {
+        eprintln!(
+            "[scanner] skipping {} ({} bytes, exceeds {} MB cap)",
+            path.display(),
+            file_metadata.len(),
+            settings.max_file_size_bytes / (1024 * 1024)
+        );
+        return None;
+    }
+
+    // Cache fast path: if (mtime, size) match what we stored, reuse
+    // the previously-extracted metadata and skip DuckDB entirely. Runs
+    // through the process-wide `with_cache` so there's only ever one
+    // DuckDB connection to scan_cache.db open at a time.
+    let cache_key = crate::scan_cache::CacheKey::from_metadata(path, folder_path, &file_metadata);
+    if let Some(key) = &cache_key {
+        let hit = crate::scan_cache::with_cache(|c| {
+            c.get(
+                folder_path,
+                &key.relative_path,
+                key.mtime_secs,
+                key.size_bytes,
+            )
+        })
+        .flatten();
+        if let Some(hit) = hit {
+            let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(cb) = progress {
+                cb(idx, total, &path.to_string_lossy());
+            }
+            if let Some(cb) = on_dataset {
+                cb(idx, total, &hit);
+            }
+            return Some(hit);
+        }
+    }
+
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let tier = tier_for(ext, &settings.tier_overrides);
+
+    // Trace log so if the process aborts mid-scan the last line tells us
+    // exactly which file + tier was being processed. This is essential
+    // for diagnosing foreign (C++ / Obj-C) exceptions that catch_unwind
+    // can't intercept — we get a breadcrumb even though we can't recover.
+    eprintln!(
+        "[scanner] ▶ {:?} tier={:?} ext={}",
+        path, tier, ext
+    );
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    let metadata = match extract_metadata_at_tier(path, folder_path, tier) {
+        Ok(m) => m,
+        Err(e) => {
+            // Full extraction failed — most commonly because DuckDB's
+            // CSV sniffer rejected a file it couldn't parse, or an Excel
+            // file was corrupted. We still want the user to see the
+            // file exists in the folder detail view, just without
+            // queryable schema. Build a minimal DatasetMetadata from
+            // the filesystem-level info we DO have.
+            eprintln!(
+                "[scanner] schema extraction failed for {:?} — degrading to file-only entry: {}",
+                path, e
+            );
+            extract_minimal_metadata(path, folder_path).ok()?
+        }
+    };
+
+    eprintln!("[scanner] ✓ {:?}", path);
+
+    // Persist freshly-extracted metadata so the next scan for this
+    // file short-circuits. Goes through the shared singleton so we
+    // never open a second DuckDB connection to scan_cache.db.
+    if let Some(key) = &cache_key {
+        let _ = crate::scan_cache::with_cache(|c| {
+            c.put(
+                folder_path,
+                &key.relative_path,
+                key.mtime_secs,
+                key.size_bytes,
+                &metadata,
+            )
+        });
+    }
+
+    let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some(cb) = progress {
+        cb(idx, total, &path.to_string_lossy());
+    }
+    if let Some(cb) = on_dataset {
+        cb(idx, total, &metadata);
+    }
+    Some(metadata)
+}
+
 fn scan_folder_blocking(
     folder_path: &str,
     settings: &FolderSettings,
     progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
 ) -> Result<Vec<DatasetMetadata>> {
+    use rayon::prelude::*;
+    use std::sync::atomic::AtomicUsize;
+
     // First pass — enumerate candidate files so the progress callback can
     // report "current/total" counts. This costs a second walk but keeps the
     // UX responsive, and walking is cheap relative to schema extraction.
@@ -163,48 +381,72 @@ fn scan_folder_blocking(
         .collect();
 
     let total = candidates.len();
-    let mut datasets = Vec::with_capacity(total);
 
-    for (idx, entry) in candidates.into_iter().enumerate() {
-        let path = entry.path();
+    // No local ScanCache instance — we route every get/put through the
+    // process-wide `scan_cache::with_cache` singleton so there's only
+    // ever one DuckDB connection to scan_cache.db, regardless of how
+    // many scans / cached-read calls run concurrently. Multiple opens
+    // on the same file tripped DuckDB's internal locking and aborted
+    // the process with a foreign C++ exception.
+    eprintln!("[scanner] using shared scan cache");
 
-        if let Some(cb) = &progress {
-            cb(idx + 1, total, &path.to_string_lossy());
-        }
+    // Atomic so parallel workers agree on progress numbering without
+    // stepping on each other. We report finishes (not starts) — with
+    // rayon a "start" order isn't meaningful.
+    let done = AtomicUsize::new(0);
 
-        // Enforce the file size cap — oversized files are logged and skipped
-        // so one bad file doesn't take the whole scan down.
-        if let Ok(meta) = fs::metadata(path) {
-            if meta.len() > settings.max_file_size_bytes {
-                eprintln!(
-                    "[scanner] skipping {} ({} bytes, exceeds {} MB cap)",
-                    path.display(),
-                    meta.len(),
-                    settings.max_file_size_bytes / (1024 * 1024)
+    // Fan the per-file work out over a DEDICATED rayon pool capped at
+    // MAX_SCAN_WORKERS. We avoid the global pool on purpose — on high-core
+    // machines it defaults to num_cpus, which produced enough concurrent
+    // DuckDB connections + sidecar forks to trip the macOS per-process
+    // VM region cap and abort(). The callbacks already require Send + Sync
+    // so they're safe to call from any worker thread; Tauri's event emit
+    // is internally synchronised.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(MAX_SCAN_WORKERS.min(num_cpus::get().max(1)))
+        .thread_name(|i| format!("scanner-{}", i))
+        .build()
+        .map_err(|e| AgentError::FileSystem(format!("scanner pool init: {}", e)))?;
+
+    let datasets: Vec<DatasetMetadata> = pool.install(|| {
+        candidates
+            .into_par_iter()
+            .filter_map(|entry| {
+                // Catch Rust panics from per-file extraction so one bad
+                // file just gets logged and skipped instead of poisoning
+                // the whole scan. Note: this does NOT catch foreign (C++/
+                // Obj-C) exceptions — those still abort the process. For
+                // those we rely on MAX_SCAN_WORKERS=1 (eliminates DuckDB
+                // concurrency races) and the `extract_metadata_at_tier`
+                // error path (which already routes DuckDB `Err` results
+                // into `extract_minimal_metadata`).
+                let path_for_log = entry.path().to_path_buf();
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        scan_one(
+                            &entry,
+                            folder_path,
+                            settings,
+                            &done,
+                            total,
+                            progress.as_ref(),
+                            on_dataset.as_ref(),
+                        )
+                    }),
                 );
-                continue;
-            }
-        }
-
-        match extract_metadata(path, folder_path) {
-            Ok(metadata) => datasets.push(metadata),
-            Err(e) => {
-                // Full extraction failed — most commonly because DuckDB's
-                // CSV sniffer rejected a file it couldn't parse, or an
-                // Excel file was corrupted. We still want the user to see
-                // the file exists in the folder detail view, just without
-                // queryable schema. Build a minimal DatasetMetadata from
-                // the filesystem-level info we DO have.
-                eprintln!(
-                    "[scanner] schema extraction failed for {:?} — degrading to file-only entry: {}",
-                    path, e
-                );
-                if let Ok(fallback) = extract_minimal_metadata(path, folder_path) {
-                    datasets.push(fallback);
+                match result {
+                    Ok(metadata) => metadata,
+                    Err(_payload) => {
+                        eprintln!(
+                            "[scanner] panic while scanning {:?} — skipping",
+                            path_for_log
+                        );
+                        None
+                    }
                 }
-            }
-        }
-    }
+            })
+            .collect()
+    });
 
     Ok(datasets)
 }
@@ -284,7 +526,23 @@ fn extract_minimal_metadata(file_path: &Path, base_path: &str) -> Result<Dataset
     })
 }
 
-fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata> {
+/// Tier-aware dispatcher. Callers pass in the resolved tier (from config or
+/// defaults); we route to the appropriate extraction path. A Shallow tier
+/// returns filename-only metadata without ever opening the file, which is
+/// the big win for folders full of HTML/IPYNB that would otherwise each
+/// pay a sidecar spawn.
+fn extract_metadata_at_tier(
+    file_path: &Path,
+    base_path: &str,
+    tier: ScanTier,
+) -> Result<DatasetMetadata> {
+    match tier {
+        ScanTier::Shallow => extract_minimal_metadata(file_path, base_path),
+        ScanTier::Content | ScanTier::Full => extract_metadata(file_path, base_path, tier),
+    }
+}
+
+fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result<DatasetMetadata> {
     let file_metadata = fs::metadata(file_path)
         .map_err(|e| AgentError::FileSystem(format!("Failed to read file metadata: {}", e)))?;
 
@@ -320,13 +578,18 @@ fn extract_metadata(file_path: &Path, base_path: &str) -> Result<DatasetMetadata
             samples_redacted: false,
         })
     } else {
-        // Tabular files — DuckDB schema extraction + optional sampling
+        // Tabular files — DuckDB schema extraction + optional sampling.
         let (schema, row_count) = extract_schema(file_path, ext, &file_metadata)?;
         // Sample-row collection runs best-effort — a failure here MUST NOT
-        // block the sync. If duckdb can't open the file or the row shape
-        // is weird, fall back to (None, false).
-        let (sample_rows, samples_redacted) = extract_sample_rows(file_path, ext, &schema)
-            .unwrap_or((None, false));
+        // block the sync. At Content tier we skip it entirely: saves one
+        // DuckDB query per file and most users never expand the preview
+        // anyway. Full tier still collects samples so the cloud agent has
+        // concrete values to ground LLM answers.
+        let (sample_rows, samples_redacted) = if matches!(tier, ScanTier::Full) {
+            extract_sample_rows(file_path, ext, &schema).unwrap_or((None, false))
+        } else {
+            (None, false)
+        };
         Ok(DatasetMetadata {
             relative_path,
             file_format: ext.to_string(),
@@ -390,7 +653,15 @@ fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
 
 /// Call the MarkItDown sidecar binary to convert a document.
 /// Returns `Some(markdown)` on success, `None` on failure.
+///
+/// Serialised globally via `SIDECAR_GUARD` so a parallel scan can't fork
+/// a dozen Python processes at once — each one is ~100 MB and the fleet
+/// of them is what tripped `mach_vm_allocate_kernel` in the scanner crash
+/// reports. One-at-a-time is plenty given how few DOCX/PPTX files most
+/// folders contain.
 fn try_sidecar_conversion(file_path: &Path) -> Option<String> {
+    let _guard = lock_sidecar();
+
     // Construct sidecar binary path (bundled with the app)
     let sidecar_path = if cfg!(target_os = "macos") {
         // macOS: sidecar is in .app/Contents/MacOS/
@@ -491,6 +762,7 @@ fn extract_schema(
     ext: &str,
     _file_metadata: &fs::Metadata,
 ) -> Result<(Vec<ColumnSchema>, i64)> {
+    eprintln!("[extract_schema] open_in_memory {:?}", file_path);
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("Failed to open DuckDB: {}", e)))?;
 
@@ -499,17 +771,21 @@ fn extract_schema(
     // This keeps the read_func pipeline uniform downstream (always Parquet).
     let (effective_path, effective_ext): (Cow<Path>, &str) = match ext {
         "xlsx" | "xls" => {
+            eprintln!("[extract_schema] xlsx→csv {:?}", file_path);
             let csv = excel::xlsx_to_csv(file_path)?;
+            eprintln!("[extract_schema] csv→parquet {:?}", csv);
             let parquet = crate::csv::csv_to_parquet(&csv)?;
             (Cow::Owned(parquet), "parquet")
         },
         "csv" => {
+            eprintln!("[extract_schema] csv→parquet {:?}", file_path);
             let parquet = crate::csv::csv_to_parquet(file_path)?;
             (Cow::Owned(parquet), "parquet")
         },
         _ => (Cow::Borrowed(file_path), ext)
     };
     let path_str = effective_path.to_string_lossy();
+    eprintln!("[extract_schema] DESCRIBE {}", path_str);
 
     let (read_func, count_sql) = match effective_ext {
         "parquet" => (
@@ -623,6 +899,81 @@ mod pii_tests {
         assert!(!is_pii_column("order_id"));
         assert!(!is_pii_column("country"));
         assert!(!is_pii_column("status"));
+    }
+}
+
+#[cfg(test)]
+mod tier_tests {
+    use super::{default_tier_for, tier_for, ScanTier};
+    use std::collections::HashMap;
+
+    #[test]
+    fn tabular_formats_default_to_full() {
+        for ext in ["parquet", "csv", "xlsx", "xls"] {
+            assert_eq!(default_tier_for(ext), ScanTier::Full, "{ext} should be Full");
+        }
+    }
+
+    #[test]
+    fn docx_and_pptx_default_to_content() {
+        for ext in ["docx", "pptx"] {
+            assert_eq!(
+                default_tier_for(ext),
+                ScanTier::Content,
+                "{ext} should be Content"
+            );
+        }
+    }
+
+    #[test]
+    fn html_and_ipynb_default_to_shallow() {
+        // The motivating case — these were the main perf culprit because
+        // every one spawned the MarkItDown sidecar. Shallow by default.
+        for ext in ["html", "htm", "ipynb"] {
+            assert_eq!(
+                default_tier_for(ext),
+                ScanTier::Shallow,
+                "{ext} should be Shallow"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_extensions_default_to_shallow() {
+        // Anything we haven't explicitly classified falls to Shallow so
+        // the scanner never burns cycles on something it can't parse.
+        assert_eq!(default_tier_for("xyz"), ScanTier::Shallow);
+        assert_eq!(default_tier_for(""), ScanTier::Shallow);
+    }
+
+    #[test]
+    fn override_promotes_html_to_content() {
+        let mut overrides = HashMap::new();
+        overrides.insert("html".to_string(), "content".to_string());
+        assert_eq!(tier_for("html", &overrides), ScanTier::Content);
+    }
+
+    #[test]
+    fn override_demotes_csv_to_shallow() {
+        let mut overrides = HashMap::new();
+        overrides.insert("csv".to_string(), "shallow".to_string());
+        assert_eq!(tier_for("csv", &overrides), ScanTier::Shallow);
+    }
+
+    #[test]
+    fn override_is_case_insensitive_on_value() {
+        let mut overrides = HashMap::new();
+        overrides.insert("html".to_string(), "CONTENT".to_string());
+        assert_eq!(tier_for("html", &overrides), ScanTier::Content);
+    }
+
+    #[test]
+    fn unknown_override_value_falls_through_to_default() {
+        // A typo in the config ("fuull" instead of "full") must not wipe
+        // out the sensible default — we silently fall through.
+        let mut overrides = HashMap::new();
+        overrides.insert("csv".to_string(), "fuull".to_string());
+        assert_eq!(tier_for("csv", &overrides), ScanTier::Full);
     }
 }
 
