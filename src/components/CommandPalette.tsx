@@ -14,7 +14,6 @@ import {
   RefreshCw,
   Settings as SettingsIcon,
   Shield,
-  Sparkles,
   Database,
   Trash2,
   X,
@@ -67,17 +66,6 @@ export function CommandPalette({
         keywords: ['folders', 'data', 'navigate'],
         action: () => {
           onNavigate('folders');
-          setIsOpen(false);
-        },
-        section: 'navigation',
-      },
-      {
-        id: 'nav-analytics',
-        label: 'Go to Analytics',
-        icon: <Sparkles className="h-4 w-4" />,
-        keywords: ['analytics', 'recipes', 'query', 'sql', 'navigate'],
-        action: () => {
-          onNavigate('analytics');
           setIsOpen(false);
         },
         section: 'navigation',
