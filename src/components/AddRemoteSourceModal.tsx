@@ -125,7 +125,7 @@ export function AddRemoteSourceModal({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && canSubmit) submit();
           }}
-          placeholder="https://example.com/data.csv  or  s3://bucket/path/file.parquet"
+          placeholder="https://example.com/data.csv,  s3://bucket/path/file.parquet,  or  s3://bucket/prefix/"
           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
         />
 
@@ -212,14 +212,15 @@ export function AddRemoteSourceModal({
           <strong className="text-slate-800 dark:text-slate-200">
             What works:
           </strong>{' '}
-          public HTTPS links to <code>.csv</code>/<code>.parquet</code>,{' '}
-          and <code>s3://bucket/path/file.parquet</code>-style S3 objects
-          (with AWS keys).
+          public HTTPS links to <code>.csv</code>/<code>.parquet</code>,
+          individual S3 objects, and S3 bucket/prefix listings like{' '}
+          <code>s3://bucket/prefix/</code> (one level deep) or explicit
+          globs like <code>s3://bucket/**/*.parquet</code>.
           <br />
           <strong className="text-slate-800 dark:text-slate-200">
             Not yet:
           </strong>{' '}
-          full S3 bucket listing, GCS / Azure, Google Sheets, databases.
+          GCS / Azure, Google Sheets, databases.
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-2">

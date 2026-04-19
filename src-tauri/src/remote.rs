@@ -84,17 +84,85 @@ pub async fn head_probe(url: &str) -> Result<RemoteHeadInfo> {
     })
 }
 
-/// Synchronous schema + sample extraction for a remote URL via DuckDB.
-/// Expected to run inside `tokio::task::spawn_blocking` since DuckDB's
-/// Rust binding is sync.
+/// One object discovered by an S3 listing query. Keeps the glob
+/// results typed so downstream per-file scanning has size/mtime to
+/// seed the scan cache without a separate HEAD request.
+#[derive(Debug, Clone)]
+pub struct ListedObject {
+    pub url: String,
+    pub size_bytes: Option<i64>,
+    pub last_modified_secs: Option<i64>,
+}
+
+/// Enumerate objects under an S3 bucket / prefix / glob. Runs one
+/// DuckDB `glob(...)` query against the httpfs-enabled connection;
+/// each row is one matching object URL.
 ///
-/// The `last_modified_secs` / `content_length` come from a prior
-/// `head_probe` and land in the returned `DatasetMetadata` as its
-/// `size_bytes` + `last_modified`. They're metadata-only — they don't
-/// change how DuckDB reads the file.
+/// Called inside a `spawn_blocking` because DuckDB is sync. The caller
+/// (scanner) is responsible for loading creds + httpfs before the
+/// glob query — same as for single-object scans.
+pub fn list_s3_blocking(listing_url: &str) -> Result<Vec<ListedObject>> {
+    let conn = Connection::open_in_memory()
+        .map_err(|e| AgentError::Database(format!("open DuckDB: {}", e)))?;
+    install_httpfs(&conn)?;
+    apply_s3_credentials(&conn, listing_url)?;
+
+    let pattern = crate::url::expand_s3_listing_pattern(listing_url);
+    let escaped = pattern.replace('\'', "''");
+
+    // `glob(pattern)` returns a table with `file` (URL). DuckDB ≥ 1.1
+    // also exposes size/modified via `parquet_file_metadata` / custom
+    // table functions but those aren't portable across file types —
+    // so we return just the URL list and let per-file scans fill in
+    // the rest from DuckDB's read_csv_auto / read_parquet.
+    let sql = format!("SELECT file FROM glob('{}')", escaped);
+    eprintln!("[remote-list] ▶ {}", pattern);
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AgentError::Database(format!("prepare glob: {}", e)))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| AgentError::Database(format!("execute glob: {}", e)))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        if let Ok(url) = row {
+            out.push(ListedObject {
+                url,
+                size_bytes: None,
+                last_modified_secs: None,
+            });
+        }
+    }
+    eprintln!("[remote-list] ✓ {} object(s) found", out.len());
+    Ok(out)
+}
+
+/// Synchronous schema + sample extraction for a remote URL via DuckDB.
+/// Back-compat shim that uses the URL itself as the credential lookup
+/// key — correct for single-object scans. Listing fan-out should call
+/// `scan_remote_blocking_with_creds` instead, passing the parent
+/// listing URL as the creds source.
 pub fn scan_remote_blocking(
     url: &str,
     head: &RemoteHeadInfo,
+) -> Result<DatasetMetadata> {
+    scan_remote_blocking_with_creds(url, head, url)
+}
+
+/// Like `scan_remote_blocking` but takes the key-ring lookup key
+/// explicitly. S3 listings store creds under the bucket/prefix URL
+/// but then scan individual object URLs — the two don't match, so the
+/// creds source has to be passed in separately.
+///
+/// Expected to run inside `tokio::task::spawn_blocking` since DuckDB's
+/// Rust binding is sync.
+pub fn scan_remote_blocking_with_creds(
+    url: &str,
+    head: &RemoteHeadInfo,
+    creds_source: &str,
 ) -> Result<DatasetMetadata> {
     // Determine how to read the URL. DuckDB's httpfs extension gives us
     // `read_parquet('https://…')`, `read_csv_auto('https://…')`, etc.
@@ -124,10 +192,12 @@ pub fn scan_remote_blocking(
 
     // S3 URLs need credentials pushed into the connection before the
     // query. Loaded from the keyring entry the UI wrote when the
-    // source was added. A missing entry is a user-visible error —
-    // we can't silently try an anonymous fetch against a private bucket.
+    // source was added (`creds_source` — for listings this is the
+    // parent prefix, for single-object it's the URL itself). A
+    // missing entry is a user-visible error — we can't silently try
+    // an anonymous fetch against a private bucket.
     if crate::url::is_s3_url(url) {
-        apply_s3_credentials(&conn, url)?;
+        apply_s3_credentials(&conn, creds_source)?;
     }
 
     let escaped_url = url.replace('\'', "''");

@@ -29,6 +29,48 @@ pub fn is_s3_url(path: &str) -> bool {
     path.trim_start().to_ascii_lowercase().starts_with("s3://")
 }
 
+/// True when an `s3://` URL denotes a listing (bucket root, prefix,
+/// or explicit glob) rather than a single object. The scanner branches
+/// on this: listing URLs fan out via `glob(...)` and produce one
+/// `DatasetMetadata` per matching object; object URLs fetch one file
+/// directly.
+///
+/// Heuristics:
+///   * Ends with `/` → prefix (includes bare-bucket `s3://bucket/`)
+///   * Contains `*` → explicit glob
+///   * Otherwise → single object
+pub fn is_s3_listing(url: &str) -> bool {
+    if !is_s3_url(url) {
+        return false;
+    }
+    let trimmed = url.trim();
+    trimmed.ends_with('/') || trimmed.contains('*')
+}
+
+/// Expand a bucket-prefix listing URL to the glob pattern we'll hand
+/// to DuckDB. Only callers should be the scanner's listing path.
+///
+///   * `s3://bucket/`              → `s3://bucket/*.{csv,parquet}`
+///   * `s3://bucket/prefix/`       → `s3://bucket/prefix/*.{csv,parquet}`
+///   * `s3://bucket/**/*.parquet`  → unchanged (already a glob)
+///   * `s3://bucket/prefix/*.csv`  → unchanged
+///
+/// We deliberately default to one-level-deep listing. Users who want
+/// recursive can paste `**/` explicitly — matches DuckDB's glob
+/// semantics and avoids surprise bills on buckets with millions of
+/// nested objects.
+pub fn expand_s3_listing_pattern(url: &str) -> String {
+    if url.contains('*') {
+        return url.to_string();
+    }
+    let base = if url.ends_with('/') {
+        url.to_string()
+    } else {
+        format!("{}/", url)
+    };
+    format!("{}*.{{csv,parquet}}", base)
+}
+
 /// Result of sanitising a user-pasted URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UrlValidation {
@@ -77,24 +119,24 @@ pub fn validate_url(raw: &str) -> UrlValidation {
         };
     }
 
-    // For s3:// the user must specify a path (object key) — a bare
-    // bucket is a bucket-listing case we'll handle in Phase B2, not B1.
-    if lower.starts_with("s3://") {
-        let after = after_scheme;
-        // after_scheme looks like `bucket/key` or `bucket` — require
-        // at least one `/` with something on the right so we know an
-        // object key is present.
-        let has_object = after
-            .split_once('/')
-            .map(|(_, rest)| !rest.is_empty())
-            .unwrap_or(false);
-        if !has_object {
-            return UrlValidation::Invalid {
-                reason: "s3:// URL needs an object path, e.g. s3://bucket/folder/file.parquet. \
-                         Bucket listing isn't supported yet."
-                    .to_string(),
-            };
-        }
+    // s3:// URLs must include a bucket name (the part after the scheme).
+    // Object key, prefix, or glob are all valid forms — the scanner
+    // branches on shape at scan time.
+    //
+    // Accepted shapes:
+    //   * s3://bucket/key.parquet          — single object (B1)
+    //   * s3://bucket/                     — bucket listing (B2)
+    //   * s3://bucket/prefix/              — prefix listing (B2)
+    //   * s3://bucket/prefix/*.parquet     — explicit glob (B2)
+    //   * s3://bucket/**/*.parquet         — recursive glob (B2)
+    if lower.starts_with("s3://") && after_scheme.split_once('/').is_none()
+        && after_scheme.is_empty()
+    {
+        // Unreachable given the earlier `after_scheme.is_empty()`
+        // guard — kept as an explicit invariant for future edits.
+        return UrlValidation::Invalid {
+            reason: "s3:// URL is missing a bucket".to_string(),
+        };
     }
 
     // Canonicalise by lower-casing the scheme but preserving path/query
@@ -268,14 +310,61 @@ mod tests {
     }
 
     #[test]
-    fn validate_url_rejects_bare_s3_bucket() {
-        // Phase B1 requires an object key — bucket listing is Phase B2.
-        for bad in &["s3://mybucket", "s3://mybucket/", "s3://"] {
+    fn validate_url_accepts_s3_prefix_and_glob_forms() {
+        for ok in &[
+            "s3://mybucket/",                          // bucket listing
+            "s3://mybucket/prefix/",                   // prefix listing
+            "s3://mybucket/prefix/*.parquet",          // explicit glob
+            "s3://mybucket/**/*.parquet",              // recursive glob
+            "s3://mybucket/prefix/file.parquet",       // single object
+        ] {
+            match validate_url(ok) {
+                UrlValidation::Ok { .. } => {}
+                other => panic!("should have accepted: {:?} → {:?}", ok, other),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_url_rejects_bare_s3_without_bucket() {
+        for bad in &["s3://", "s3:///key"] {
             match validate_url(bad) {
                 UrlValidation::Invalid { .. } => {}
                 other => panic!("should have rejected: {:?} → {:?}", bad, other),
             }
         }
+    }
+
+    #[test]
+    fn is_s3_listing_detects_prefix_and_glob() {
+        assert!(is_s3_listing("s3://bucket/"));
+        assert!(is_s3_listing("s3://bucket/prefix/"));
+        assert!(is_s3_listing("s3://bucket/*.parquet"));
+        assert!(is_s3_listing("s3://bucket/**/*.parquet"));
+        assert!(!is_s3_listing("s3://bucket/prefix/file.parquet"));
+        assert!(!is_s3_listing("https://example.com/path/"));
+    }
+
+    #[test]
+    fn expand_s3_listing_pattern_defaults_one_level_deep() {
+        assert_eq!(
+            expand_s3_listing_pattern("s3://bucket/"),
+            "s3://bucket/*.{csv,parquet}"
+        );
+        assert_eq!(
+            expand_s3_listing_pattern("s3://bucket/prefix/"),
+            "s3://bucket/prefix/*.{csv,parquet}"
+        );
+        // Already a glob — left alone.
+        assert_eq!(
+            expand_s3_listing_pattern("s3://bucket/**/*.parquet"),
+            "s3://bucket/**/*.parquet"
+        );
+        // Bare prefix with no trailing slash — append one.
+        assert_eq!(
+            expand_s3_listing_pattern("s3://bucket/prefix"),
+            "s3://bucket/prefix/*.{csv,parquet}"
+        );
     }
 
     #[test]
