@@ -152,21 +152,45 @@ pub async fn add_watched_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Register a public HTTPS URL as a remote data source. Stored in the
-/// same `watched_folders` list as local folders — the URL itself is
-/// the `path`. `is_remote_url()` discriminates downstream.
+/// Register a remote data source. Accepts `http(s)://` (Phase A) or
+/// `s3://` (Phase B) URLs. The URL is stored in `watched_folders`
+/// alongside local folder paths; `is_remote_url()` / `is_s3_url()`
+/// discriminate downstream.
 ///
-/// Phase A: public URLs only (no credentials, no bucket listing). The
-/// initial scan happens on the frontend side via `rescan_folder` after
-/// this command returns, so users see progress/errors in the same UI
-/// that handles local folders.
+/// For s3:// URLs the caller must also pass `credentials` — we
+/// validate + persist them to the macOS Keychain via
+/// `remote_creds::save` before the URL is added, so the initial scan
+/// has something to sign with.
+///
+/// The initial scan happens on the frontend via `rescan_folder` after
+/// this returns, so users see progress/errors in the same UI that
+/// handles local folders.
 #[tauri::command]
-pub async fn add_remote_source(url: String) -> Result<String, String> {
+pub async fn add_remote_source(
+    url: String,
+    credentials: Option<crate::remote_creds::S3Credentials>,
+) -> Result<String, String> {
     let validation = crate::url::validate_url(&url);
     let normalised = match validation {
         crate::url::UrlValidation::Ok { normalised, .. } => normalised,
         crate::url::UrlValidation::Invalid { reason } => return Err(reason),
     };
+
+    // S3 URLs require credentials. Gate before touching config so a
+    // bad-creds input doesn't leave an orphan entry behind.
+    if crate::url::is_s3_url(&normalised) {
+        let creds = credentials.ok_or_else(|| {
+            "S3 sources need credentials — provide AWS access key, secret, and region"
+                .to_string()
+        })?;
+        crate::remote_creds::save(&normalised, &creds).map_err(|e| e.to_string())?;
+    } else if credentials.is_some() {
+        // Public HTTP(S) URLs don't take credentials in Phase B; if the
+        // UI ever sends some, clearly flag rather than silently drop.
+        return Err(
+            "Credentials are only used for s3:// URLs in this build.".to_string(),
+        );
+    }
 
     let mut config = Config::load().map_err(|e| e.to_string())?;
     config.add_watched_folder(normalised.clone(), false);
@@ -180,6 +204,13 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
     config.remove_watched_folder(&path);
     config.save().map_err(|e| e.to_string())?;
+    // Clear any S3 credentials we stored for this URL — otherwise a
+    // keyring entry lingers after the source is gone. Failure here is
+    // non-fatal: the user can remove the entry manually from Keychain
+    // Access if needed.
+    if crate::url::is_s3_url(&path) {
+        let _ = crate::remote_creds::delete(&path);
+    }
     // Drop any cached scan results for this folder — otherwise re-adding
     // the same path later would surface rows for files that may have
     // moved or been deleted in the meantime. Goes through the shared
@@ -526,10 +557,10 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     }
 }
 
-/// Profile a remote URL. Loads httpfs in the session and runs the
-/// same SUMMARIZE pattern against `read_parquet` / `read_csv_auto`
-/// pointed at the URL. Wrapped in catch_unwind to match the local
-/// path's panic safety.
+/// Profile a remote URL. Loads httpfs + (for s3://) credentials into
+/// the session and runs the same SUMMARIZE pattern used for local
+/// files. Wrapped in catch_unwind to match the local path's panic
+/// safety.
 fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
     let ext = crate::url::extension_from_url(url);
     let read_func = match ext.as_str() {
@@ -537,16 +568,17 @@ fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
         "csv" | "tsv" => "read_csv_auto",
         other => {
             return Err(format!(
-                "can't profile remote {} files — Phase A supports csv / parquet URLs",
+                "can't profile remote {} files — Phase A/B support csv / parquet URLs",
                 if other.is_empty() { "unknown" } else { other }
             ));
         }
     };
     let escaped = url.replace('\'', "''");
+    let url_owned = url.to_string();
     let read_func_owned = read_func.to_string();
     let escaped_owned = escaped;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        run_remote_summarize(&read_func_owned, &escaped_owned)
+        run_remote_summarize(&url_owned, &read_func_owned, &escaped_owned)
     }));
     match result {
         Ok(r) => r,
@@ -558,13 +590,23 @@ fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
     }
 }
 
-fn run_remote_summarize(read_func: &str, escaped_url: &str) -> Result<Vec<ColumnProfile>, String> {
+fn run_remote_summarize(
+    url: &str,
+    read_func: &str,
+    escaped_url: &str,
+) -> Result<Vec<ColumnProfile>, String> {
     use duckdb::Connection;
     let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
     // Install + load httpfs — we're on a fresh connection so the
     // extension isn't loaded by default.
     conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
         .map_err(|e| format!("load httpfs: {}", e))?;
+    // S3 URLs need credentials in the session before we can run any
+    // query against them. The scanner already persisted them to the
+    // keyring when the source was added.
+    if crate::url::is_s3_url(url) {
+        crate::remote::apply_s3_credentials(&conn, url).map_err(|e| e.to_string())?;
+    }
     let sql = format!(
         "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
         read_func, escaped_url

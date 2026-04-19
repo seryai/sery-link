@@ -12,12 +12,21 @@
 //!   * Other schemes (ftp, file, s3, etc.) are rejected at the input boundary.
 
 /// Does this string look like a URL Sery Link can handle as a remote
-/// source? We deliberately accept both `http://` and `https://` so users
-/// can point at localhost / internal-network endpoints during testing;
-/// the UI should visually warn about unencrypted HTTP.
+/// source? Accepts both `http(s)://` (Phase A) and `s3://` (Phase B).
+/// We deliberately allow unencrypted HTTP so users can point at
+/// localhost / internal-network endpoints during testing — the UI
+/// visually warns.
 pub fn is_remote_url(path: &str) -> bool {
     let lower = path.trim_start().to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
+    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("s3://")
+}
+
+/// True only for `s3://…` URLs. S3 sources need credentials stored in
+/// the keyring; plain HTTP(S) sources don't. Callers branch on this
+/// before running scanner / profile queries so they know whether to
+/// load creds into the DuckDB session.
+pub fn is_s3_url(path: &str) -> bool {
+    path.trim_start().to_ascii_lowercase().starts_with("s3://")
 }
 
 /// Result of sanitising a user-pasted URL.
@@ -31,8 +40,9 @@ pub enum UrlValidation {
 }
 
 /// Sanity-check a user-supplied URL before adding it as a watched
-/// source. We're not trying to be a full URL parser — just enough to
-/// reject common typos and non-HTTP schemes before hitting the network.
+/// source. Accepts `http(s)://` and `s3://`. We're not trying to be a
+/// full URL parser — just enough to reject common typos and unsupported
+/// schemes before hitting the network.
 pub fn validate_url(raw: &str) -> UrlValidation {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -41,27 +51,54 @@ pub fn validate_url(raw: &str) -> UrlValidation {
         };
     }
     let lower = trimmed.to_ascii_lowercase();
-    let insecure = lower.starts_with("http://");
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return UrlValidation::Invalid {
-            reason: "URL must start with http:// or https://".to_string(),
-        };
-    }
-    // Everything after the scheme needs at least a host — `http://` alone
-    // is structurally invalid.
-    let after_scheme = if insecure {
-        &trimmed[7..]
+
+    let (scheme_end, insecure) = if lower.starts_with("https://") {
+        (8usize, false)
+    } else if lower.starts_with("http://") {
+        (7, true)
+    } else if lower.starts_with("s3://") {
+        (5, false)
     } else {
-        &trimmed[8..]
+        return UrlValidation::Invalid {
+            reason: "URL must start with https://, http://, or s3://".to_string(),
+        };
     };
+
+    // Everything after the scheme needs at least a host (or bucket for
+    // s3://). `s3://` or `http://` alone is structurally invalid.
+    let after_scheme = &trimmed[scheme_end..];
     if after_scheme.is_empty() || after_scheme.starts_with('/') {
         return UrlValidation::Invalid {
-            reason: "URL is missing a host".to_string(),
+            reason: if lower.starts_with("s3://") {
+                "URL is missing a bucket".to_string()
+            } else {
+                "URL is missing a host".to_string()
+            },
         };
     }
+
+    // For s3:// the user must specify a path (object key) — a bare
+    // bucket is a bucket-listing case we'll handle in Phase B2, not B1.
+    if lower.starts_with("s3://") {
+        let after = after_scheme;
+        // after_scheme looks like `bucket/key` or `bucket` — require
+        // at least one `/` with something on the right so we know an
+        // object key is present.
+        let has_object = after
+            .split_once('/')
+            .map(|(_, rest)| !rest.is_empty())
+            .unwrap_or(false);
+        if !has_object {
+            return UrlValidation::Invalid {
+                reason: "s3:// URL needs an object path, e.g. s3://bucket/folder/file.parquet. \
+                         Bucket listing isn't supported yet."
+                    .to_string(),
+            };
+        }
+    }
+
     // Canonicalise by lower-casing the scheme but preserving path/query
-    // case — many servers are case-sensitive on paths.
-    let scheme_end = if insecure { 7 } else { 8 };
+    // case — S3 keys and many HTTP paths are case-sensitive.
     let mut normalised = String::with_capacity(trimmed.len());
     normalised.push_str(&lower[..scheme_end]);
     normalised.push_str(&trimmed[scheme_end..]);
@@ -155,10 +192,11 @@ mod tests {
     }
 
     #[test]
-    fn is_remote_url_rejects_non_http() {
+    fn is_remote_url_rejects_unsupported_schemes() {
         assert!(!is_remote_url("/Users/x/file.csv"));
         assert!(!is_remote_url("file:///Users/x/file.csv"));
-        assert!(!is_remote_url("s3://bucket/key"));
+        assert!(!is_remote_url("ftp://example.com/file.csv"));
+        assert!(!is_remote_url("gs://bucket/key"));
         assert!(!is_remote_url(""));
     }
 
@@ -189,7 +227,7 @@ mod tests {
         for bad in &[
             "ftp://example.com/data.csv",
             "file:///tmp/data.csv",
-            "s3://bucket/key",
+            "gs://bucket/key",
             "data.csv",
             "",
             "  ",
@@ -198,6 +236,44 @@ mod tests {
             match validate_url(bad) {
                 UrlValidation::Invalid { .. } => {}
                 UrlValidation::Ok { .. } => panic!("should have rejected: {:?}", bad),
+            }
+        }
+    }
+
+    #[test]
+    fn is_s3_url_detects_scheme() {
+        assert!(is_s3_url("s3://bucket/key.parquet"));
+        assert!(is_s3_url("S3://bucket/key"));
+        assert!(!is_s3_url("https://example.com/file.csv"));
+        assert!(!is_s3_url("/local/path"));
+    }
+
+    #[test]
+    fn is_remote_url_accepts_s3() {
+        assert!(is_remote_url("s3://bucket/key"));
+    }
+
+    #[test]
+    fn validate_url_accepts_s3_object() {
+        match validate_url("s3://my-bucket/path/to/file.parquet") {
+            UrlValidation::Ok {
+                normalised,
+                insecure,
+            } => {
+                assert_eq!(normalised, "s3://my-bucket/path/to/file.parquet");
+                assert!(!insecure);
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_url_rejects_bare_s3_bucket() {
+        // Phase B1 requires an object key — bucket listing is Phase B2.
+        for bad in &["s3://mybucket", "s3://mybucket/", "s3://"] {
+            match validate_url(bad) {
+                UrlValidation::Invalid { .. } => {}
+                other => panic!("should have rejected: {:?} → {:?}", bad, other),
             }
         }
     }
