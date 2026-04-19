@@ -167,6 +167,205 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Global search — the v1 hero feature. Ranks cached datasets by filename,
+// column name, and document content against a user query. See
+// `docs/local-first positioning` memory note for why this is the core wedge.
+// ---------------------------------------------------------------------------
+
+/// Why a particular dataset matched a search query. Multiple reasons can
+/// apply to the same file (e.g. filename + column name both contain the
+/// query) — the UI surfaces each as a badge so users understand why a
+/// result is ranked where it is.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SearchMatchReason {
+    /// The query matched somewhere in the relative path (filename or
+    /// any parent segment).
+    Filename,
+    /// The query matched a column name in a tabular file's schema.
+    Column {
+        name: String,
+        col_type: String,
+    },
+    /// The query matched document-extracted text. Snippet is a ±40-char
+    /// window around the first match, so the UI can show context.
+    Content {
+        snippet: String,
+    },
+}
+
+/// One search result: a single dataset plus the reasons it matched and a
+/// relevance score (higher = better).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchMatch {
+    pub folder_path: String,
+    pub relative_path: String,
+    pub file_format: String,
+    pub size_bytes: u64,
+    pub last_modified: String,
+    pub row_count_estimate: Option<i64>,
+    pub column_count: usize,
+    pub match_reasons: Vec<SearchMatchReason>,
+    pub score: i32,
+}
+
+const SEARCH_RESULT_LIMIT: usize = 200;
+
+/// Global column-aware search. Reads every cached dataset via the shared
+/// `scan_cache` singleton and scores each by filename / column-name /
+/// content match against the query. Case-insensitive. Empty query
+/// returns `[]`.
+///
+/// Runs entirely on the scan cache — no disk re-read — so results are
+/// instant for cache-hit datasets. Files that haven't been scanned yet
+/// won't appear; the user needs to open their folder(s) first to
+/// populate the cache.
+#[tauri::command]
+pub async fn search_all_folders(query: String) -> Result<Vec<SearchMatch>, String> {
+    let trimmed = query.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        let entries = crate::scan_cache::with_cache(|c| c.get_all_entries())
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+
+        Ok(rank_matches(&entries, &trimmed))
+    })
+    .await
+    .map_err(|e| format!("search task failed: {}", e))?
+}
+
+/// Pure scoring function — split out for testing. Caller guarantees
+/// `query` is non-empty (the command short-circuits empty queries so
+/// we never pay the iteration cost).
+fn rank_matches(
+    entries: &[crate::scan_cache::CachedEntry],
+    query: &str,
+) -> Vec<SearchMatch> {
+    let q = query.to_lowercase();
+    let mut matches: Vec<SearchMatch> = Vec::new();
+
+    for entry in entries {
+        let mut reasons: Vec<SearchMatchReason> = Vec::new();
+        let mut score: i32 = 0;
+
+        // --- Filename ---
+        // We match against the relative path (so "2024/report" hits)
+        // and separately against the basename (so "report.csv" scores
+        // higher than buried-in-a-subfolder hits).
+        let rel_lower = entry.relative_path.to_lowercase();
+        let basename_lower: String = std::path::Path::new(&entry.relative_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_else(|| rel_lower.clone());
+
+        if basename_lower == q {
+            score += 120;
+            reasons.push(SearchMatchReason::Filename);
+        } else if basename_lower.starts_with(&q) {
+            score += 95;
+            reasons.push(SearchMatchReason::Filename);
+        } else if basename_lower.contains(&q) {
+            score += 75;
+            reasons.push(SearchMatchReason::Filename);
+        } else if rel_lower.contains(&q) {
+            // Matched a parent directory segment — weaker signal.
+            score += 40;
+            reasons.push(SearchMatchReason::Filename);
+        }
+
+        // --- Column name (tabular files only) ---
+        // Stop after the strongest single column match. Showing five
+        // near-duplicate column reasons for one file is noise.
+        let mut best_col_score = 0i32;
+        let mut best_col: Option<(String, String)> = None;
+        for col in &entry.metadata.schema {
+            let col_lower = col.name.to_lowercase();
+            let col_score = if col_lower == q {
+                95
+            } else if col_lower.starts_with(&q) {
+                75
+            } else if col_lower.contains(&q) {
+                55
+            } else {
+                0
+            };
+            if col_score > best_col_score {
+                best_col_score = col_score;
+                best_col = Some((col.name.clone(), col.col_type.clone()));
+            }
+        }
+        if let Some((name, col_type)) = best_col {
+            score += best_col_score;
+            reasons.push(SearchMatchReason::Column { name, col_type });
+        }
+
+        // --- Document content (docs only) ---
+        if let Some(md) = &entry.metadata.document_markdown {
+            let md_lower = md.to_lowercase();
+            if let Some(pos) = md_lower.find(&q) {
+                let start = pos.saturating_sub(40);
+                let end = (pos + q.len() + 40).min(md.len());
+                // Snap to valid char boundaries so we don't slice in the
+                // middle of a UTF-8 codepoint.
+                let start = find_char_boundary(md, start, false);
+                let end = find_char_boundary(md, end, true);
+                let snippet = md[start..end].replace('\n', " ").trim().to_string();
+                score += 50;
+                reasons.push(SearchMatchReason::Content { snippet });
+            }
+        }
+
+        if !reasons.is_empty() {
+            matches.push(SearchMatch {
+                folder_path: entry.folder_path.clone(),
+                relative_path: entry.relative_path.clone(),
+                file_format: entry.metadata.file_format.clone(),
+                size_bytes: entry.metadata.size_bytes,
+                last_modified: entry.metadata.last_modified.clone(),
+                row_count_estimate: entry.metadata.row_count_estimate,
+                column_count: entry.metadata.schema.len(),
+                match_reasons: reasons,
+                score,
+            });
+        }
+    }
+
+    matches.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    matches.truncate(SEARCH_RESULT_LIMIT);
+    matches
+}
+
+/// Walk `idx` up/down until it lands on a UTF-8 char boundary. Used to
+/// safely slice document snippets; without this a multibyte char at the
+/// boundary would panic `str::slice_index`.
+fn find_char_boundary(s: &str, mut idx: usize, forward: bool) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while idx > 0 && !s.is_char_boundary(idx) {
+        if forward {
+            idx += 1;
+            if idx >= s.len() {
+                return s.len();
+            }
+        } else {
+            idx -= 1;
+        }
+    }
+    idx
+}
+
+// ---------------------------------------------------------------------------
 // Scan + sync
 // ---------------------------------------------------------------------------
 
@@ -1352,4 +1551,170 @@ pub async fn execute_recipe(
     // Render the SQL with parameters
     executor.render_sql(recipe, &params)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::{rank_matches, SearchMatchReason};
+    use crate::scan_cache::CachedEntry;
+    use crate::scanner::{ColumnSchema, DatasetMetadata};
+
+    fn tabular(folder: &str, rel: &str, cols: &[(&str, &str)]) -> CachedEntry {
+        CachedEntry {
+            folder_path: folder.to_string(),
+            relative_path: rel.to_string(),
+            metadata: DatasetMetadata {
+                relative_path: rel.to_string(),
+                file_format: "csv".to_string(),
+                size_bytes: 1024,
+                row_count_estimate: Some(100),
+                schema: cols
+                    .iter()
+                    .map(|(n, t)| ColumnSchema {
+                        name: n.to_string(),
+                        col_type: t.to_string(),
+                        nullable: true,
+                    })
+                    .collect(),
+                last_modified: "2026-01-01T00:00:00Z".to_string(),
+                document_markdown: None,
+                sample_rows: None,
+                samples_redacted: false,
+            },
+        }
+    }
+
+    fn doc(folder: &str, rel: &str, markdown: &str) -> CachedEntry {
+        CachedEntry {
+            folder_path: folder.to_string(),
+            relative_path: rel.to_string(),
+            metadata: DatasetMetadata {
+                relative_path: rel.to_string(),
+                file_format: "docx".to_string(),
+                size_bytes: 2048,
+                row_count_estimate: None,
+                schema: Vec::new(),
+                last_modified: "2026-01-01T00:00:00Z".to_string(),
+                document_markdown: Some(markdown.to_string()),
+                sample_rows: None,
+                samples_redacted: false,
+            },
+        }
+    }
+
+    #[test]
+    fn exact_filename_ranks_highest() {
+        // Three files — the one whose basename IS the query should beat
+        // a file that merely contains the query substring.
+        let entries = vec![
+            tabular("/a", "orders_2024.csv", &[]),
+            tabular("/a", "orders.csv", &[]),
+            tabular("/a", "my_orders_final.csv", &[]),
+        ];
+        let matches = rank_matches(&entries, "orders.csv");
+        assert!(matches.len() >= 1);
+        assert_eq!(matches[0].relative_path, "orders.csv");
+        assert!(matches[0].score >= 120);
+    }
+
+    #[test]
+    fn column_match_finds_files_without_filename_hint() {
+        // This is the killer feature — user types "price" and we surface
+        // any tabular file that has a `price` column, even if the file
+        // is named something unrelated.
+        let entries = vec![
+            tabular("/a", "random_name.csv", &[("id", "INT"), ("price", "DOUBLE")]),
+            tabular("/a", "other.csv", &[("id", "INT"), ("amount", "DOUBLE")]),
+        ];
+        let matches = rank_matches(&entries, "price");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].relative_path, "random_name.csv");
+        // And the reason must include the column match so the UI can
+        // show "column: price" as the explanation.
+        assert!(matches[0].match_reasons.iter().any(|r| matches!(
+            r,
+            SearchMatchReason::Column { name, .. } if name == "price"
+        )));
+    }
+
+    #[test]
+    fn filename_and_column_combine_score() {
+        // A file that matches on BOTH filename AND column should rank
+        // above a file that matches only one.
+        let only_column =
+            tabular("/a", "random.csv", &[("price", "DOUBLE")]);
+        let both = tabular("/a", "price_list.csv", &[("price", "DOUBLE")]);
+        let entries = vec![only_column.clone(), both.clone()];
+        let matches = rank_matches(&entries, "price");
+        assert_eq!(matches[0].relative_path, "price_list.csv");
+        assert!(matches[0].score > matches[1].score);
+    }
+
+    #[test]
+    fn content_match_returns_snippet_with_context() {
+        let entries = vec![doc(
+            "/a",
+            "resume.docx",
+            "Experienced engineer with a focus on Anthropic APIs and distributed systems.",
+        )];
+        let matches = rank_matches(&entries, "Anthropic");
+        assert_eq!(matches.len(), 1);
+        let snippet = matches[0]
+            .match_reasons
+            .iter()
+            .find_map(|r| match r {
+                SearchMatchReason::Content { snippet } => Some(snippet.clone()),
+                _ => None,
+            })
+            .expect("content reason should be present");
+        // Snippet should include the query word and some surrounding text.
+        assert!(snippet.to_lowercase().contains("anthropic"));
+        assert!(snippet.len() > "Anthropic".len());
+    }
+
+    #[test]
+    fn case_insensitive_match() {
+        let entries = vec![tabular("/a", "Orders.CSV", &[("Price", "DOUBLE")])];
+        // Upper case query, lower case in entry, and vice-versa.
+        let lower = rank_matches(&entries, "price");
+        let upper = rank_matches(&entries, "ORDERS");
+        assert_eq!(lower.len(), 1);
+        assert_eq!(upper.len(), 1);
+    }
+
+    #[test]
+    fn empty_entries_or_no_match_returns_empty() {
+        assert!(rank_matches(&[], "price").is_empty());
+        let entries = vec![tabular("/a", "other.csv", &[("id", "INT")])];
+        assert!(rank_matches(&entries, "nonexistent").is_empty());
+    }
+
+    #[test]
+    fn multibyte_snippet_does_not_panic() {
+        // Regression guard: str slicing at a non-boundary panics. Snippets
+        // around multi-byte characters must snap to valid boundaries.
+        let entries = vec![doc("/a", "doc.docx", "résumé for my application — focus on engineering")];
+        let matches = rank_matches(&entries, "application");
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn only_one_column_reason_per_file() {
+        // If many columns match, we should only surface the strongest —
+        // otherwise the UI drowns in "column: price, column: price_usd,
+        // column: price_cents" noise.
+        let entries = vec![tabular(
+            "/a",
+            "prices.csv",
+            &[("price", "DOUBLE"), ("price_usd", "DOUBLE"), ("price_cents", "INT")],
+        )];
+        let matches = rank_matches(&entries, "price");
+        assert_eq!(matches.len(), 1);
+        let column_reason_count = matches[0]
+            .match_reasons
+            .iter()
+            .filter(|r| matches!(r, SearchMatchReason::Column { .. }))
+            .count();
+        assert_eq!(column_reason_count, 1, "expected exactly one column reason");
+    }
 }
