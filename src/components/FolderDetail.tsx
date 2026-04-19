@@ -26,7 +26,6 @@ import {
   Loader2,
   RefreshCw,
   Search,
-  Sparkles,
   SquareArrowOutUpRight,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -206,10 +205,6 @@ export function FolderDetail() {
     }
   };
 
-  const openInAnalytics = () => {
-    navigate(`/analytics/${encodeURIComponent(folderPath)}`);
-  };
-
   if (!folder) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
@@ -285,13 +280,6 @@ export function FolderDetail() {
             >
               <SquareArrowOutUpRight className="h-3.5 w-3.5" />
               Open in Finder
-            </button>
-            <button
-              onClick={openInAnalytics}
-              className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              Analyze
             </button>
           </div>
         </div>

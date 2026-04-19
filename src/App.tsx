@@ -20,7 +20,6 @@ import {
   Search,
   Settings as SettingsIcon,
   Shield,
-  Sparkles,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from './stores/agentStore';
 import seryLogo from './assets/sery-logo.svg';
@@ -33,7 +32,6 @@ import { FolderList } from './components/FolderList';
 import { FolderDetail } from './components/FolderDetail';
 import { FileDetail } from './components/FileDetail';
 import { SearchPage } from './components/SearchPage';
-import { Analytics } from './components/Analytics';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
@@ -241,19 +239,6 @@ function AppInner() {
               Folders
             </NavLink>
             <NavLink
-              to="/analytics"
-              className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`
-              }
-            >
-              <Sparkles className="h-4 w-4" />
-              Analytics
-            </NavLink>
-            <NavLink
               to="/results"
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -360,8 +345,6 @@ function AppInner() {
               path="/folders/:folderId/files/:filePath"
               element={<FileDetail />}
             />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/analytics/:folderId" element={<Analytics />} />
             <Route path="/results" element={<History />} />
             <Route path="/fleet" element={<FleetView />} />
             <Route path="/notifications" element={<Notifications />} />

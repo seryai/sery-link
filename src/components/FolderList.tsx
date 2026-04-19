@@ -18,7 +18,6 @@ import {
   MoreVertical,
   Plus,
   RefreshCw,
-  Sparkles,
   Trash2,
   Network,
 } from 'lucide-react';
@@ -28,7 +27,6 @@ import { RelationshipGraph } from './RelationshipGraph';
 import type { AgentConfig, WatchedFolder } from '../types/events';
 
 export function FolderList() {
-  const navigate = useNavigate();
   const { config, setConfig, scansInFlight, agentInfo } = useAgentStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -135,10 +133,6 @@ export function FolderList() {
                 folder={folder}
                 scan={scansInFlight[folder.path]}
                 onChanged={reloadConfig}
-                onNavigateToAnalytics={(folderPath) => {
-                  const encodedPath = encodeURIComponent(folderPath);
-                  navigate(`/analytics/${encodedPath}`);
-                }}
               />
             ))}
           </div>
@@ -198,10 +192,9 @@ interface FolderCardProps {
   folder: WatchedFolder;
   scan?: { current: number; total: number; currentFile: string };
   onChanged: () => Promise<void>;
-  onNavigateToAnalytics?: (folderPath: string) => void;
 }
 
-function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCardProps) {
+function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
   const navigate = useNavigate();
   const toast = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -389,20 +382,6 @@ function FolderCard({ folder, scan, onChanged, onNavigateToAnalytics }: FolderCa
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
           Not scanned yet — click the refresh icon to index this folder.
         </div>
-      )}
-
-      {/* Analyze button - only show if folder has been scanned */}
-      {folder.last_scan_stats && folder.last_scan_stats.datasets > 0 && onNavigateToAnalytics && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onNavigateToAnalytics(folder.path);
-          }}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-4 py-2.5 text-sm font-semibold text-purple-700 transition-colors hover:bg-purple-100 hover:border-purple-300 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300 dark:hover:bg-purple-900/50 dark:hover:border-purple-700"
-        >
-          <Sparkles className="h-4 w-4" />
-          Analyze This Folder
-        </button>
       )}
 
       {/* Footer row */}
