@@ -15,16 +15,19 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
   ArrowLeft,
+  BarChart3,
   Database,
   FileText,
   Folder as FolderIcon,
   Loader2,
   SquareArrowOutUpRight,
-  Sparkles,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
-import type { DatasetMetadataPayload as DatasetMetadata } from '../types/events';
+import type {
+  ColumnProfile,
+  DatasetMetadataPayload as DatasetMetadata,
+} from '../types/events';
 
 const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb']);
 function isDocumentFormat(fmt: string) {
@@ -47,6 +50,14 @@ export function FileDetail() {
   const [dataset, setDataset] = useState<DatasetMetadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Column profile — lazy-loaded on user action ("Profile this file")
+  // because SUMMARIZE touches every row and can take several seconds on
+  // large files. We don't want to pay that cost just because the user
+  // navigated here from search.
+  const [profile, setProfile] = useState<ColumnProfile[] | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!folderPath || !relativePath) return;
@@ -88,9 +99,31 @@ export function FileDetail() {
     }
   };
 
-  const openInAnalytics = () => {
-    navigate(`/analytics/${encodeURIComponent(folderPath)}`);
+  const runProfile = async () => {
+    if (!folderPath || !relativePath) return;
+    setProfileLoading(true);
+    setProfileError(null);
+    try {
+      const result = await invoke<ColumnProfile[]>('profile_dataset', {
+        folderPath,
+        relativePath,
+      });
+      setProfile(result);
+    } catch (err) {
+      setProfileError(String(err));
+      setProfile(null);
+    } finally {
+      setProfileLoading(false);
+    }
   };
+
+  // Reset profile when we navigate to a different file — otherwise the
+  // old file's stats would linger behind until the user clicks again.
+  useEffect(() => {
+    setProfile(null);
+    setProfileError(null);
+    setProfileLoading(false);
+  }, [folderPath, relativePath]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -154,11 +187,17 @@ export function FileDetail() {
             </button>
             {dataset && !isDocumentFormat(dataset.file_format) && (
               <button
-                onClick={openInAnalytics}
-                className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700"
+                onClick={runProfile}
+                disabled={profileLoading}
+                className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Compute per-column stats for this file"
               >
-                <Sparkles className="h-3.5 w-3.5" />
-                Analyze
+                {profileLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <BarChart3 className="h-3.5 w-3.5" />
+                )}
+                {profile ? 'Refresh profile' : 'Profile this file'}
               </button>
             )}
           </div>
@@ -240,6 +279,25 @@ export function FileDetail() {
 
         {dataset && (
           <div className="space-y-4">
+            {/* Profile — only rendered when the user asks. Appears first
+                so when they come back after clicking "Profile", the
+                stats are the first thing they see. */}
+            {profileError && (
+              <div className="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                Couldn't compute profile: {profileError}
+              </div>
+            )}
+            {profileLoading && !profile && (
+              <div className="flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white py-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Profiling {dataset.schema.length}{' '}
+                {dataset.schema.length === 1 ? 'column' : 'columns'}…
+              </div>
+            )}
+            {profile && profile.length > 0 && (
+              <ProfileSection profile={profile} />
+            )}
+
             {/* Schema — tabular only */}
             {dataset.schema.length > 0 && (
               <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -332,6 +390,91 @@ export function FileDetail() {
       </div>
     </div>
   );
+}
+
+// ─── Profile section ──────────────────────────────────────────────────
+
+function ProfileSection({ profile }: { profile: ColumnProfile[] }) {
+  return (
+    <section className="rounded-lg border border-purple-200 bg-white dark:border-purple-900/60 dark:bg-slate-900">
+      <header className="border-b border-purple-200 bg-purple-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
+        Column profile · {profile.length}{' '}
+        {profile.length === 1 ? 'column' : 'columns'}
+      </header>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">Column</th>
+              <th className="px-4 py-2 text-left font-medium">Type</th>
+              <th className="px-4 py-2 text-right font-medium">Null %</th>
+              <th className="px-4 py-2 text-right font-medium">Unique</th>
+              <th className="px-4 py-2 text-right font-medium">Min</th>
+              <th className="px-4 py-2 text-right font-medium">Max</th>
+              <th className="px-4 py-2 text-right font-medium">Avg</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            {profile.map((p, i) => (
+              <tr
+                key={i}
+                className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
+              >
+                <td className="px-4 py-2 font-mono text-slate-900 dark:text-slate-100">
+                  {p.column_name}
+                </td>
+                <td className="px-4 py-2 text-slate-600 dark:text-slate-400">
+                  {p.column_type}
+                </td>
+                <td
+                  className={`px-4 py-2 text-right tabular-nums ${nullPctColor(p.null_percentage)}`}
+                >
+                  {formatPercent(p.null_percentage)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-slate-700 dark:text-slate-300">
+                  {p.approx_unique !== null
+                    ? p.approx_unique.toLocaleString()
+                    : '—'}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                  {truncate(p.min, 24)}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                  {truncate(p.max, 24)}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-slate-600 dark:text-slate-400">
+                  {truncate(p.avg, 12)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-slate-200 bg-slate-50 px-4 py-2 text-[11px] text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">
+        Stats computed locally via DuckDB. "Unique" is an approximate
+        count using HyperLogLog for performance.
+      </p>
+    </section>
+  );
+}
+
+function formatPercent(v: number | null): string {
+  if (v === null || v === undefined) return '—';
+  return `${v.toFixed(v < 1 ? 2 : 1)}%`;
+}
+
+function nullPctColor(v: number | null): string {
+  if (v === null || v === undefined || v === 0)
+    return 'text-slate-700 dark:text-slate-300';
+  if (v > 50) return 'text-rose-600 dark:text-rose-400';
+  if (v > 20) return 'text-amber-600 dark:text-amber-400';
+  return 'text-slate-700 dark:text-slate-300';
+}
+
+function truncate(s: string | null, max: number): string {
+  if (s === null || s === undefined) return '—';
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
