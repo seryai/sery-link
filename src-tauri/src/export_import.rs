@@ -247,6 +247,7 @@ mod tests {
                 interval_seconds: 300,
                 auto_sync_on_change: true,
                 fallback_scan_interval_seconds: 3600,
+                scan_tier_overrides: std::collections::HashMap::new(),
             },
             app: crate::config::AppConfig {
                 theme: "system".to_string(),

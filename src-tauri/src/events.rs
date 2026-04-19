@@ -33,6 +33,7 @@ pub fn app_handle() -> Option<&'static AppHandle<Wry>> {
 
 pub const EVT_SCAN_PROGRESS: &str = "scan_progress";
 pub const EVT_SCAN_COMPLETE: &str = "scan_complete";
+pub const EVT_DATASET_SCANNED: &str = "dataset_scanned";
 pub const EVT_SCHEMA_CHANGED: &str = "schema_changed";
 pub const EVT_WS_STATUS: &str = "ws_status";
 pub const EVT_QUERY_STARTED: &str = "query_started";
@@ -63,6 +64,18 @@ pub struct ScanComplete {
     pub errors: u64,
     pub total_bytes: u64,
     pub duration_ms: u64,
+}
+
+/// Emitted once per file as soon as the scanner finishes extracting its
+/// metadata — lets FolderDetail stream rows into view instead of waiting
+/// for the whole folder to finish scanning. `index` is 1-based to match
+/// `ScanProgress.current`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DatasetScanned {
+    pub folder: String,
+    pub index: usize,
+    pub total: usize,
+    pub dataset: crate::scanner::DatasetMetadata,
 }
 
 /// Fired once per dataset whose cached schema differs from a freshly-
@@ -124,6 +137,10 @@ pub fn emit_scan_complete<R: Runtime>(app: &AppHandle<R>, payload: ScanComplete)
     let _ = app.emit(EVT_SCAN_COMPLETE, payload);
 }
 
+pub fn emit_dataset_scanned<R: Runtime>(app: &AppHandle<R>, payload: DatasetScanned) {
+    let _ = app.emit(EVT_DATASET_SCANNED, payload);
+}
+
 pub fn emit_schema_changed<R: Runtime>(app: &AppHandle<R>, payload: SchemaChanged) {
     let _ = app.emit(EVT_SCHEMA_CHANGED, payload);
 }
@@ -170,14 +187,16 @@ pub fn emit_sync_completed<R: Runtime>(app: &AppHandle<R>, folder: &str, dataset
 }
 
 pub fn emit_sync_failed<R: Runtime>(app: &AppHandle<R>, folder: &str, error: &str) {
+    // Intentionally does NOT call `notify()` on this path. The in-app
+    // banner + sync_failed event already surface the failure, and going
+    // through Tauri's notification plugin here crashed the process in
+    // dev mode when notification permission hadn't been granted — Obj-C
+    // `UNUserNotificationCenter` throws a foreign exception that unwinds
+    // straight past Rust's panic machinery and aborts. Keep OS-level
+    // notifications reserved for rare, genuinely user-actionable events.
     let _ = app.emit(
         EVT_SYNC_FAILED,
         serde_json::json!({ "folder": folder, "error": error }),
-    );
-    notify(
-        app,
-        "Sync failed",
-        &format!("Could not sync {}: {}", folder, error),
     );
 }
 
@@ -189,17 +208,35 @@ pub fn emit_stats_updated<R: Runtime>(app: &AppHandle<R>) {
 // Desktop notifications
 // ---------------------------------------------------------------------------
 
-/// Show an OS notification if notifications are enabled in config.
+/// Show an OS notification if notifications are enabled in config and the
+/// OS has granted permission.
+///
+/// CAUTION: on macOS, calling `.show()` when permission hasn't been
+/// determined can throw an Obj-C exception from `UNUserNotificationCenter`
+/// which unwinds past Rust's panic machinery and aborts the process.
+/// We gate on `permission_state()` to avoid the untrusted path, but even
+/// so: use sparingly, only for events that genuinely warrant an OS-level
+/// nudge (auth expired, first-time background minimisation). Routine
+/// errors (sync failures, scan errors) should surface in the in-app UI,
+/// not via notify().
 pub fn notify<R: Runtime>(app: &AppHandle<R>, title: &str, body: &str) {
-    // Respect the user's notification preference.
+    // Respect the user's notification preference first.
     if let Ok(config) = crate::config::Config::load() {
         if !config.app.notifications_enabled {
             return;
         }
     }
 
-    let _ = app
-        .notification()
+    // Only call .show() when permission is explicitly granted. When it's
+    // Unknown or Denied we bail out — .show() in those states can throw
+    // on macOS. Any error from the permission check itself also bails.
+    let notif = app.notification();
+    match notif.permission_state() {
+        Ok(tauri_plugin_notification::PermissionState::Granted) => {}
+        _ => return,
+    }
+
+    let _ = notif
         .builder()
         .title(title)
         .body(body)

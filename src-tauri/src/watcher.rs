@@ -185,11 +185,6 @@ pub async fn start_watcher(folders: Vec<String>) -> Result<WatcherHandle> {
 async fn handle_changes(paths: Vec<PathBuf>) -> Result<()> {
     let config = Config::load()?;
 
-    if keyring_store::get_token().is_err() {
-        eprintln!("[watcher] no token, skipping sync");
-        return Ok(());
-    }
-
     let mut affected_folders: HashSet<String> = HashSet::new();
     for path in &paths {
         for folder in &config.watched_folders {
@@ -235,14 +230,52 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     let column_count: u64 = datasets.iter().map(|d| d.schema.len() as u64).sum();
     let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
 
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    // Local-only fast path: if the user hasn't explicitly connected, or
+    // an earlier sync this session already failed, skip the POST. The
+    // scan still records its stats + emits scan_complete so the UI
+    // updates, we just don't contact the server. This stops repeated
+    // 500s from spamming users who never connected.
+    if !crate::commands::cloud_sync_enabled() {
+        if let Ok(mut c) = Config::load() {
+            c.update_folder_scan_stats(
+                folder_path,
+                ScanStats {
+                    datasets: dataset_count,
+                    columns: column_count,
+                    errors: 0,
+                    total_bytes,
+                    duration_ms,
+                },
+                chrono::Utc::now().to_rfc3339(),
+            );
+            let _ = c.save();
+        }
+        audit::record(folder_path, dataset_count, column_count, total_bytes, None);
+        if let Some(app) = events::app_handle() {
+            events::emit_scan_complete(
+                app,
+                events::ScanComplete {
+                    folder: folder_path.to_string(),
+                    datasets: dataset_count,
+                    columns: column_count,
+                    errors: 0,
+                    total_bytes,
+                    duration_ms,
+                },
+            );
+            tray::set_state(app, "online");
+        }
+        return Ok(());
+    }
+
     let config = Config::load()?;
     let token = keyring_store::get_token()
         .map_err(|e| AgentError::Config(format!("missing token: {}", e)))?;
 
     let sync_result =
         scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets).await;
-
-    let duration_ms = started.elapsed().as_millis() as u64;
 
     match sync_result {
         Ok(_) => {

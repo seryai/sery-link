@@ -41,6 +41,42 @@ static WATCHER: once_cell::sync::Lazy<Arc<RwLock<Option<WatcherHandle>>>> =
 static PLUGIN_RUNTIME: once_cell::sync::Lazy<Arc<RwLock<crate::plugin_runtime::PluginRuntime>>> =
     once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(crate::plugin_runtime::PluginRuntime::new())));
 
+/// Process-wide "cloud sync is currently unreachable" flag. Once the first
+/// sync attempt of a session fails (network error, 500, 401, etc.) we
+/// stop attempting further syncs for the rest of the process lifetime —
+/// every subsequent scan would otherwise repeat the same failing POST
+/// and pollute logs + the sync_failed UI toast. Cleared on app restart,
+/// or explicitly by `clear_cloud_offline` (exposed for future
+/// "retry now" UI actions).
+static CLOUD_OFFLINE: once_cell::sync::Lazy<std::sync::atomic::AtomicBool> =
+    once_cell::sync::Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
+
+fn cloud_offline() -> bool {
+    CLOUD_OFFLINE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn mark_cloud_offline() {
+    CLOUD_OFFLINE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Returns true only when the user has explicitly set up a workspace
+/// connection AND a token is present in the keyring AND we haven't
+/// already seen the cloud misbehave this session. LocalOnly / BYOK
+/// users (and legacy users with a stale bootstrap token they never
+/// re-authenticated) never attempt metadata sync.
+pub(crate) fn cloud_sync_enabled() -> bool {
+    if cloud_offline() {
+        return false;
+    }
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let explicit_workspace =
+        matches!(cfg.app.selected_auth_mode, Some(AuthMode::WorkspaceKey { .. }));
+    explicit_workspace && keyring_store::has_token()
+}
+
 // ---------------------------------------------------------------------------
 // Auth + config
 // ---------------------------------------------------------------------------
@@ -121,6 +157,11 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
     config.remove_watched_folder(&path);
     config.save().map_err(|e| e.to_string())?;
+    // Drop any cached scan results for this folder — otherwise re-adding
+    // the same path later would surface rows for files that may have
+    // moved or been deleted in the meantime. Goes through the shared
+    // cache singleton.
+    let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&path));
     let _ = restart_file_watcher().await;
     Ok(())
 }
@@ -136,6 +177,35 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<DatasetMetadata>, St
         .map_err(|e| e.to_string())
 }
 
+/// Read every cached dataset for a folder without touching disk beyond
+/// the scan cache. Used by `FolderDetail` to paint instantly — rows will
+/// be reconciled against fresh data via `dataset_scanned` events once the
+/// background rescan kicks in. Returns an empty list (not an error) if
+/// the cache hasn't seen this folder yet.
+#[tauri::command]
+pub async fn get_cached_folder_metadata(folder_path: String) -> Result<Vec<DatasetMetadata>, String> {
+    use std::io::Write;
+    eprintln!("[get_cached] ▶ {}", folder_path);
+    let _ = std::io::stderr().flush();
+
+    let result: Result<Vec<DatasetMetadata>, String> = tokio::task::spawn_blocking(move || {
+        // Goes through the process-wide scan cache singleton; no extra
+        // DuckDB connections are opened here. Returns empty list if the
+        // singleton failed to initialise (the scanner will still work).
+        let rows = crate::scan_cache::with_cache(|c| c.get_all_for_folder(&folder_path))
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        eprintln!("[get_cached] got {} rows", rows.len());
+        let _ = std::io::stderr().flush();
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| format!("cache read task failed: {}", e))?;
+
+    result
+}
+
 /// Rescan a folder and sync its metadata to the cloud in one shot. Emits
 /// scan_progress / scan_complete events and records an audit entry so the
 /// Privacy tab can show what was uploaded.
@@ -146,15 +216,19 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // Flip tray to "syncing" so users see the work kick off.
     crate::tray::set_state(&app, "syncing");
 
-    // 1. Scan the folder locally with progress events. The callback runs on
-    // the blocking scan thread so the UI stays smooth even for huge folders.
-    let folder_for_cb = folder_path.clone();
-    let app_for_cb = app.clone();
+    // 1. Scan the folder locally with progress + per-dataset events. Both
+    // callbacks run on the blocking scan thread so the UI stays smooth
+    // even for huge folders. The dataset callback lets FolderDetail stream
+    // rows into view incrementally instead of waiting for the whole folder
+    // to finish — important for first-time scans of large folders where
+    // the wait would otherwise be minutes of empty screen.
+    let folder_for_progress = folder_path.clone();
+    let app_for_progress = app.clone();
     let progress_cb: scanner::ProgressCb = Box::new(move |current, total, current_file| {
         events::emit_scan_progress(
-            &app_for_cb,
+            &app_for_progress,
             events::ScanProgress {
-                folder: folder_for_cb.clone(),
+                folder: folder_for_progress.clone(),
                 current,
                 total,
                 current_file: current_file.to_string(),
@@ -162,8 +236,23 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         );
     });
 
-    let datasets = scanner::scan_folder_with_progress(&folder_path, progress_cb)
-        .await
+    let folder_for_dataset = folder_path.clone();
+    let app_for_dataset = app.clone();
+    let dataset_cb: scanner::DatasetCb = Box::new(move |index, total, dataset| {
+        events::emit_dataset_scanned(
+            &app_for_dataset,
+            events::DatasetScanned {
+                folder: folder_for_dataset.clone(),
+                index,
+                total,
+                dataset: dataset.clone(),
+            },
+        );
+    });
+
+    let datasets =
+        scanner::scan_folder_with_events(&folder_path, Some(progress_cb), Some(dataset_cb))
+            .await
         .map_err(|e| {
             audit::record(&folder_path, 0, 0, 0, Some(e.to_string()));
             events::emit_sync_failed(&app, &folder_path, &e.to_string());
@@ -235,21 +324,10 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         }
     }
 
-    // 2b. Sync to cloud (if we have a token).
-    let result = if keyring_store::has_token() {
-        let config = Config::load().map_err(|e| e.to_string())?;
-        let token = keyring_store::get_token().map_err(|e| e.to_string())?;
-        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets.clone())
-            .await
-            .map_err(|e| e.to_string())
-    } else {
-        Ok(serde_json::json!({ "skipped": true, "reason": "no token" }))
-    };
-
-    // 2c. Populate the local cache so the next scan's diff has a baseline.
-    // Runs after the diff computation above but regardless of cloud sync,
-    // because the cache is a local-only offline-search surface. Best-effort:
-    // cache failures must never block the scan.
+    // 2b. Populate the local cache so the next scan's diff has a baseline.
+    // Runs regardless of cloud sync, because the cache is a local-only
+    // offline-search surface. Best-effort: cache failures must never
+    // block the scan.
     if let Ok(config_for_cache) = Config::load() {
         if let Some(workspace_id) = config_for_cache.agent.workspace_id.as_deref() {
             if let Ok(mut cache) = MetadataCache::new() {
@@ -282,47 +360,95 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         }
     }
 
-    match result {
-        Ok(resp) => {
-            // 3. Persist scan stats on the folder so the UI card can show them.
-            let mut config = Config::load().map_err(|e| e.to_string())?;
-            config.update_folder_scan_stats(
-                &folder_path,
-                crate::config::ScanStats {
-                    datasets: dataset_count,
-                    columns: column_count,
-                    errors: 0,
-                    total_bytes,
-                    duration_ms,
-                },
-                chrono::Utc::now().to_rfc3339(),
-            );
-            let _ = config.save();
-
-            // 4. Audit + events.
-            audit::record(&folder_path, dataset_count, column_count, total_bytes, None);
-            events::emit_scan_complete(
-                &app,
-                events::ScanComplete {
-                    folder: folder_path.clone(),
-                    datasets: dataset_count,
-                    columns: column_count,
-                    errors: 0,
-                    total_bytes,
-                    duration_ms,
-                },
-            );
-            events::emit_sync_completed(&app, &folder_path, dataset_count);
-            crate::tray::set_state(&app, "online");
-            Ok(resp)
-        }
-        Err(e) => {
-            audit::record(&folder_path, 0, 0, 0, Some(e.clone()));
-            events::emit_sync_failed(&app, &folder_path, &e);
-            crate::tray::set_state(&app, "online");
-            Err(e)
-        }
+    // 3. Persist scan stats on the folder. The LOCAL scan succeeded at
+    // this point, regardless of any cloud round-trip — local-first means
+    // we commit the result without waiting on the server.
+    if let Ok(mut config) = Config::load() {
+        config.update_folder_scan_stats(
+            &folder_path,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
     }
+
+    // 4. Audit + local-scan completion events. These fire on every
+    // successful scan so FolderDetail reconciles its row list from the
+    // cache.
+    audit::record(&folder_path, dataset_count, column_count, total_bytes, None);
+    events::emit_scan_complete(
+        &app,
+        events::ScanComplete {
+            folder: folder_path.clone(),
+            datasets: dataset_count,
+            columns: column_count,
+            errors: 0,
+            total_bytes,
+            duration_ms,
+        },
+    );
+
+    // 5. Best-effort cloud sync. A failure here (network down, 500 from
+    // the backend, expired token) does NOT fail the whole command — the
+    // local scan is already persisted and the user can still use the UI.
+    //
+    // The gate `cloud_sync_enabled()` ensures we only attempt sync when
+    // the user has explicitly connected via WorkspaceKey AND the first
+    // failure of this session hasn't already flipped the process to
+    // cloud-offline mode. LocalOnly users, users with stale tokens from
+    // an old bootstrap attempt, and sessions that have already hit an
+    // error all short-circuit here without another wasted POST.
+    let cloud_resp = if cloud_sync_enabled() {
+        match (Config::load(), keyring_store::get_token()) {
+            (Ok(config), Ok(token)) => {
+                match scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets.clone())
+                    .await
+                {
+                    Ok(r) => {
+                        events::emit_sync_completed(&app, &folder_path, dataset_count);
+                        r
+                    }
+                    Err(e) => {
+                        // First failure wins: mark the cloud offline so
+                        // we don't retry every scan until the user
+                        // restarts. If the error looks like an auth
+                        // problem, also clear the stale token so the
+                        // next launch starts fresh in local-only mode.
+                        eprintln!("[rescan] cloud sync failed for {folder_path}: {e}");
+                        mark_cloud_offline();
+                        let msg = e.to_string();
+                        if msg.contains("401") || msg.contains("403") || msg.contains("Unauthorized") {
+                            eprintln!("[rescan] auth-looking failure — clearing token");
+                            let _ = keyring_store::delete_token();
+                        }
+                        events::emit_sync_failed(&app, &folder_path, &msg);
+                        serde_json::json!({
+                            "synced": false,
+                            "reason": format!("cloud_sync_failed: {msg}"),
+                        })
+                    }
+                }
+            }
+            _ => serde_json::json!({ "synced": false, "reason": "config_or_token_unavailable" }),
+        }
+    } else {
+        // LocalOnly (or cloud-offline for the session): don't even
+        // attempt to sync. Emit sync_completed so UI surfaces that track
+        // sync state flip back to their idle state instead of hanging
+        // in "syncing…".
+        events::emit_sync_completed(&app, &folder_path, dataset_count);
+        let reason = if cloud_offline() { "cloud_offline" } else { "local_only" };
+        serde_json::json!({ "synced": false, "reason": reason })
+    };
+
+    crate::tray::set_state(&app, "online");
+    Ok(cloud_resp)
 }
 
 #[tauri::command]
@@ -409,17 +535,25 @@ pub async fn set_auth_mode(mode: AuthMode) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn start_file_watcher() -> Result<(), String> {
-    let config = Config::load().map_err(|e| e.to_string())?;
-
-    if config.watched_folders.is_empty() {
-        let mut guard = WATCHER.write().await;
-        *guard = None;
+    // Idempotent install. Holding the write lock across the full body
+    // serialises concurrent callers (React 19 strict mode fires
+    // useEffect twice in dev, which was creating overlapping notify /
+    // FSEvents streams on the same paths — the old handle's Drop then
+    // threw a foreign exception on macOS that aborted the process).
+    //
+    // Semantics:
+    //   * If a watcher is already running, return Ok without touching it.
+    //     Callers who need to apply a new folder config should call
+    //     `restart_file_watcher` explicitly.
+    //   * If watched_folders is empty or auto-sync is off, leave the
+    //     (absent) watcher alone and return Ok.
+    let mut guard = WATCHER.write().await;
+    if guard.is_some() {
         return Ok(());
     }
 
-    if !config.sync.auto_sync_on_change {
-        let mut guard = WATCHER.write().await;
-        *guard = None;
+    let config = Config::load().map_err(|e| e.to_string())?;
+    if config.watched_folders.is_empty() || !config.sync.auto_sync_on_change {
         return Ok(());
     }
 
@@ -433,7 +567,6 @@ pub async fn start_file_watcher() -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut guard = WATCHER.write().await;
     *guard = Some(handle);
     Ok(())
 }
@@ -447,8 +580,30 @@ pub async fn stop_file_watcher() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn restart_file_watcher() -> Result<(), String> {
-    stop_file_watcher().await?;
-    start_file_watcher().await
+    // Atomic drop-then-install under a single write lock — a previous
+    // split-phase stop+start let a concurrent caller slip in between,
+    // producing overlapping FSEvents streams that tripped the
+    // foreign-exception crash on macOS.
+    let mut guard = WATCHER.write().await;
+    *guard = None;
+
+    let config = Config::load().map_err(|e| e.to_string())?;
+    if config.watched_folders.is_empty() || !config.sync.auto_sync_on_change {
+        return Ok(());
+    }
+
+    let folder_paths: Vec<String> = config
+        .watched_folders
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
+
+    let handle = watcher::start_watcher(folder_paths)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    *guard = Some(handle);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
