@@ -188,7 +188,7 @@ comes from `scan_progress` events in `useAgentStore.scansInFlight`.
 │    Every Sery machine connected to this workspace.  [+ Add another machine]  │
 ├───────────────────────────────────────────────────────────────────────────────┤
 │  ● MacBook Pro                         [ This machine ]   1,204 files  340MB │
-│    macOS 14 · johns-mbp                                                      │
+│    macOS 14 · johns-mbp                                                       │
 │                                                                               │
 │  ● Home Desktop                                          847 files  280 MB   │
 │    Linux 22.04 · pop-desktop            🔔 2               (click → notif.)  │
