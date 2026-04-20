@@ -1,25 +1,23 @@
 # Sery Link
 
-**Local-first data analytics. Your data never leaves your machine.**
+**Understand your data. Free and local.**
 
-Cross-platform desktop app that analyzes local data sources (Parquet, CSV, Excel, documents) using AI. Cloud sync is optional — tunnel mode queries run entirely on your computer. Part of [Sery.ai](https://sery.ai).
+Cross-platform desktop app that indexes every CSV, spreadsheet, and document on your machines — find files by column name, inspect schemas and column stats in place, and (when you subscribe to sery.ai) ask questions across everything in plain English. Part of [Sery.ai](https://sery.ai).
 
 ## Features
 
-- 🔐 **Secure OAuth Authentication** - Browser-based auth with local callback server
-- 📁 **Folder Watching** - Auto-detect changes in local Parquet, CSV, Excel, and document files
-- 📄 **Document Support** - Convert DOCX, PPTX, HTML, PDF to Markdown using bundled MarkItDown sidecar
-- 🔄 **Metadata Sync** - Automatically sync file schemas and metadata to the cloud
-- 🚀 **Local Query Execution** - Run SQL queries locally using DuckDB
-- 🌐 **WebSocket Tunnel** - Persistent connection for real-time query execution
-- 🧩 **Plugin System** - Extend functionality with WebAssembly plugins (5 built-in examples: CSV parser, JSON transformer, HTML viewer, clipboard utilities, text analyzer)
-- 🛒 **Plugin Marketplace** - Discover, search, and install community plugins (backend infrastructure ready)
-- ⌨️ **Keyboard-First UX** - Command Palette (Cmd+K), keyboard shortcuts, fuzzy search
-- 🔗 **Relationship Graph** - Visualize connections between datasets (schema + query analysis)
-- 📊 **Query History** - Local JSONL persistence with statistics and CSV export
-- 🔒 **Secure Credential Storage** - OS-native keychain integration
-- 🔒 **Privacy-First** - Raw files never leave your machine (read-only file access). In tunnel mode, queries execute locally with zero data upload. Optional cloud sync for performance mode.
-- 💻 **Beautiful UI** - Modern React interface with Tailwind CSS
+- 🔎 **Column-aware search** — Global search bar matches filenames, column names, and extracted document content across every folder and every remote source in one pass
+- 📊 **Per-file column profiles** — Open any file to see schema, sample rows, and column stats (null %, unique values, min/max/avg) auto-computed locally
+- 📁 **Folder watching** — Auto-detect changes in local Parquet, CSV, Excel, and document files
+- 🌐 **Remote sources** — Add public HTTPS URLs or S3 objects / bucket listings (credentials stored in the OS keychain, data fetched locally — never proxied through our servers)
+- 📄 **Document support** — Convert DOCX, PPTX, HTML, PDF to Markdown using bundled MarkItDown sidecar
+- 💻 **Multiple machines** — Connect as many devices to a single workspace via workspace keys; cross-machine AI queries on Personal
+- 🧩 **Plugin system** — Extend functionality with WebAssembly plugins (5 built-in examples: CSV parser, JSON transformer, HTML viewer, clipboard utilities, text analyzer)
+- 🛒 **Plugin marketplace** — Discover, search, and install community plugins
+- ⌨️ **Keyboard-first UX** — Command Palette (Cmd+K), keyboard shortcuts, fuzzy search
+- 📜 **Query history** — Local JSONL persistence with statistics and CSV export
+- 🔒 **Privacy-first** — Raw files never leave your machines (read-only file access). Works fully offline; connecting to sery.ai for AI queries is an explicit opt-in.
+- 💻 **Beautiful UI** — Modern React interface with Tailwind CSS
 
 ## Development
 
@@ -94,6 +92,6 @@ Extend Sery Link with WebAssembly plugins. Plugins run in a sandboxed environmen
 
 **Plugin Location:** `~/.sery/plugins/[plugin-id]/`
 
-**Marketplace:** Backend infrastructure ready. Search, filter, install plugins programmatically. Frontend UI coming in v0.2.0.
+**Marketplace:** Discover, search, install community plugins from the app UI.
 
 See example plugins in `examples/plugins/` for development reference.
