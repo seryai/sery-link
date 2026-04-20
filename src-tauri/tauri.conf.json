@@ -40,6 +40,17 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/seryai/sery-link/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlDMDBGRkI5ODAyRjNFRDQKUldUVVBpK0F1ZjhBbktLWUE0K1NCSmJiajNJMjJwRGEraVMvNkhWT0tOeVFtaUFtNmZpTUZVWDUK"
     }
   }
 }
