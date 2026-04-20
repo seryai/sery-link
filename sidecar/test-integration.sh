@@ -19,10 +19,12 @@ echo "✅ Sidecar binary found: $SIDECAR_DIST"
 # 2. Test sidecar directly
 echo ""
 echo "📄 Testing sidecar on a sample DOCX file..."
-TEST_FILE="<redacted>/fixtures/sample.docx"
+# Point TEST_FILE at any local .docx / .pptx / .pdf / .html / .ipynb to
+# exercise the sidecar end-to-end. If unset, the test is skipped.
+TEST_FILE="${TEST_FILE:-}"
 
-if [ ! -f "$TEST_FILE" ]; then
-    echo "⚠️  Test file not found, skipping direct test"
+if [ -z "$TEST_FILE" ] || [ ! -f "$TEST_FILE" ]; then
+    echo "⚠️  Set TEST_FILE=/path/to/file.docx to run the direct test (skipping)"
 else
     RESULT=$(echo "$TEST_FILE" | "$SIDECAR_DIST" | python3 -c "import sys, json; data=json.load(sys.stdin); print('✅ SUCCESS' if data['success'] else '❌ FAILED')")
     echo "   $RESULT"
