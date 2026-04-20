@@ -34,7 +34,7 @@ interface Command {
 interface CommandPaletteProps {
   config: AgentConfig | null;
   workspaceId: string | null;
-  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'fleet' | 'privacy' | 'settings') => void;
+  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'machines' | 'privacy' | 'settings') => void;
   onAddFolder: () => void;
   onRescanFolder?: (path: string) => void;
   onRemoveFolder?: (path: string) => void;
@@ -82,13 +82,13 @@ export function CommandPalette({
         section: 'navigation',
       },
       {
-        id: 'nav-fleet',
+        id: 'nav-machines',
         label: 'Go to Machines',
         description: 'See all the machines connected to this workspace',
         icon: <Laptop className="h-4 w-4" />,
-        keywords: ['fleet', 'machines', 'devices', 'agents', 'pair', 'navigate'],
+        keywords: ['machines', 'devices', 'agents', 'pair', 'navigate'],
         action: () => {
-          onNavigate('fleet');
+          onNavigate('machines');
           setIsOpen(false);
         },
         section: 'navigation',

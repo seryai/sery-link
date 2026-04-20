@@ -41,7 +41,7 @@ pub struct StoredNotification {
     pub removed: u64,
     pub type_changed: u64,
     pub diff: SchemaDiff,
-    // Which fleet member observed the change. None for records written
+    // Which machine in the workspace observed the change. None for records written
     // before this field existed (forward-compatible read). Local scans
     // fill it with the current machine's agent_id; cross-machine
     // broadcasts fill it with the origin agent from the WS message.
@@ -68,7 +68,7 @@ fn path() -> Result<PathBuf> {
 /// genuinely new state landing later matters, the next scan will
 /// observe a different diff (not dedupable) and surface cleanly.
 ///
-/// `origin_agent_id` identifies which fleet member observed the
+/// `origin_agent_id` identifies which machine in the workspace observed the
 /// change. Callers that don't know (or don't care — e.g. tests)
 /// pass `None`.
 #[allow(clippy::too_many_arguments)]

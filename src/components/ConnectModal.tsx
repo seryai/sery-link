@@ -77,7 +77,7 @@ export function ConnectModal({
         console.error('Tunnel failed to start after connect:', err),
       );
 
-      toast.success('Connected. Your fleet is syncing.');
+      toast.success('Connected. Your machines are syncing.');
       onConnected?.(token);
       onClose();
     } catch (err) {
@@ -110,7 +110,7 @@ export function ConnectModal({
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Paste a workspace key to enable cross-machine queries, the
-              fleet view, and cloud sync.
+              Machines view, and cloud sync.
             </p>
           </div>
           <button

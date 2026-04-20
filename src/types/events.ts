@@ -146,7 +146,7 @@ export interface SchemaChangedPayload {
   removed: number;
   type_changed: number;
   diff: SchemaDiff;
-  // Which fleet member observed this change. Null for records written
+  // Which machine in the workspace observed this change. Null for records written
   // before this field existed or when the origin agent is unknown.
   origin_agent_id: string | null;
 }

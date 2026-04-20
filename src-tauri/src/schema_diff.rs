@@ -14,7 +14,7 @@
 //! future "did anything change" health check.
 //!
 //! Consumed by: metadata_cache::upsert_dataset (computes diff at upsert
-//! time so the UI can surface unread schema changes in the Fleet view).
+//! time so the UI can surface unread schema changes in the Machines view).
 
 use serde::{Deserialize, Serialize};
 

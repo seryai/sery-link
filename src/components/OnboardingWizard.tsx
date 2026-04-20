@@ -11,7 +11,7 @@
 //   1. User picks a folder (native picker).
 //   2. add_watched_folder + start_file_watcher (both local).
 //   3. first_run_completed = true → App.tsx renders the main UI.
-//   4. No token, no workspace, no cloud. Fleet / query / schema-change
+//   4. No token, no workspace, no cloud. Machines / query / schema-change
 //      broadcast all gated on Connect until the user says so.
 //
 // The "Skip for now" path does the same without a folder.

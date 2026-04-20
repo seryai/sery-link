@@ -16,8 +16,7 @@ export interface FeatureGateResult {
  * Hook to check if a feature is available in the current auth mode.
  *
  * Features:
- * - free_recipes: Available in all modes
- * - pro_recipes: Requires BYOK or WorkspaceKey
+ * - ai_queries: Requires BYOK or WorkspaceKey
  * - cloud_sync: Requires WorkspaceKey
  * - team_sharing: Requires WorkspaceKey
  *

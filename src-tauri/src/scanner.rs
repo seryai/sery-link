@@ -878,7 +878,7 @@ fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
 /// Returns `Some(markdown)` on success, `None` on failure.
 ///
 /// Serialised globally via `SIDECAR_GUARD` so a parallel scan can't fork
-/// a dozen Python processes at once — each one is ~100 MB and the fleet
+/// a dozen Python processes at once — each one is ~100 MB and the pile
 /// of them is what tripped `mach_vm_allocate_kernel` in the scanner crash
 /// reports. One-at-a-time is plenty given how few DOCX/PPTX files most
 /// folders contain.
