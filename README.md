@@ -95,3 +95,30 @@ Extend Sery Link with WebAssembly plugins. Plugins run in a sandboxed environmen
 **Marketplace:** Discover, search, install community plugins from the app UI.
 
 See example plugins in `examples/plugins/` for development reference.
+The public community plugin directory lives at
+[seryai/serylink-releases](https://github.com/seryai/serylink-releases).
+
+## License
+
+Sery Link is licensed under the
+[GNU Affero General Public License v3.0 or later](./LICENSE)
+(AGPL-3.0-or-later).
+
+In short: you can use, inspect, modify, and redistribute the source
+freely, including for commercial purposes. If you run a modified version
+as a network service, you must make your modified source available to
+users of that service under the same license. The AGPL makes the
+privacy claim at the heart of Sery Link — "your files never leave your
+machines" — auditable by anyone who wants to verify it.
+
+The Sery.ai cloud backend (AI query orchestration, workspace catalog,
+billing) is a separate, proprietary service and is not covered by this
+license. Sery Link talks to that backend only when the user explicitly
+opts in to the AI tier.
+
+## Contributing
+
+PRs are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for what we
+accept, how to sign off commits (DCO), and what to expect from review.
+For usage questions and bug reports, see [SUPPORT.md](./SUPPORT.md).
+Security issues: `security@sery.ai` (do not file publicly).
