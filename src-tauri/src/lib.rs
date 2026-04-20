@@ -15,7 +15,6 @@ mod metadata_cache;
 mod plugin;
 mod plugin_marketplace;
 mod plugin_runtime;
-mod recipe_executor;
 mod relationship_detector;
 mod remote;
 mod remote_creds;
@@ -180,15 +179,6 @@ pub fn run() {
             commands::get_popular_plugins,
             commands::get_marketplace_plugin,
             commands::install_marketplace_plugin,
-            commands::load_recipes_from_dir,
-            commands::load_recipe,
-            commands::search_recipes,
-            commands::get_recipe,
-            commands::list_recipes,
-            commands::filter_recipes_by_data_source,
-            commands::render_recipe_sql,
-            commands::validate_recipe_tables,
-            commands::execute_recipe,
             commands::get_current_auth_mode,
             commands::check_feature_available,
             commands::set_auth_mode,

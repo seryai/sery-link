@@ -660,23 +660,6 @@ pub fn execute_viewer_plugin(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::PluginCapability;
-
-    fn test_manifest() -> PluginManifest {
-        PluginManifest {
-            id: "com.test.plugin".to_string(),
-            name: "Test Plugin".to_string(),
-            version: "1.0.0".to_string(),
-            author: "Test".to_string(),
-            description: "Test plugin".to_string(),
-            capabilities: vec![PluginCapability::DataSource],
-            permissions: vec![PluginPermission::ReadFiles],
-            entry_point: "plugin.wasm".to_string(),
-            icon: None,
-            homepage: None,
-            functions: None,
-        }
-    }
 
     #[test]
     fn test_runtime_creation() {
