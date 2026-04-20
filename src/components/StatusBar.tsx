@@ -156,7 +156,7 @@ function DisconnectButton() {
 
   const handle = async () => {
     const ok = window.confirm(
-      'Disconnect from Sery.ai? Sery will keep running locally, but cross-machine queries, the fleet view, and schema-change sync will stop until you reconnect.',
+      'Disconnect from Sery.ai? Sery will keep running locally, but cross-machine queries, the Machines view, and schema-change sync will stop until you reconnect.',
     );
     if (!ok) return;
     try {

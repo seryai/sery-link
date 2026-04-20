@@ -1,15 +1,13 @@
 // Machines view — "My Machines" list.
 //
-// Calls the list_fleet Tauri command (wraps GET /v1/agent/workspace/fleet
-// on the backend). Renders one row per agent with live online status,
-// dataset count, and storage used.
+// Calls the list_machines Tauri command (wraps GET
+// /v1/agent/workspace/fleet on the backend — the URL name is kept for
+// continuity with the HTTP contract). Renders one row per machine with
+// live online status, dataset count, and storage used.
 //
 // Adding a new machine: users generate a workspace key on the web
 // dashboard (Settings → Workspace keys) and paste it into Sery Link's
-// ConnectModal on the new machine. The one-time pair-code flow was
-// removed in favor of the single workspace-key path.
-//
-// Paired backend: api/app/api/v1/fleet.py.
+// ConnectModal on the new machine.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -18,7 +16,7 @@ import { Link } from 'react-router-dom';
 import { useAgentStore } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
 
-type FleetAgent = {
+type Machine = {
   agent_id: string;
   display_name: string | null;
   name: string;
@@ -31,55 +29,55 @@ type FleetAgent = {
   is_current_user: boolean;
 };
 
-type FleetResponse = {
+type MachinesResponse = {
   workspace_id: string;
-  agents: FleetAgent[];
+  agents: Machine[];
   total: number;
 };
 
 interface Props {
   /** Hide the "Add another machine" button (e.g. inside an onboarding flow). */
   hideAddButton?: boolean;
-  /** Called with each refreshed fleet snapshot so parents can react (badge counts, etc.). */
-  onFleetUpdated?: (fleet: FleetResponse) => void;
+  /** Called with each refreshed machines snapshot so parents can react (badge counts, etc.). */
+  onMachinesUpdated?: (machines: MachinesResponse) => void;
 }
 
-export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
+export function MachinesView({ hideAddButton, onMachinesUpdated }: Props) {
   const authenticated = useAgentStore((s) => s.authenticated);
-  const [fleet, setFleet] = useState<FleetResponse | null>(null);
+  const [machines, setMachines] = useState<MachinesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showConnectModal, setShowConnectModal] = useState(false);
 
-  const fetchFleet = useCallback(async () => {
+  const fetchMachines = useCallback(async () => {
     if (!authenticated) {
-      setFleet(null);
+      setMachines(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const resp = await invoke<FleetResponse>('list_fleet');
-      setFleet(resp);
-      onFleetUpdated?.(resp);
+      const resp = await invoke<MachinesResponse>('list_machines');
+      setMachines(resp);
+      onMachinesUpdated?.(resp);
     } catch (err) {
       setError(String(err));
     } finally {
       setLoading(false);
     }
-  }, [authenticated, onFleetUpdated]);
+  }, [authenticated, onMachinesUpdated]);
 
   // Initial load + poll every 15s so online/offline transitions surface
   // without a manual refresh. 15s keeps Redis presence (30s TTL) visible.
   // Polling is skipped while unauthenticated — no point hitting an
   // endpoint that requires a token.
   useEffect(() => {
-    fetchFleet();
+    fetchMachines();
     if (!authenticated) return;
-    const id = window.setInterval(fetchFleet, 15_000);
+    const id = window.setInterval(fetchMachines, 15_000);
     return () => window.clearInterval(id);
-  }, [authenticated, fetchFleet]);
+  }, [authenticated, fetchMachines]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -89,7 +87,7 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
           <div>
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
               <Laptop className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-              Your Devices
+              Your Machines
             </h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
               Every Sery machine connected to this workspace.
@@ -117,7 +115,7 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
           <CloudOff className="h-10 w-10 text-slate-400 dark:text-slate-600" />
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-              Connect to see your devices
+              Connect to see your machines
             </h2>
             <p className="mt-1 max-w-md text-sm text-slate-500 dark:text-slate-400">
               Sery is running locally on this machine. To pair it with
@@ -138,22 +136,22 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
         </div>
       )}
 
-      {authenticated && loading && !fleet && (
+      {authenticated && loading && !machines && (
         <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-          Loading fleet…
+          Loading machines…
         </div>
       )}
 
       {authenticated && error && !loading && (
         <div className="rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
-          Couldn't load fleet. {error}{' '}
-          <button className="underline" onClick={fetchFleet}>
+          Couldn't load machines. {error}{' '}
+          <button className="underline" onClick={fetchMachines}>
             Retry
           </button>
         </div>
       )}
 
-      {authenticated && fleet && fleet.agents.length === 0 && !loading && (
+      {authenticated && machines && machines.agents.length === 0 && !loading && (
         <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
           <p className="text-sm text-slate-600 dark:text-slate-400">
             Only this machine is connected so far.
@@ -175,8 +173,8 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
         </div>
       )}
 
-      {authenticated && fleet && fleet.agents.length > 0 && (
-        <FleetList agents={fleet.agents} />
+      {authenticated && machines && machines.agents.length > 0 && (
+        <MachinesList agents={machines.agents} />
       )}
       </div>
     </div>
@@ -185,8 +183,8 @@ export function FleetView({ hideAddButton, onFleetUpdated }: Props) {
 
 // ─── List + Rows ───────────────────────────────────────────────────────────
 
-function FleetList({ agents }: { agents: FleetAgent[] }) {
-  // Derive per-agent unread schema-change counts once, outside the row
+function MachinesList({ agents }: { agents: Machine[] }) {
+  // Derive per-machine unread schema-change counts once, outside the row
   // components — avoids each row subscribing independently to the store.
   const notifications = useAgentStore((s) => s.schemaNotifications);
   const unreadByAgent = useMemo(() => {
@@ -202,7 +200,7 @@ function FleetList({ agents }: { agents: FleetAgent[] }) {
     <ul className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-900">
       {agents.map((agent) => (
         <li key={agent.agent_id}>
-          <AgentRow
+          <MachineRow
             agent={agent}
             unreadSchemaChanges={unreadByAgent.get(agent.agent_id) ?? 0}
           />
@@ -212,11 +210,11 @@ function FleetList({ agents }: { agents: FleetAgent[] }) {
   );
 }
 
-function AgentRow({
+function MachineRow({
   agent,
   unreadSchemaChanges,
 }: {
-  agent: FleetAgent;
+  agent: Machine;
   unreadSchemaChanges: number;
 }) {
   const niceName = agent.display_name ?? agent.name;
@@ -267,7 +265,7 @@ function AgentRow({
   );
 }
 
-function StatusDot({ status }: { status: FleetAgent['status'] }) {
+function StatusDot({ status }: { status: Machine['status'] }) {
   const color =
     status === 'online'
       ? 'bg-emerald-500'

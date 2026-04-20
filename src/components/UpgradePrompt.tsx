@@ -14,7 +14,7 @@ interface UpgradePromptProps {
  * UpgradePrompt — prompt users to upgrade from Local Vault to PRO features.
  *
  * Variants:
- * - banner: Inline banner for recipe panels
+ * - banner: Inline banner for gated panels
  * - modal: Full modal dialog for blocked actions
  */
 export function UpgradePrompt({
@@ -133,9 +133,9 @@ export function UpgradePrompt({
 
         <div className="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            <strong>Local Vault (FREE):</strong> SQL queries only
+            <strong>FREE:</strong> Column-aware search, schemas, and profiles — fully local
             <br />
-            <strong>PRO:</strong> AI-powered analysis + advanced recipes
+            <strong>PRO:</strong> AI-powered analysis across every machine you own
           </p>
         </div>
 

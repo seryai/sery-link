@@ -65,7 +65,7 @@ export function useAgentEvents() {
 
     // Schema-change notification — fires once per dataset whose shape
     // drifted between scans. Push into the store (so the Notifications
-    // view + Fleet badge update) regardless; the toast is gated by
+    // view + Machines badge update) regardless; the toast is gated by
     // the user's setting so scan-heavy users can silence it without
     // losing the persisted record.
     unsubs.push(

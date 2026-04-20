@@ -8,7 +8,7 @@ mod error;
 mod events;
 mod excel;
 mod export_import;
-mod fleet;
+mod machines;
 mod history;
 mod keyring_store;
 mod metadata_cache;
@@ -116,7 +116,7 @@ pub fn run() {
             commands::start_auth_flow,
             commands::auth_with_key,
             commands::bootstrap_workspace,
-            commands::list_fleet,
+            commands::list_machines,
             commands::get_config,
             commands::save_config,
             commands::add_watched_folder,

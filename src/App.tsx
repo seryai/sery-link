@@ -35,7 +35,7 @@ import { SearchPage } from './components/SearchPage';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
-import { FleetView } from './components/FleetView';
+import { MachinesView } from './components/MachinesView';
 import { Notifications } from './components/Notifications';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
@@ -252,7 +252,7 @@ function AppInner() {
               Results
             </NavLink>
             <NavLink
-              to="/fleet"
+              to="/machines"
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                   isActive
@@ -346,7 +346,7 @@ function AppInner() {
               element={<FileDetail />}
             />
             <Route path="/results" element={<History />} />
-            <Route path="/fleet" element={<FleetView />} />
+            <Route path="/machines" element={<MachinesView />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />
