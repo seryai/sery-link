@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.5.0). If unset, uses the triggering tag."
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            args: --target aarch64-apple-darwin
+            label: "macOS (Apple Silicon)"
+          - platform: macos-14
+            args: --target x86_64-apple-darwin
+            label: "macOS (Intel)"
+          - platform: ubuntu-22.04
+            args: ""
+            label: "Linux"
+          - platform: windows-latest
+            args: ""
+            label: "Windows"
+
+    runs-on: ${{ matrix.platform }}
+    name: Build ${{ matrix.label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libxdo-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build MarkItDown sidecar
+        if: matrix.platform != 'windows-latest'
+        run: |
+          cd sidecar
+          pip install -r requirements.txt
+          python build.py
+
+      # Windows sidecar build — PyInstaller path differs. Skip for now or
+      # port the sidecar/build.py Windows path. TODO before first Windows
+      # release.
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Sery Link __VERSION__"
+          releaseBody: |
+            See [CHANGELOG.md](https://github.com/seryai/sery-link/blob/main/CHANGELOG.md) for the full list of changes.
+
+            ## Install
+
+            - **macOS**: download `Sery-Link_*.dmg` (Apple Silicon or Intel), open, drag to Applications.
+            - **Windows**: download `Sery-Link_*_x64-setup.exe` or the `.msi` installer.
+            - **Linux**: download the `.AppImage` (portable) or `.deb` (Debian/Ubuntu).
+
+            Existing users on a previous version will be prompted to auto-update.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
