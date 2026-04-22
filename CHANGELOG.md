@@ -5,6 +5,113 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-22
+
+The local-first pivot. Sery Link is now a free, local desktop app that
+indexes every CSV, spreadsheet, and document on your machines —
+search by column name, inspect schemas and column stats in place, and
+(on the paid AI tier) ask questions in plain English across every
+machine you own. Open source under AGPL-3.0-or-later.
+
+### Added
+
+#### Column-aware search (new hero feature)
+- Global search bar matches filenames, column names, and extracted
+  document content across every folder and every remote source in one
+  pass. Replaces the previous "which folder was that file in again?"
+  hunt.
+- Per-file column profile: open any file to see schema, sample rows,
+  and per-column stats (null %, unique values, min/max/avg). Computed
+  locally via DuckDB `SUMMARIZE`, merged with schema into a single
+  auto-loading Columns table.
+
+#### Remote sources
+- Add public HTTPS URLs as data sources (Phase A).
+- Add S3 URLs with credentials stored in the OS keychain (Phase B1).
+- Add S3 bucket + prefix listings (Phase B2).
+- All fetches happen on the local agent — credentials and raw data
+  never transit Sery's cloud.
+
+#### Schema-change notifications
+- Cache-level schema diff computed at scan time.
+- Toast UI surfaces changes as they're detected.
+- Dedicated Notifications tab with persistent JSONL storage across
+  restarts.
+- Cross-machine broadcast: schema changes detected on one machine
+  surface on every other machine in the workspace within seconds.
+- Rapid-repeat dedup so file-watcher bounce doesn't spam the tab.
+- Per-machine unread badge in the Machines view.
+- Settings toggle to silence toasts while keeping persisted records.
+
+#### Local-first onboarding
+- No silent cloud contact on first launch. Pick a folder, search,
+  profile files — all offline. Connecting to Sery.ai is an explicit
+  opt-in with a workspace key.
+
+#### Open source
+- Sery Link is now open source under the **GNU Affero General Public
+  License v3.0 or later** (AGPL-3.0-or-later). See `LICENSE`.
+- `CONTRIBUTING.md`, `SUPPORT.md`, `SECURITY.md` for contributor and
+  reporter guidance.
+- Tauri auto-updater wired to GitHub Releases — existing installs
+  auto-update on every tagged release.
+- Release pipeline via `.github/workflows/release.yml` (tag-driven
+  matrix builds for macOS arm64/x64, Windows, Linux).
+
+#### Performance
+- Persistent scan cache (`~/.sery/scan_cache.db`) with tiering so
+  large folders don't re-read on every launch.
+- Virtualized folder detail view handles folders with 10K+ files.
+- Cache-warm folder detail views skip auto-rescan.
+- CSV parser fallback ladder + graceful degradation for malformed
+  files.
+
+### Changed
+
+- **"Fleet" renamed to "Machines"** across UI, code, and public copy.
+  Internal types renamed (`FleetView` → `MachinesView`, `FleetAgent`
+  → `Machine`, `list_fleet` → `list_machines`, route `/fleet` →
+  `/machines`). Backend HTTP URL kept at `/v1/agent/workspace/fleet`
+  for continuity with the api repo.
+- Sidebar labels reorganized around the local-first flow.
+- Every page now uses a consistent full-width shell.
+- Source tree cleaned for open-source release: internal planning docs
+  relocated to `docs/internal/`, personal paths scrubbed from history.
+
+### Removed
+
+- **Pair-code flow.** Machines now join a workspace via workspace
+  keys (copy from machine A, paste on machine B). QR-code pair flow
+  removed.
+- **SQL Recipes feature.** The Analytics page, recipe execution
+  surface, `recipe_executor` Rust module, and the 9 seed recipe JSONs
+  have been removed. Users ask questions in plain English on the AI
+  tier — the SQL pipeline is no longer exposed.
+- **Dataset Relationship Graph.** The visualization and its
+  "Show Relationships" button are gone; cross-file relationships are
+  now surfaced implicitly through column-aware search.
+
+### Fixed
+
+- `CommandPalette` no longer loops on stale `useMetadataCache` return
+  values.
+- Per-file profile wraps `SUMMARIZE` in `SELECT` and catches DuckDB
+  panics for malformed files.
+- Scanner doesn't auto-rescan folder detail when the cache is warm.
+
+### Security
+
+- AGPL-3 license means the whole source of Sery Link is auditable.
+  The central privacy claim — "your files never leave your machines"
+  — is now verifiable by reading the code, not trust-us.
+- `SECURITY.md` documents the private disclosure path
+  (security@sery.ai, 72h acknowledgement target, safe-harbor clause).
+- Auto-updater artifacts are cryptographically signed with minisign
+  public-key verification. The pubkey is embedded in the app; the
+  private key is held only by the release maintainer.
+- Commit history rewritten to remove personal file paths and
+  accidentally-committed build artifacts.
+
 ## [0.4.0] - 2026-04-15
 
 ### 🎉 Major Features
