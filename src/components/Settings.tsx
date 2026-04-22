@@ -6,8 +6,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { getVersion } from '@tauri-apps/api/app';
+import { check, type Update } from '@tauri-apps/plugin-updater';
 import {
   Bell,
+  CheckCircle2,
   Download,
   Info,
   LogOut,
@@ -17,6 +20,7 @@ import {
   RefreshCw,
   Save,
   Settings as SettingsIcon,
+  Sparkles,
   Sun,
   Upload,
   Zap,
@@ -519,12 +523,15 @@ function AboutPanel({
   return (
     <Panel>
       <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-900">
+        <VersionRow />
         <Row label="Agent ID" value={agentId ?? '—'} mono />
         <Row label="Workspace" value={workspaceId ?? '—'} mono />
         <Row label="Platform" value={draft.agent.platform} />
         <Row label="Hostname" value={draft.agent.hostname} />
         <Row label="API endpoint" value={draft.cloud.api_url} mono />
       </div>
+
+      <UpdaterSection />
 
       <div className="flex items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
@@ -559,6 +566,175 @@ function AboutPanel({
         Sign out
       </button>
     </Panel>
+  );
+}
+
+function VersionRow() {
+  const [version, setVersion] = useState<string>('—');
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion('—'));
+  }, []);
+  return <Row label="Version" value={version} mono />;
+}
+
+// ─── Updater ─────────────────────────────────────────────────────────────
+
+type UpdaterState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'upToDate'; at: Date }
+  | { kind: 'available'; update: Update }
+  | { kind: 'downloading'; progress: number | null }
+  | { kind: 'installed' }
+  | { kind: 'error'; message: string };
+
+function UpdaterSection() {
+  const [state, setState] = useState<UpdaterState>({ kind: 'idle' });
+
+  const checkForUpdate = async () => {
+    setState({ kind: 'checking' });
+    try {
+      const update = await check();
+      if (update) {
+        setState({ kind: 'available', update });
+      } else {
+        setState({ kind: 'upToDate', at: new Date() });
+      }
+    } catch (err) {
+      setState({ kind: 'error', message: String(err) });
+    }
+  };
+
+  const installUpdate = async () => {
+    if (state.kind !== 'available') return;
+    const { update } = state;
+    setState({ kind: 'downloading', progress: null });
+    try {
+      let downloaded = 0;
+      let contentLength: number | null = null;
+      await update.downloadAndInstall((ev) => {
+        // Tauri v2 updater events — Started | Progress | Finished
+        if (ev.event === 'Started') {
+          contentLength = ev.data.contentLength ?? null;
+        } else if (ev.event === 'Progress') {
+          downloaded += ev.data.chunkLength;
+          const progress =
+            contentLength && contentLength > 0
+              ? Math.min(100, Math.round((downloaded / contentLength) * 100))
+              : null;
+          setState({ kind: 'downloading', progress });
+        }
+      });
+      setState({ kind: 'installed' });
+    } catch (err) {
+      setState({ kind: 'error', message: String(err) });
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-50">
+        <RefreshCw className="h-4 w-4" />
+        Updates
+      </h3>
+
+      {state.kind === 'idle' && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            Sery Link checks for updates automatically. You can also check
+            now.
+          </p>
+          <button
+            onClick={checkForUpdate}
+            className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Check for updates
+          </button>
+        </div>
+      )}
+
+      {state.kind === 'checking' && (
+        <p className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          Checking…
+        </p>
+      )}
+
+      {state.kind === 'upToDate' && (
+        <div className="flex items-center justify-between gap-3">
+          <p className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            You're on the latest version.
+          </p>
+          <button
+            onClick={checkForUpdate}
+            className="shrink-0 text-xs text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            Check again
+          </button>
+        </div>
+      )}
+
+      {state.kind === 'available' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-xs font-medium text-purple-700 dark:text-purple-300">
+            <Sparkles className="h-3.5 w-3.5" />
+            Version {state.update.version} is available
+          </div>
+          {state.update.body && (
+            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+              {state.update.body}
+            </pre>
+          )}
+          <button
+            onClick={installUpdate}
+            className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-purple-700"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Download &amp; install
+          </button>
+        </div>
+      )}
+
+      {state.kind === 'downloading' && (
+        <div className="space-y-2">
+          <p className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+            <Download className="h-3.5 w-3.5 animate-pulse" />
+            Downloading update
+            {state.progress !== null ? ` · ${state.progress}%` : '…'}
+          </p>
+          {state.progress !== null && (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div
+                className="h-full bg-purple-600 transition-[width]"
+                style={{ width: `${state.progress}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {state.kind === 'installed' && (
+        <p className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Update installed. Quit and reopen Sery Link to finish applying it.
+        </p>
+      )}
+
+      {state.kind === 'error' && (
+        <div className="space-y-2">
+          <p className="text-xs text-rose-700 dark:text-rose-300">
+            Couldn't check for updates: {state.message}
+          </p>
+          <button
+            onClick={checkForUpdate}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
