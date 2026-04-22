@@ -68,16 +68,29 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Build MarkItDown sidecar
-        if: matrix.platform != 'windows-latest'
+        shell: bash
         run: |
           cd sidecar
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
           python build.py
 
-      # Windows sidecar build — PyInstaller path differs. Skip for now or
-      # port the sidecar/build.py Windows path. TODO before first Windows
-      # release.
+      - name: Verify sidecar binary is present
+        shell: bash
+        run: |
+          cd sidecar/dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ls markitdown-sidecar-*-pc-windows-msvc.exe
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ls markitdown-sidecar-*-apple-darwin
+          else
+            ls markitdown-sidecar-*-unknown-linux-gnu
+          fi
 
       - uses: tauri-apps/tauri-action@v0
         env:
