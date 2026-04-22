@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { documentDir } from '@tauri-apps/api/path';
 import {
   AlertCircle,
   Database,
@@ -44,7 +45,17 @@ export function FolderList() {
 
   const addFolder = async () => {
     try {
-      const selected = await openDialog({ directory: true, multiple: false });
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await documentDir();
+      } catch {
+        defaultPath = undefined;
+      }
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      });
       if (typeof selected !== 'string') return;
 
       setBusy(true);

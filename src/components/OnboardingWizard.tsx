@@ -24,6 +24,7 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { documentDir } from '@tauri-apps/api/path';
 import {
   ArrowRight,
   Check,
@@ -75,9 +76,18 @@ export function OnboardingWizard() {
       }
 
       // 2. Start the local file watcher so future edits get picked up.
-      invoke('start_file_watcher').catch(err =>
-        console.error('File watcher failed to start:', err),
-      );
+      // We await so we can warn the user if it fails — a silent watcher
+      // failure means future file changes won't be indexed, which looks
+      // like a broken search two weeks later. The folder itself is
+      // still added even if the watcher fails.
+      try {
+        await invoke('start_file_watcher');
+      } catch (err) {
+        console.error('File watcher failed to start:', err);
+        toast.error(
+          `Folder added, but the file watcher couldn't start. New files won't be detected automatically until you restart Sery. (${err})`,
+        );
+      }
 
       // NOTE: we deliberately do NOT start_websocket_tunnel here.
       // No token = no tunnel. The tunnel starts only when the user
@@ -104,7 +114,21 @@ export function OnboardingWizard() {
 
   const pickFolder = async () => {
     try {
-      const result = await openDialog({ directory: true, multiple: false });
+      // Open the picker at ~/Documents by default. Most users have
+      // years of content there, so the first scan looks interesting
+      // out of the box. Falls back to the system default if we can't
+      // resolve the directory (e.g., sandbox without access).
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await documentDir();
+      } catch {
+        defaultPath = undefined;
+      }
+      const result = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      });
       if (typeof result === 'string') {
         setSelectedFolder(result);
         void runSetup(result);
@@ -136,9 +160,13 @@ export function OnboardingWizard() {
               <h1 className="mb-2 text-center text-3xl font-bold text-slate-900 dark:text-slate-50">
                 Welcome to Sery
               </h1>
-              <p className="mb-8 text-center text-slate-600 dark:text-slate-300">
-                Pick a folder to index on this machine. Sery works fully
-                offline until you decide to connect to the cloud.
+              <p className="mb-6 text-center text-slate-600 dark:text-slate-300">
+                Search your CSVs, spreadsheets, and documents by
+                filename or column name. Works fully offline; no
+                account needed.
+              </p>
+              <p className="mb-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                Pick a folder to get started.
               </p>
 
               <button

@@ -14,11 +14,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { documentDir } from '@tauri-apps/api/path';
 import {
   Columns3,
   Database,
   FileText,
   Folder as FolderIcon,
+  FolderPlus,
   Loader2,
   Search,
   Sparkles,
@@ -26,7 +29,12 @@ import {
   Type,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
-import type { SearchMatch, SearchMatchReason } from '../types/events';
+import { useToast } from './Toast';
+import type {
+  AgentConfig,
+  SearchMatch,
+  SearchMatchReason,
+} from '../types/events';
 
 // Debounce before firing the backend query. 180 ms feels instant while
 // still collapsing bursts of keypresses into one call — important
@@ -39,12 +47,60 @@ export function SearchPage() {
   // typing a long query, clicking Folders, and returning cleared
   // everything. `loading` and `error` stay local since they're only
   // meaningful while this page is mounted.
-  const { searchQuery, searchResults, setSearchQuery, setSearchResults } =
-    useAgentStore();
+  const {
+    searchQuery,
+    searchResults,
+    setSearchQuery,
+    setSearchResults,
+    config,
+    scansInFlight,
+    setConfig,
+  } = useAgentStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequest = useRef(0);
   const navigate = useNavigate();
+  const toast = useToast();
+
+  // Is any folder currently being scanned? Used to nudge the user
+  // that zero-results might just mean "not indexed yet."
+  const indexingProgress = useMemo(() => {
+    const scans = Object.values(scansInFlight);
+    if (scans.length === 0) return null;
+    return {
+      folders: scans.length,
+      processed: scans.reduce((sum, s) => sum + s.current, 0),
+      total: scans.reduce((sum, s) => sum + s.total, 0),
+    };
+  }, [scansInFlight]);
+
+  const hasFolders = (config?.watched_folders.length ?? 0) > 0;
+
+  const addFolder = async () => {
+    try {
+      let defaultPath: string | undefined;
+      try {
+        defaultPath = await documentDir();
+      } catch {
+        defaultPath = undefined;
+      }
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath,
+      });
+      if (typeof selected !== 'string') return;
+      await invoke('add_watched_folder', { path: selected, recursive: true });
+      const updated = await invoke<AgentConfig>('get_config');
+      setConfig(updated);
+      toast.success('Folder added');
+      invoke('rescan_folder', { folderPath: selected }).catch((err) => {
+        console.error('Initial scan failed:', err);
+      });
+    } catch (err) {
+      toast.error(`Couldn't add folder: ${err}`);
+    }
+  };
 
   useEffect(() => {
     const trimmed = searchQuery.trim();
@@ -87,16 +143,22 @@ export function SearchPage() {
         onQueryChange={setSearchQuery}
         resultCount={searchResults.length}
         loading={loading}
+        indexingProgress={indexingProgress}
       />
       <div className="flex-1 overflow-hidden">
         {error ? (
           <div className="m-6 rounded-md border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
             Search failed: {error}
           </div>
+        ) : !hasFolders ? (
+          <NoFoldersEmpty onAddFolder={addFolder} />
         ) : searchQuery.trim() === '' ? (
           <EmptyPrompt />
         ) : searchResults.length === 0 && !loading ? (
-          <NoResults query={searchQuery} />
+          <NoResults
+            query={searchQuery}
+            indexing={indexingProgress !== null}
+          />
         ) : (
           <SearchResults
             results={searchResults}
@@ -123,18 +185,23 @@ function SearchHeader({
   onQueryChange,
   resultCount,
   loading,
+  indexingProgress,
 }: {
   query: string;
   onQueryChange: (q: string) => void;
   resultCount: number;
   loading: boolean;
+  indexingProgress: IndexingProgress | null;
 }) {
   return (
     <div className="border-b border-slate-200 bg-white px-6 py-5 dark:border-slate-800 dark:bg-slate-900">
-      <h1 className="mb-3 flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-        <Sparkles className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-        Find anything
-      </h1>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+          <Sparkles className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+          Find anything
+        </h1>
+        {indexingProgress && <IndexingPill progress={indexingProgress} />}
+      </div>
       <div className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
         <input
@@ -157,6 +224,23 @@ function SearchHeader({
         </p>
       )}
     </div>
+  );
+}
+
+type IndexingProgress = { folders: number; processed: number; total: number };
+
+function IndexingPill({ progress }: { progress: IndexingProgress }) {
+  // total can lag the true count early in a scan. Show raw processed
+  // count until we have a total, then show "N of M".
+  const label =
+    progress.total > 0
+      ? `Indexing… ${progress.processed.toLocaleString()} of ${progress.total.toLocaleString()} files`
+      : `Indexing… ${progress.processed.toLocaleString()} files so far`;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      {label}
+    </span>
   );
 }
 
@@ -222,7 +306,13 @@ function HintCard({
   );
 }
 
-function NoResults({ query }: { query: string }) {
+function NoResults({
+  query,
+  indexing,
+}: {
+  query: string;
+  indexing: boolean;
+}) {
   return (
     <div className="flex h-full items-center justify-center p-8">
       <div className="max-w-md text-center">
@@ -233,11 +323,45 @@ function NoResults({ query }: { query: string }) {
         <h2 className="mb-1 text-base font-semibold text-slate-900 dark:text-slate-50">
           No matches for <span className="font-mono">{query}</span>
         </h2>
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          Try a shorter query, a column name, or a word from inside a document.
-          Files that haven't been scanned yet won't appear — visit a folder
-          once to add it to the search index.
+        {indexing ? (
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Sery is still indexing your folders — results will appear here as
+            more files are scanned. Worth retrying in a moment.
+          </p>
+        ) : (
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Try a shorter query, a column name, or a word from inside a
+            document.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NoFoldersEmpty({ onAddFolder }: { onAddFolder: () => void }) {
+  return (
+    <div className="flex h-full items-center justify-center p-8">
+      <div className="max-w-md text-center">
+        <FolderPlus
+          className="mx-auto mb-4 h-12 w-12 text-slate-300 dark:text-slate-600"
+          strokeWidth={1.5}
+        />
+        <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-50">
+          Add a folder to start searching
+        </h2>
+        <p className="mb-6 text-sm text-slate-600 dark:text-slate-400">
+          Sery indexes every CSV, spreadsheet, and document in the folder
+          you pick — locally, with nothing uploaded. Once it's indexed you
+          can search by filename, column name, or text inside a document.
         </p>
+        <button
+          onClick={onAddFolder}
+          className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700"
+        >
+          <FolderPlus className="h-4 w-4" />
+          Pick a folder
+        </button>
       </div>
     </div>
   );

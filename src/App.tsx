@@ -206,7 +206,7 @@ function AppInner() {
                 Sery Link
               </h1>
               <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Local-first data analytics
+                Understand your data
               </p>
             </div>
           </div>
