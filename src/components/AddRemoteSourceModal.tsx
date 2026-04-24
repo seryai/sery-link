@@ -99,11 +99,12 @@ export function AddRemoteSourceModal({
           <div>
             <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-slate-50">
               <Globe className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-              Add a remote file
+              Add a remote source
             </h2>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              Paste a public URL to a CSV or Parquet file. Sery Link fetches
-              the schema locally — the file is never uploaded to our servers.
+              Add a public URL, an S3 object, or an S3 bucket prefix.
+              Sery Link reads the schema locally — nothing is uploaded
+              to our servers.
             </p>
           </div>
           <button
@@ -125,7 +126,7 @@ export function AddRemoteSourceModal({
           onKeyDown={(e) => {
             if (e.key === 'Enter' && canSubmit) submit();
           }}
-          placeholder="https://example.com/data.csv,  s3://bucket/path/file.parquet,  or  s3://bucket/prefix/"
+          placeholder="https:// or s3:// URL"
           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
         />
 
@@ -145,9 +146,10 @@ export function AddRemoteSourceModal({
               AWS credentials
             </div>
             <p className="mb-3 text-xs text-purple-800/80 dark:text-purple-200/80">
-              Keys are saved to your macOS Keychain and used only to read this
-              bucket. They never leave your machine — queries run in DuckDB on
-              your laptop.
+              Keys are stored in your OS's credential store (Keychain
+              on macOS, Credential Manager on Windows, Secret Service
+              on Linux) and used only to read this bucket. Nothing is
+              uploaded.
             </p>
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="block">
