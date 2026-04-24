@@ -55,7 +55,7 @@ pub struct DatasetMetadata {
 }
 
 /// File extensions classified as document (non-tabular) types.
-const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb"];
+const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb", "pdf"];
 
 /// How much work the scanner should do for a given file.
 ///
@@ -87,7 +87,7 @@ pub enum ScanTier {
 fn default_tier_for(ext: &str) -> ScanTier {
     match ext {
         "parquet" | "csv" | "xlsx" | "xls" => ScanTier::Full,
-        "docx" | "pptx" => ScanTier::Content,
+        "docx" | "pptx" | "pdf" => ScanTier::Content,
         "html" | "htm" | "ipynb" => ScanTier::Shallow,
         _ => ScanTier::Shallow,
     }
@@ -678,7 +678,7 @@ fn is_supported(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()).unwrap_or(""),
         "parquet" | "csv" | "xlsx" | "xls"
-        | "docx" | "pptx" | "html" | "htm" | "ipynb"
+        | "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
     )
 }
 
@@ -1272,7 +1272,7 @@ mod filter_tests {
     #[test]
     fn is_supported_covers_all_indexable_formats() {
         for ext in [
-            "parquet", "csv", "xlsx", "xls", "docx", "pptx", "html", "htm", "ipynb",
+            "parquet", "csv", "xlsx", "xls", "docx", "pptx", "html", "htm", "ipynb", "pdf",
         ] {
             let p = PathBuf::from(format!("/tmp/file.{ext}"));
             assert!(is_supported(&p), "{ext} should be supported");
@@ -1295,6 +1295,7 @@ mod filter_tests {
         assert!(is_document_ext("pptx"));
         assert!(is_document_ext("html"));
         assert!(is_document_ext("ipynb"));
+        assert!(is_document_ext("pdf"));
 
         assert!(!is_document_ext("parquet"));
         assert!(!is_document_ext("csv"));

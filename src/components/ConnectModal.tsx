@@ -77,7 +77,7 @@ export function ConnectModal({
         console.error('Tunnel failed to start after connect:', err),
       );
 
-      toast.success('Connected. Your machines are syncing.');
+      toast.success('Connected. Your workspace is live.');
       onConnected?.(token);
       onClose();
     } catch (err) {
@@ -109,8 +109,8 @@ export function ConnectModal({
               Connect to Sery.ai
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Paste a workspace key to enable cross-machine queries, the
-              Machines view, and cloud sync.
+              Paste a workspace key to enable cross-machine queries
+              and the Machines view.
             </p>
           </div>
           <button
