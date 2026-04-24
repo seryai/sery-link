@@ -282,7 +282,7 @@ export function FolderDetail() {
               <RefreshCw
                 className={`h-3.5 w-3.5 ${scanState.running ? 'animate-spin' : ''}`}
               />
-              Rescan
+              {scanState.running ? 'Scanning…' : 'Rescan'}
             </button>
             {!isRemoteUrl(folderPath) && (
               <button
@@ -290,7 +290,7 @@ export function FolderDetail() {
                 className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
               >
                 <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-                Open in Finder
+                {openFolderLabel()}
               </button>
             )}
           </div>
@@ -408,7 +408,7 @@ function VirtualizedDatasetList({
             No indexable files found in this folder.
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Sery indexes parquet, csv, xlsx, xls, docx, pptx, html, and ipynb.
+            Sery indexes parquet, csv, xlsx, xls, docx, pptx, pdf, html, and ipynb.
           </p>
         </div>
       )}
@@ -492,7 +492,7 @@ function DatasetRow({
                 <span>{dataset.row_count_estimate.toLocaleString()} rows</span>
               </>
             )}
-            {dataset.schema.length > 0 && (
+            {!isDoc && dataset.schema.length > 0 && (
               <>
                 <span>·</span>
                 <span>
@@ -519,7 +519,7 @@ function DatasetRow({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
-const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb']);
+const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf']);
 
 function isDocumentFormat(fmt: string): boolean {
   return DOCUMENT_FORMATS.has(fmt.toLowerCase());
@@ -528,6 +528,20 @@ function isDocumentFormat(fmt: string): boolean {
 function folderBasename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+/**
+ * Platform-aware label for the "reveal in file manager" button.
+ * macOS has Finder, Windows has Explorer, Linux has whatever the
+ * user's environment runs; safest portable label there is "Open
+ * folder."
+ */
+function openFolderLabel(): string {
+  if (typeof navigator === 'undefined') return 'Open folder';
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('mac')) return 'Open in Finder';
+  if (ua.includes('win')) return 'Open in Explorer';
+  return 'Open folder';
 }
 
 function formatBytes(bytes: number): string {
