@@ -21,7 +21,7 @@ import { useToast } from './Toast';
 import type { AuditEntry } from '../types/events';
 
 export function Privacy() {
-  const { audit, setAudit } = useAgentStore();
+  const { audit, setAudit, authenticated } = useAgentStore();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
 
@@ -121,12 +121,25 @@ export function Privacy() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
 
+      {/* Local-only state banner — make sure users in local mode
+          know the "goes to cloud" card is hypothetical. */}
+      {!authenticated && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          <Lock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div>
+            You're running Sery Link locally. Nothing below has been
+            sent anywhere — these cards show what <em>would</em> cross
+            the network if you connect to Sery.ai.
+          </div>
+        </div>
+      )}
+
       {/* Disclosure cards */}
       <div className="mb-6 grid gap-3 md:grid-cols-2">
         <DisclosureCard
           tone="sent"
           icon={<Cloud className="h-5 w-5" />}
-          title="What goes to the cloud"
+          title={authenticated ? 'What goes to the cloud' : 'What would cross the network'}
           items={[
             'File paths (relative to watched folders)',
             'Schemas — column names and types',
