@@ -298,7 +298,7 @@ function GeneralPanel({
 }) {
   return (
     <Panel>
-      <Field label="Agent name" hint="Shown in the cloud and on this device.">
+      <Field label="Machine name" hint="Shown in the Machines view and on this device.">
         <input
           type="text"
           value={draft.agent.name}
@@ -425,8 +425,8 @@ function SyncPanel({
       </Field>
 
       <Field
-        label="Sync cadence"
-        hint="How often the agent sends heartbeats to the cloud."
+        label="Connection frequency"
+        hint="How often Sery Link checks in with Sery.ai. Lower values feel more live; higher values reduce network traffic."
       >
         <div className="flex items-center gap-2">
           <input
