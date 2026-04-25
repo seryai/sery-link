@@ -282,7 +282,18 @@ pub fn get_auth_mode(config: &Config) -> AuthMode {
         }
     }
 
-    // 2. Check env vars for BYOK
+    // 2. Check the OS keychain for a saved BYOK key. Anthropic-first per
+    //    SPEC_BYOK.md v0.5.0 scope; OpenAI added in v0.5.x.
+    if let Ok(api_key) = keyring_store::get_byok_key("anthropic") {
+        if !api_key.is_empty() {
+            return AuthMode::BYOK {
+                provider: "anthropic".to_string(),
+                api_key,
+            };
+        }
+    }
+
+    // 3. Fallback: env var (legacy / power-user path; useful in CI and dev).
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         if !api_key.is_empty() {
             return AuthMode::BYOK {
@@ -292,7 +303,7 @@ pub fn get_auth_mode(config: &Config) -> AuthMode {
         }
     }
 
-    // 3. Default to local-only
+    // 4. Default to local-only
     AuthMode::LocalOnly
 }
 
