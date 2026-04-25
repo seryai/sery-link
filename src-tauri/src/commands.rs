@@ -1033,6 +1033,85 @@ pub async fn get_agent_info() -> Result<Option<AgentToken>, String> {
     }
 }
 
+// ─── Workspace recipes (ROADMAP F11 — cross-machine sync) ───────────────
+//
+// Read-only fetch of the workspace recipe library — the saved questions
+// the user (or any workspace member) created from app-dashboard chat.
+// Each recipe is a question they want to re-run; "running" from sery-link
+// opens the user's browser to app.sery.ai/chat with the question
+// pre-filled (sery-link doesn't currently have its own chat surface).
+//
+// This is the network-effect half of recipes: save once on machine A,
+// see it on machine B. Authenticates with the existing agent token
+// against /v1/agent/workspace-recipes (parallel to the user-authed
+// endpoint at /v1/workspace-recipes).
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct WorkspaceRecipe {
+    pub id: String,
+    pub workspace_id: String,
+    pub created_by: Option<String>,
+    pub name: String,
+    pub question: String,
+    pub source_message_id: Option<String>,
+    pub created_at: String,
+    pub last_run_at: Option<String>,
+    pub run_count: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WorkspaceRecipeListResponse {
+    recipes: Vec<WorkspaceRecipe>,
+    #[allow(dead_code)]
+    total: i64,
+}
+
+#[tauri::command]
+pub async fn fetch_workspace_recipes() -> Result<Vec<WorkspaceRecipe>, String> {
+    if !keyring_store::has_token() {
+        // No workspace token = LocalOnly mode = no recipes to sync.
+        // Return an empty list rather than an error so the UI can show
+        // a clean "connect to sync recipes" empty state.
+        return Ok(Vec::new());
+    }
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(format!("{}/v1/agent/workspace-recipes", config.cloud.api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed to fetch recipes ({}): {}", status, text));
+    }
+
+    let parsed: WorkspaceRecipeListResponse =
+        response.json().await.map_err(|e| e.to_string())?;
+    Ok(parsed.recipes)
+}
+
+#[tauri::command]
+pub async fn open_recipe_in_browser(question: String) -> Result<(), String> {
+    // The user's browser is the canonical "ask" surface today —
+    // sery-link doesn't have a chat UI yet. Use the configured
+    // web_url so dev / staging / prod all route correctly.
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let base = config.cloud.web_url.clone();
+    let url = format!(
+        "{}/chat?question={}",
+        base,
+        urlencoding::encode(&question)
+    );
+    open::that(&url).map_err(|e| format!("Failed to open browser: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn logout() -> Result<(), String> {
     // Close websocket + watcher before clearing credentials so we don't leave
