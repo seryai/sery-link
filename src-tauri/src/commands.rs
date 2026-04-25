@@ -1068,6 +1068,77 @@ pub async fn set_auth_mode(mode: AuthMode) -> Result<(), String> {
     config.save().map_err(|e| e.to_string())
 }
 
+/// Toggle Local-Only network mode. When enabled, disconnects the WebSocket
+/// tunnel and pins `selected_auth_mode` to `LocalOnly`, so cloud-dependent
+/// feature gates (`ai_queries`, `cloud_sync`, `team_sharing`) all return
+/// false until the user toggles it back. The keyring token is **left
+/// intact** — toggling back restores whatever auth mode the keyring/env-vars
+/// imply (WorkspaceKey or BYOK), and the WebSocket reconnects.
+///
+/// This is the implementation of ROADMAP F6: the "we're a network, not a
+/// store" promise is structural only if the user can verify "if I turn the
+/// network off, the app still does its core job." Local features (column
+/// search, profiles, recipes, the watcher) keep running regardless.
+#[tauri::command]
+pub async fn set_local_only_mode<R: Runtime>(
+    enabled: bool,
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    if enabled {
+        // 1. Pin auth mode so feature gates flip cloud features off.
+        config.app.selected_auth_mode = Some(AuthMode::LocalOnly);
+        config.save().map_err(|e| e.to_string())?;
+
+        // 2. Drop the live WebSocket. The connection closes; auto-reconnect
+        //    won't happen because the global is now None.
+        let mut ws_guard = WS_CLIENT.write().await;
+        *ws_guard = None;
+        drop(ws_guard);
+
+        // 3. Note: the keyring token and watcher are deliberately NOT
+        //    touched. Local file watching keeps working; the user's
+        //    workspace credentials survive the disconnect so re-enabling
+        //    is one click rather than re-pairing.
+    } else {
+        // 1. Clear the pinned mode so auth detection auto-picks the right
+        //    state from the keyring / env vars (WorkspaceKey, BYOK, or
+        //    LocalOnly fallback if no creds exist).
+        config.app.selected_auth_mode = None;
+        config.save().map_err(|e| e.to_string())?;
+
+        // 2. If we have a workspace token, restart the WebSocket. If not
+        //    (the user was in pure local mode anyway), this is a no-op.
+        if keyring_store::has_token() {
+            if let Ok(token) = keyring_store::get_token() {
+                let new_config = Config::load().map_err(|e| e.to_string())?;
+                let client = WebSocketClient::new(new_config);
+                client.start_with_app(token, app).await;
+
+                let mut ws_guard = WS_CLIENT.write().await;
+                *ws_guard = Some(client);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Lightweight read of the user's intent (vs `get_current_auth_mode`,
+/// which returns the *resolved* mode). Returns `true` only if the user
+/// has explicitly pinned `LocalOnly` via `set_local_only_mode(true)`.
+/// Used by the Settings UI to reflect the toggle state without overlap
+/// with users who just happen to have no workspace credentials.
+#[tauri::command]
+pub async fn is_local_only_mode_enabled() -> Result<bool, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    Ok(matches!(
+        config.app.selected_auth_mode,
+        Some(AuthMode::LocalOnly)
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // File watcher
 // ---------------------------------------------------------------------------
