@@ -1112,6 +1112,38 @@ pub async fn open_recipe_in_browser(question: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Notify the API that a recipe was just run from this machine. Bumps
+/// run_count + last_run_at and emits a F14 audit event tagged with this
+/// agent. Best-effort: failures are non-fatal because the user's actual
+/// goal — opening the question in the browser — already succeeded.
+#[tauri::command]
+pub async fn mark_recipe_run(recipe_id: String) -> Result<(), String> {
+    if !keyring_store::has_token() {
+        // No token = LocalOnly mode; nothing to mark on the server.
+        return Ok(());
+    }
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!(
+            "{}/v1/agent/workspace-recipes/{}/run",
+            config.cloud.api_url, recipe_id
+        ))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Failed to mark recipe run ({}): {}", status, text));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn logout() -> Result<(), String> {
     // Close websocket + watcher before clearing credentials so we don't leave

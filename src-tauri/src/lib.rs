@@ -196,6 +196,7 @@ pub fn run() {
             commands::is_local_only_mode_enabled,
             commands::fetch_workspace_recipes,
             commands::open_recipe_in_browser,
+            commands::mark_recipe_run,
             commands::get_byok_status,
             commands::save_byok_key,
             commands::clear_byok_key,
