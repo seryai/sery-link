@@ -193,6 +193,8 @@ pub fn run() {
             commands::set_auth_mode,
             commands::set_local_only_mode,
             commands::is_local_only_mode_enabled,
+            commands::fetch_workspace_recipes,
+            commands::open_recipe_in_browser,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
