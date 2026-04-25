@@ -57,10 +57,10 @@ fn quick_ask_shortcut() -> Shortcut {
 ///   1. The main window is shown and focused (creating a "summon" feel
 ///      whether the app was minimized, hidden in the tray, or just out
 ///      of focus on another desktop).
-///   2. A `quick-ask` event is emitted to the frontend. The SearchPage
-///      listens for it and (a) navigates to `/search` if not already
-///      there, (b) focuses the search input, (c) clears any previous
-///      query so the user can type immediately.
+///   2. A `quick-ask` event is emitted to the frontend. App.tsx listens
+///      for it, probes BYOK status, and routes to `/ask` (when an
+///      Anthropic key is configured) or `/search` (otherwise), focusing
+///      the input so the user can type immediately.
 ///
 /// Failures are logged but non-fatal: a missing hotkey shouldn't crash
 /// the app, just degrade the UX.
