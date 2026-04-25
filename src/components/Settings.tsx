@@ -23,6 +23,8 @@ import {
   Sparkles,
   Sun,
   Upload,
+  Wifi,
+  WifiOff,
   Zap,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -381,6 +383,8 @@ function SyncPanel({
 }) {
   return (
     <Panel>
+      <NetworkModeToggle />
+
       <Toggle
         icon={<Zap className="h-5 w-5" />}
         label="Auto-sync on file changes"
@@ -450,6 +454,117 @@ function SyncPanel({
         </div>
       </Field>
     </Panel>
+  );
+}
+
+// ─── Network mode (Local-Only toggle, ROADMAP F6) ───────────────────────────
+//
+// One toggle that pins the app to LocalOnly auth mode. When on, the
+// WebSocket tunnel disconnects and every cloud-dependent feature gate
+// returns false. Local features (column search, profiles, recipes, the
+// file watcher) keep working untouched.
+//
+// The keyring token is left intact, so toggling back is one click rather
+// than a re-pair. State is read fresh on mount and on every save round-
+// trip — we don't trust component-local state to mirror what's pinned in
+// config.
+
+function NetworkModeToggle() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const { setAuthenticated } = useAgentStore();
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<boolean>('is_local_only_mode_enabled')
+      .then((value) => {
+        if (!cancelled) setEnabled(value);
+      })
+      .catch((err) => {
+        console.error('Failed to read local-only mode:', err);
+        if (!cancelled) setEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onToggle = async (next: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await invoke('set_local_only_mode', { enabled: next });
+      setEnabled(next);
+      // The WebSocket either dropped (next=true) or came back online
+      // (next=false). Keep the global auth flag in sync so the StatusBar
+      // and other surfaces reflect reality immediately.
+      setAuthenticated(!next);
+      toast.success(
+        next
+          ? 'Disconnected from network. Local features still work.'
+          : 'Reconnected to network.',
+      );
+    } catch (err) {
+      toast.error(`Couldn't change network mode: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Loading shimmer — show the row immediately so layout doesn't jump,
+  // but with the toggle disabled until we know the real state.
+  if (enabled === null) {
+    return (
+      <div className="flex items-start gap-4 rounded-lg border border-slate-200 bg-white p-4 opacity-60 dark:border-slate-800 dark:bg-slate-900">
+        <div className="mt-0.5 text-purple-600 dark:text-purple-400">
+          <Wifi className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            Network mode
+          </div>
+          <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Loading…
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className="mt-0.5 text-purple-600 dark:text-purple-400">
+        {enabled ? <WifiOff className="h-5 w-5" /> : <Wifi className="h-5 w-5" />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium text-slate-900 dark:text-slate-100">
+          Local-only mode
+        </div>
+        <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+          {enabled
+            ? 'Disconnected from the Sery network. Cloud AI, cross-machine search, and sharing are paused. Local search, schemas, profiles, and recipes still work.'
+            : 'Connected to the Sery network. Turn this on to disconnect — your files and local features keep working; cloud features pause until you turn it back off.'}
+        </div>
+      </div>
+      <button
+        onClick={() => onToggle(!enabled)}
+        role="switch"
+        aria-checked={enabled}
+        disabled={busy}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+          enabled
+            ? 'bg-purple-600'
+            : 'bg-slate-300 dark:bg-slate-700'
+        }`}
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+            enabled ? 'translate-x-6' : 'translate-x-1'
+          }`}
+        />
+      </button>
+    </div>
   );
 }
 
