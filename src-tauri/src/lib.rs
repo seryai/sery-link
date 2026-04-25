@@ -10,6 +10,7 @@ mod excel;
 mod export_import;
 mod machines;
 mod history;
+mod hotkey;
 mod keyring_store;
 mod metadata_cache;
 mod plugin;
@@ -81,6 +82,13 @@ pub fn run() {
             if let Ok(mut config) = config::Config::load() {
                 let _ = config.migrate_if_needed();
                 apply_autostart(app.handle(), config.app.launch_at_login);
+            }
+
+            // Register the Quick-Ask global hotkey (ROADMAP F9). Failures
+            // are non-fatal — the hotkey is a UX nicety, not a core
+            // dependency.
+            if let Err(err) = hotkey::register(app.handle()) {
+                eprintln!("[setup] could not register Quick-Ask hotkey: {err}");
             }
 
             Ok(())

@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   BarChart3,
   Bell,
@@ -75,6 +76,40 @@ function AppInner() {
   useTheme();
   // Subscribe to every Tauri event we care about
   useAgentEvents();
+
+  // ROADMAP F9: the global Quick-Ask hotkey (registered in
+  // src-tauri/src/hotkey.rs) emits a `quick-ask` event whenever it
+  // fires. Route-navigate to /search and force-focus the input.
+  // Window show/focus is handled on the Rust side; the frontend's job
+  // is to land the user where they can start typing immediately.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen('quick-ask', () => {
+      navigate('/search');
+      // Defer to the next tick so the route has mounted before we look
+      // for the input. SearchPage's input has `autoFocus`, but if the
+      // user was already on /search the route doesn't remount, so we
+      // need to focus explicitly.
+      window.setTimeout(() => {
+        const input = document.querySelector<HTMLInputElement>(
+          'input[placeholder*="Filename"], input[type="text"]',
+        );
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 50);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => {
+        console.error('Failed to listen for quick-ask event:', err);
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [navigate]);
 
   // Close More dropdown when clicking outside
   useEffect(() => {
