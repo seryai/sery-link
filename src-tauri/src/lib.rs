@@ -4,6 +4,7 @@ mod byok;
 mod commands;
 mod config;
 mod csv;
+mod deep_link;
 mod duckdb_engine;
 mod error;
 mod events;
@@ -41,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -90,6 +92,25 @@ pub fn run() {
             // dependency.
             if let Err(err) = hotkey::register(app.handle()) {
                 eprintln!("[setup] could not register Quick-Ask hotkey: {err}");
+            }
+
+            // ROADMAP F3 / F1 — `seryai://` URL-scheme dispatcher. Routes
+            // `seryai://reveal?path=…` to OS-native file reveal and
+            // (placeholder) `seryai://pair?key=…` to a frontend event the
+            // join-existing-workspace UI can later listen for.
+            //
+            // tauri-plugin-deep-link emits these events on the main app
+            // handle; we forward each URL to deep_link::handle_url which
+            // does the actual dispatch. Failures are logged + swallowed
+            // so a bad URL doesn't crash the app.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let app_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        deep_link::handle_url(&app_handle, url.as_str());
+                    }
+                });
             }
 
             Ok(())
