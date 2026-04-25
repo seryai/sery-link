@@ -63,6 +63,29 @@ export function Recipes() {
   }, []);
 
   const runRecipe = async (recipe: WorkspaceRecipe) => {
+    // Optimistic UI bump — flip "Never run" to "Run 1 time · just now"
+    // before the server round-trip. Failures roll the value back on
+    // refresh; the user's primary goal (open the question) is decoupled
+    // from the bookkeeping call below.
+    setRecipes((prev) =>
+      prev.map((r) =>
+        r.id === recipe.id
+          ? {
+              ...r,
+              run_count: r.run_count + 1,
+              last_run_at: new Date().toISOString(),
+            }
+          : r,
+      ),
+    );
+
+    // Bookkeeping first (best-effort, fire-and-don't-wait), then open
+    // the browser. If the mark-run call fails we log it but don't block
+    // the user — they came here to ask a question, not to update a counter.
+    void invoke('mark_recipe_run', { recipeId: recipe.id }).catch((err) =>
+      console.warn('Failed to mark recipe run:', err),
+    );
+
     try {
       await invoke('open_recipe_in_browser', { question: recipe.question });
     } catch (err) {
