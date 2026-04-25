@@ -1,5 +1,6 @@
 mod audit;
 mod auth;
+mod byok;
 mod commands;
 mod config;
 mod csv;
@@ -195,6 +196,11 @@ pub fn run() {
             commands::is_local_only_mode_enabled,
             commands::fetch_workspace_recipes,
             commands::open_recipe_in_browser,
+            commands::get_byok_status,
+            commands::save_byok_key,
+            commands::clear_byok_key,
+            commands::validate_byok_key,
+            commands::ask_byok,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

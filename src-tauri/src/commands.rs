@@ -1942,6 +1942,85 @@ pub async fn install_marketplace_plugin(plugin_id: String) -> Result<(), String>
 // SQL Recipe Executor was removed in the v0.5.0 pivot. The module,
 // example recipe JSONs, and frontend surfaces have all been deleted.
 
+// ---------------------------------------------------------------------------
+// BYOK (Bring Your Own Key) — F7 v0.5.0 first cut.
+//
+// These commands manage a user-supplied LLM API key in the OS keychain and
+// expose a one-shot question/answer call that goes DIRECT to the provider
+// (currently Anthropic). The privacy guarantee is enforced by the byok::*
+// module — the host-targeting test in `byok/anthropic.rs` is the load-bearing
+// proof that no sery.ai traffic is generated for the LLM round-trip.
+// ---------------------------------------------------------------------------
+
+use crate::byok::{self, anthropic::AskResponse};
+
+#[derive(serde::Serialize, Debug)]
+pub struct ByokStatus {
+    pub configured: bool,
+    pub provider: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_byok_status() -> Result<ByokStatus, String> {
+    if keyring_store::has_byok_key("anthropic") {
+        Ok(ByokStatus {
+            configured: true,
+            provider: Some("anthropic".to_string()),
+        })
+    } else {
+        Ok(ByokStatus {
+            configured: false,
+            provider: None,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn save_byok_key(provider: String, api_key: String) -> Result<(), String> {
+    let provider = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
+    if api_key.trim().is_empty() {
+        return Err("API key is empty".to_string());
+    }
+    keyring_store::save_byok_key(provider.as_str(), api_key.trim())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_byok_key(provider: String) -> Result<(), String> {
+    let provider = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
+    keyring_store::delete_byok_key(provider.as_str())
+        .map_err(|e| e.to_string())
+}
+
+/// Validate a BYOK key by making a real, minimal call to the provider.
+/// Accepts the key as an argument so the user can validate before saving.
+/// If `api_key` is empty, the saved key is used.
+#[tauri::command]
+pub async fn validate_byok_key(provider: String, api_key: String) -> Result<(), String> {
+    let provider_enum = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
+    let key = if api_key.trim().is_empty() {
+        keyring_store::get_byok_key(provider_enum.as_str())
+            .map_err(|e| format!("No saved key to validate: {}", e))?
+    } else {
+        api_key.trim().to_string()
+    };
+    byok::validate_key(provider_enum, &key)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Ask the configured BYOK LLM a single question. Returns the full answer
+/// once the call completes (no streaming in v0.5.0). The HTTPS request goes
+/// from this process directly to the provider — no sery.ai involvement.
+#[tauri::command]
+pub async fn ask_byok(prompt: String) -> Result<AskResponse, String> {
+    let api_key = keyring_store::get_byok_key("anthropic")
+        .map_err(|_| "BYOK key not configured. Save an Anthropic key first.".to_string())?;
+
+    let client = byok::anthropic::AnthropicClient::new(api_key);
+    client.ask(&prompt).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod search_tests {
     use super::{rank_matches, SearchMatchReason};
