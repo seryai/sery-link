@@ -40,6 +40,7 @@ import { Settings } from './components/Settings';
 import { MachinesView } from './components/MachinesView';
 import { Notifications } from './components/Notifications';
 import { Recipes } from './components/Recipes';
+import { Ask } from './components/Ask';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { CommandPalette } from './components/CommandPalette';
@@ -263,6 +264,19 @@ function AppInner() {
               Find
             </NavLink>
             <NavLink
+              to="/ask"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Sparkles className="h-4 w-4" />
+              Ask
+            </NavLink>
+            <NavLink
               to="/folders"
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -398,6 +412,7 @@ function AppInner() {
             <Route path="/results" element={<History />} />
             <Route path="/machines" element={<MachinesView />} />
             <Route path="/recipes" element={<Recipes />} />
+            <Route path="/ask" element={<Ask />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/privacy" element={<Privacy />} />
