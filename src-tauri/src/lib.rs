@@ -176,6 +176,7 @@ pub fn run() {
             commands::open_in_sery_cloud,
             commands::complete_first_run,
             commands::reveal_in_finder,
+            commands::reveal_audit_file_in_finder,
             commands::show_main_window,
             commands::set_launch_at_login,
             commands::search_cached_datasets,

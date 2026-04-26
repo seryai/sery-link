@@ -93,19 +93,48 @@ impl AnthropicClient {
 
         let client = reqwest::Client::new();
         let url = Self::request_url("/v1/messages");
-        let resp = client
+        let started = std::time::Instant::now();
+        let send_result = client
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_API_VERSION)
             .header("content-type", "application/json")
             .json(&body)
             .send()
-            .await
-            .map_err(AgentError::Http)?;
+            .await;
+
+        // Translate transport-level failure into our error type AND
+        // record the failed call to the local audit so the user sees
+        // it in Privacy → Outbound. The host stays "api.anthropic.com"
+        // even on failure — that's the structural privacy proof.
+        let resp = match send_result {
+            Ok(r) => r,
+            Err(err) => {
+                let duration_ms = started.elapsed().as_millis() as u64;
+                crate::audit::record_byok_call(
+                    "anthropic",
+                    "api.anthropic.com",
+                    prompt.chars().count() as u64,
+                    None,
+                    duration_ms,
+                    Some(format!("transport error: {}", err)),
+                );
+                return Err(AgentError::Http(err));
+            }
+        };
 
         let status = resp.status();
         if !status.is_success() {
             let err_text = resp.text().await.unwrap_or_default();
+            let duration_ms = started.elapsed().as_millis() as u64;
+            crate::audit::record_byok_call(
+                "anthropic",
+                "api.anthropic.com",
+                prompt.chars().count() as u64,
+                None,
+                duration_ms,
+                Some(format!("HTTP {}: {}", status, err_text)),
+            );
             return Err(AgentError::Network(format!(
                 "Anthropic API returned {}: {}",
                 status, err_text
@@ -123,6 +152,16 @@ impl AnthropicClient {
             })
             .collect::<Vec<_>>()
             .join("");
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+        crate::audit::record_byok_call(
+            "anthropic",
+            "api.anthropic.com",
+            prompt.chars().count() as u64,
+            Some(text.chars().count() as u64),
+            duration_ms,
+            None,
+        );
 
         Ok(AskResponse {
             text,

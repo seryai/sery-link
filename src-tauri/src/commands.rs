@@ -1578,6 +1578,33 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
     open::that(target).map_err(|e| e.to_string())
 }
 
+/// Return the absolute on-disk path of the outbound audit log + reveal
+/// it in the OS file manager. The path is also returned so the Privacy
+/// view can show it next to the Reveal button — users see exactly
+/// where the file is, can `tail -f` it from a terminal, or paste the
+/// path into a privacy-conscious customer's audit request.
+#[tauri::command]
+pub async fn reveal_audit_file_in_finder() -> Result<String, String> {
+    let p = audit::audit_file_path().map_err(|e| e.to_string())?;
+    if let Some(parent) = p.parent() {
+        // Make sure the directory exists so the OS doesn't error on a
+        // missing path. If the file itself doesn't exist yet (no syncs
+        // and no BYOK calls), opening the parent still gives the user a
+        // useful destination — they see ~/.seryai/ with whatever else
+        // is there.
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let target: PathBuf = if p.is_file() {
+        p.parent().map(|x| x.to_path_buf()).unwrap_or(p.clone())
+    } else {
+        p.parent()
+            .map(|x| x.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/"))
+    };
+    open::that(&target).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub async fn show_main_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
