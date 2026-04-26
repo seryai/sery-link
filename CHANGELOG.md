@@ -5,6 +5,157 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — Unreleased
+
+The data-network release. v0.5.0 made Sery Link local-first; v0.6.0
+turns "your machines + Sery cloud" into a real network primitive —
+catalog + fan-out + cross-machine queries with structural privacy
+guarantees that ship as code, not promises.
+
+### Added
+
+#### Bring Your Own Anthropic key (F7)
+- **Settings → Sync → AI provider** — paste your Anthropic API key,
+  hit "Test & save". The key is validated against `api.anthropic.com`
+  before being saved to the OS keychain; bad keys never persist.
+- **New /ask page** — single-question conversations with your own key.
+  The prompt goes from this app straight to Anthropic, never via
+  Sery's servers. Each turn shows a green *"Direct to Anthropic"*
+  badge so the privacy guarantee is visible per message.
+- **Privacy guarantee enforced by code, not policy.** A unit test
+  (`byok::anthropic::tests::anthropic_request_url_targets_anthropic_only`)
+  fails if any URL the BYOK code path constructs targets anything
+  other than `api.anthropic.com`.
+- OpenAI BYOK lands in v0.6.x.
+
+#### Quick-Ask hotkey is now BYOK-aware (F9)
+- ⌘⇧S (macOS) / Ctrl+Shift+S (others) routes to `/ask` when a BYOK
+  key is configured, falling back to `/search` when it isn't. The
+  hotkey finally lives up to its name.
+
+#### Cross-machine recipes (F11)
+- The dashboard's chat page now has a **"Save as recipe"** button on
+  assistant messages.
+- Sery Link's Recipes view shows the workspace's saved recipes;
+  click Run to open the question in your browser. Sery Link
+  notifies the API so `run_count` and `last_run_at` increment per
+  machine, with a per-agent F14 audit event.
+
+#### Outbound deep links (F3 / F1 follow-up)
+- Sery Link registers the **`seryai://` URL scheme** on macOS,
+  Windows, and Linux. Two verbs:
+  - `seryai://reveal?path=<absolute-path>` — opens the file's
+    parent folder in your file manager with the file selected.
+    Used by the dashboard's "Open" button on cross-machine search
+    results, closing the gap where clicking a hit used to do
+    nothing.
+  - `seryai://pair?key=<workspace-key>` — placeholder routing for
+    the future deep-link pairing alternative; surfaces the main
+    window and emits a frontend event. Receiver UI ships in v0.6.x.
+
+#### Privacy: BYOK calls in the local audit file (F5)
+- `~/.seryai/sync_audit.jsonl` now records BYOK calls alongside
+  the existing sync events. Each entry carries the host the
+  request actually targeted (always `api.anthropic.com` — the
+  load-bearing privacy proof) plus prompt / response character
+  counts and round-trip duration. **No prompt text is logged**,
+  only metadata.
+- **"Reveal audit file"** button in Privacy opens the folder in
+  Finder/Explorer and surfaces the absolute path so you can
+  `tail -f` it from a terminal.
+- Privacy header gains separate counters for Syncs, BYOK calls,
+  and errors. BYOK rows render with an emerald host pill.
+
+### Changed
+
+- **Quick-Ask hotkey routing** is now BYOK-aware (see Added).
+  Pre-v0.6 always landed on `/search`.
+- **Privacy view section title** "Sync activity" → "Outbound
+  activity" — broader scope now that BYOK calls are also logged.
+- **Per-machine fan-out ranking in chat answers** — when an AI
+  question fans out across multiple machines, the result table
+  shows a per-machine row-count + ms breakdown with share-percentage
+  ("Machine A: 1,234 rows / 87 ms · 92%") instead of a flat list of
+  machine names. The streaming pipeline also gained the missing
+  `result_table` event for fan-out queries — previously the
+  FanoutBanner UI never rendered in streamed responses because the
+  event was only emitted for single-agent queries.
+- **Search results in the dashboard** are now expandable: full
+  file path, all matched columns with types, "Open" button (via
+  `seryai://reveal`), Copy-path button.
+
+### Breaking
+
+- ⚠️ **Document text upload is now opt-in (default off)** (F2).
+  Settings → Sync → "Include document text in workspace catalog"
+  defaults to **off**, resolving an audit finding that contradicted
+  the "raw files never leave your devices" promise. Cross-machine
+  document search degrades to filename-only for documents
+  (DOCX/PPTX/HTML/IPYNB) until the toggle is turned on. Local
+  document search (within Sery Link itself) is unaffected.
+  Existing rows in the cloud catalog were cleared by Alembic
+  migration `025_clear_dataset_document_text` on the server side.
+  **If you were relying on cross-machine document search:** flip
+  the toggle on and re-sync. Tabular files (CSV/Parquet/Excel)
+  are untouched.
+
+### Account & data control
+
+- **Real "Delete my account" endpoint** wired through the dashboard's
+  `/settings/workspace` Danger Zone. Type-the-workspace-name
+  confirmation; modal pre-fetches a per-table count snapshot
+  ("Datasets: 42 · Conversations: 17 · Agents: 3 · Recipes: 8")
+  so you see what's about to vanish. Cascades through every
+  workspace relationship; closes GDPR Article 17 + the Privacy
+  Policy promise that previously linked to a settings page with
+  no delete affordance.
+
+### Infrastructure
+
+- Added `tauri-plugin-deep-link` and `tauri-plugin-global-shortcut`
+  to the Cargo manifest.
+- New Rust modules: `byok` (Anthropic client + keyring helpers),
+  `deep_link` (URL scheme dispatcher), `hotkey` (Quick-Ask global
+  shortcut).
+- Audit log struct extended with a `kind` discriminator
+  (`sync` | `byok_call`) — backwards-compatible with v0.5 audit
+  files via `#[serde(default)]`.
+- New Tauri commands: `save_byok_key`, `clear_byok_key`,
+  `validate_byok_key`, `ask_byok`, `get_byok_status`,
+  `mark_recipe_run`, `reveal_audit_file_in_finder`.
+- `tauri.conf.json` gains a `plugins.deep-link.desktop.schemes`
+  entry for `seryai`. `capabilities/default.json` grants
+  `deep-link:default`.
+
+### Known gaps
+
+- **Claude Desktop MCP support** (separate stdio shim) is on the
+  v0.6.x near-term roadmap; v0.6.0 does not ship MCP yet. See
+  `SPEC_MCP.md` in the docs repo for the full design.
+- **OpenAI BYOK** lands in v0.6.x.
+- **Right-click "Ask Sery" in Finder/Explorer** (F10) is explicitly
+  deferred to Year 2 — large per-OS native-extension work.
+- **OS-native open of search results** uses the `seryai://reveal`
+  deep link, which requires Sery Link to be installed on the
+  machine running the browser. Without Sery Link, the Copy path
+  button is the fallback.
+
+### Verification
+
+- `cargo build --lib` clean across every commit.
+- `cargo test --lib byok` — 4/4 passing, including the load-bearing
+  privacy URL assertion.
+- TypeScript `tsc --noEmit` clean across desktop + dashboard.
+- ⚠️ Backend CI is currently red at infrastructure level (runner
+  allocation failure, not code) — needs to be unblocked before
+  this release tag is cut.
+- **Pre-release manual verification (Week 11/12 dogfood):**
+  install the v0.6.0 build, exercise (a) BYOK end-to-end with
+  network capture confirming zero `*.sery.ai` traffic for the LLM
+  call, (b) cross-machine search → click "Open" → confirm Finder
+  reveals the file, (c) account deletion against a staging
+  workspace, (d) F2 document-text toggle off→on→off cycle.
+
 ## [0.5.0] - 2026-04-22
 
 The local-first pivot. Sery Link is now a free, local desktop app that
