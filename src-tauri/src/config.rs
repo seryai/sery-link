@@ -118,6 +118,23 @@ pub struct SyncConfig {
     /// folders of throwaway exports.
     #[serde(default)]
     pub scan_tier_overrides: std::collections::HashMap<String, String>,
+    /// ROADMAP F2 — opt-in for uploading extracted document text
+    /// (the markdown extracted from DOCX/PPTX/HTML/IPYNB) to the
+    /// Sery cloud catalog. Default OFF: the catalog is content-blind
+    /// for documents, matching ROADMAP F2's "never includes file
+    /// contents" promise. Turning it on lets cross-machine document
+    /// search match against extracted text — useful for "find every
+    /// note that mentions Acme" across machines, but means the text
+    /// crosses the network.
+    ///
+    /// When false, scanner short-circuits the document-markdown
+    /// extraction and the sync payload omits `document_markdown`,
+    /// so the cloud `Dataset.document_text` column stays NULL.
+    ///
+    /// Resolution of the F2 open question (DECISIONS.md 2026-04-25)
+    /// per Option 3 (user opt-in, default off).
+    #[serde(default)]
+    pub include_document_text: bool,
 }
 
 fn default_fallback_scan() -> u64 {
@@ -200,6 +217,7 @@ impl Default for Config {
                 auto_sync_on_change: true,
                 fallback_scan_interval_seconds: default_fallback_scan(),
                 scan_tier_overrides: std::collections::HashMap::new(),
+                include_document_text: false,
             },
             app: AppConfig::default(),
         }

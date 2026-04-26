@@ -12,6 +12,7 @@ import {
   Bell,
   CheckCircle2,
   Download,
+  FileText,
   Info,
   LogOut,
   Monitor,
@@ -396,6 +397,25 @@ function SyncPanel({
           setDraft({
             ...draft,
             sync: { ...draft.sync, auto_sync_on_change: v },
+          })
+        }
+      />
+
+      {/* ROADMAP F2 — opt-in for uploading extracted document text.
+          Defaults OFF: catalog stays content-blind for documents,
+          matching the "never includes file contents" promise.
+          Turning it ON enables cross-machine document search across
+          DOCX/PPTX/HTML/IPYNB but means the extracted text crosses
+          the network. Per DECISIONS.md 2026-04-25 (F2 Option 3). */}
+      <Toggle
+        icon={<FileText className="h-5 w-5" />}
+        label="Include document text in workspace catalog"
+        hint="OFF (default): document text stays on this machine — cloud catalog only stores filename + size + last-modified. Local document search still works. Turn ON to enable cross-machine document search; the extracted markdown of DOCX/PPTX/HTML/IPYNB files will be uploaded."
+        checked={draft.sync.include_document_text ?? false}
+        onChange={(v) =>
+          setDraft({
+            ...draft,
+            sync: { ...draft.sync, include_document_text: v },
           })
         }
       />

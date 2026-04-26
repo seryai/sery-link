@@ -1473,8 +1473,30 @@ pub(crate) fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_js
 pub async fn sync_metadata_to_cloud(
     api_url: &str,
     token: &str,
-    datasets: Vec<DatasetMetadata>,
+    mut datasets: Vec<DatasetMetadata>,
 ) -> Result<serde_json::Value> {
+    // ROADMAP F2 — opt-in for uploading extracted document text. The
+    // toggle defaults to OFF, which means we strip `document_markdown`
+    // from every dataset before serializing the sync payload. The cloud
+    // never sees document content under default settings, matching
+    // ROADMAP F2's "never includes file contents" promise.
+    //
+    // Per DECISIONS.md 2026-04-25 (F2 Option 3 resolution): users who
+    // want cross-machine document search opt in via Settings → Sync →
+    // "Include document text in workspace catalog". When that toggle
+    // is true the markdown rides along; when false (the default) it
+    // gets nulled here even though the scanner extracted it locally
+    // (the local cache + per-machine document search still work, only
+    // the cloud upload is suppressed).
+    let include_document_text = Config::load()
+        .map(|c| c.sync.include_document_text)
+        .unwrap_or(false);
+    if !include_document_text {
+        for d in datasets.iter_mut() {
+            d.document_markdown = None;
+        }
+    }
+
     let client = reqwest::Client::new();
 
     let response = client

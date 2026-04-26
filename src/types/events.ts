@@ -232,6 +232,10 @@ export interface AgentConfig {
     interval_seconds: number;
     auto_sync_on_change: boolean;
     fallback_scan_interval_seconds: number;
+    /** ROADMAP F2 — opt-in for uploading extracted document text. Default
+     *  false on the Rust side; older configs deserialize without this
+     *  field, so it's typed as optional for backwards compat. */
+    include_document_text?: boolean;
   };
   app: {
     theme: 'light' | 'dark' | 'system';
