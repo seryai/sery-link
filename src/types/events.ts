@@ -173,12 +173,26 @@ export interface AgentStats {
   uptime_started_at: string | null;
 }
 
+export type AuditKind = 'sync' | 'byok_call';
+
 export interface AuditEntry {
   timestamp: string;
+  // Defaults to 'sync' on entries written before v0.5.x.
+  kind?: AuditKind;
+  // Sync fields — empty/zero on byok_call entries.
   folder: string;
   dataset_count: number;
   column_count: number;
   total_bytes: number;
+  // BYOK fields — only populated on byok_call entries.
+  provider?: string;
+  // The host the request actually targeted (e.g. 'api.anthropic.com').
+  // The structural privacy proof — see audit.rs `record_byok_call`.
+  host?: string;
+  prompt_chars?: number;
+  response_chars?: number;
+  duration_ms?: number;
+  // Shared.
   status: 'success' | 'error';
   error: string | null;
 }

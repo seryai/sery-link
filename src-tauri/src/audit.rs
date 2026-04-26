@@ -1,11 +1,22 @@
-//! Sync audit log — records what metadata the agent uploaded to the cloud.
+//! Outbound network audit log — records every cloud call the agent makes.
 //!
 //! This is the transparency layer for the "your data stays local" promise.
-//! Users can open the Privacy tab and see exactly which folders, datasets
-//! and columns were shipped to Sery.ai Cloud, so nothing is hidden.
+//! Users can open the Privacy tab (or the file directly via the
+//! "Reveal in Finder" affordance) and see exactly what crossed the
+//! network. Two event kinds are recorded today:
+//!
+//!   * `sync` — metadata uploaded to Sery.ai Cloud (folder, dataset
+//!     count, column count, byte size). Has been in the file since v0.4.
+//!   * `byok_call` — BYOK LLM call sent direct to the provider's host
+//!     (e.g., `api.anthropic.com`). The whole point of recording these
+//!     in the LOCAL file is that they never reach Sery's backend, so
+//!     Sery's Privacy Dashboard cannot show them. The local audit file
+//!     is the only place the user can verify "yes, this prompt went
+//!     directly to Anthropic and didn't traverse sery.ai." (F5 + F7.)
 //!
 //! Stored as JSONL at `~/.seryai/sync_audit.jsonl` (append-only, newest
-//! last). Lazily capped at 10 000 entries.
+//! last; the file name is kept for backwards compat with v0.4 readers).
+//! Lazily capped at 10 000 entries.
 
 use crate::config::Config;
 use crate::error::{AgentError, Result};
@@ -17,19 +28,72 @@ use std::path::PathBuf;
 
 const MAX_AUDIT_ENTRIES: usize = 10_000;
 
+/// Kind discriminator for the entry. Defaults to `sync` so that v0.4
+/// audit files (which don't have this field) still deserialize cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditKind {
+    Sync,
+    ByokCall,
+}
+
+impl Default for AuditKind {
+    fn default() -> Self {
+        AuditKind::Sync
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub timestamp: String,
+    #[serde(default)]
+    pub kind: AuditKind,
+
+    // ─── sync fields ───────────────────────────────────────────────────
+    #[serde(default)]
     pub folder: String,
+    #[serde(default)]
     pub dataset_count: u64,
+    #[serde(default)]
     pub column_count: u64,
+    #[serde(default)]
     pub total_bytes: u64,
+
+    // ─── byok_call fields (all optional; only populated for byok_call) ──
+    /// Provider name, e.g. "anthropic". Lower-cased canonical form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Host the request actually targeted (e.g. "api.anthropic.com").
+    /// This is the load-bearing privacy proof — if this ever shows
+    /// "*.sery.ai" for a byok_call, the BYOK guarantee is broken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Length of the prompt text we sent in characters (NOT the prompt
+    /// itself — we don't log content, only metadata).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_chars: Option<u64>,
+    /// Length of the response text in characters (when applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_chars: Option<u64>,
+    /// Round-trip duration in milliseconds, for ops/debug visibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+
+    // ─── shared status fields ──────────────────────────────────────────
     pub status: String, // "success" | "error"
     pub error: Option<String>,
 }
 
-fn path() -> Result<PathBuf> {
+/// Absolute path to the audit log file. Exposed publicly so the
+/// `reveal_audit_file_in_finder` Tauri command can hand the user the
+/// real on-disk location — this is the load-bearing "verify it
+/// yourself" affordance for the privacy story.
+pub fn audit_file_path() -> Result<PathBuf> {
     Ok(Config::data_dir()?.join("sync_audit.jsonl"))
+}
+
+fn path() -> Result<PathBuf> {
+    audit_file_path()
 }
 
 pub fn append(entry: &AuditEntry) -> Result<()> {
@@ -115,10 +179,52 @@ pub fn clear() -> Result<()> {
 pub fn record(folder: &str, dataset_count: u64, column_count: u64, total_bytes: u64, error: Option<String>) {
     let entry = AuditEntry {
         timestamp: Utc::now().to_rfc3339(),
+        kind: AuditKind::Sync,
         folder: folder.to_string(),
         dataset_count,
         column_count,
         total_bytes,
+        provider: None,
+        host: None,
+        prompt_chars: None,
+        response_chars: None,
+        duration_ms: None,
+        status: if error.is_none() {
+            "success".to_string()
+        } else {
+            "error".to_string()
+        },
+        error,
+    };
+    let _ = append(&entry);
+}
+
+/// Record a single BYOK LLM call. Best-effort: failures are silent.
+///
+/// PRIVACY-CRITICAL: `host` is what proves the call went direct to the
+/// provider rather than via Sery's backend. The byok module only ever
+/// passes "api.anthropic.com" (or future providers' canonical hosts);
+/// if a different host shows up here, the BYOK guarantee is broken.
+pub fn record_byok_call(
+    provider: &str,
+    host: &str,
+    prompt_chars: u64,
+    response_chars: Option<u64>,
+    duration_ms: u64,
+    error: Option<String>,
+) {
+    let entry = AuditEntry {
+        timestamp: Utc::now().to_rfc3339(),
+        kind: AuditKind::ByokCall,
+        folder: String::new(),
+        dataset_count: 0,
+        column_count: 0,
+        total_bytes: 0,
+        provider: Some(provider.to_string()),
+        host: Some(host.to_string()),
+        prompt_chars: Some(prompt_chars),
+        response_chars,
+        duration_ms: Some(duration_ms),
         status: if error.is_none() {
             "success".to_string()
         } else {

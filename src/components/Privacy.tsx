@@ -10,9 +10,11 @@ import {
   Cloud,
   Eye,
   FileDown,
+  Folder,
   Lock,
   RefreshCw,
   Shield,
+  Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ export function Privacy() {
   const { audit, setAudit, authenticated } = useAgentStore();
   const toast = useToast();
   const [loading, setLoading] = useState(false);
+  const [auditPath, setAuditPath] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -34,6 +37,20 @@ export function Privacy() {
       toast.error(`Couldn't load audit log: ${err}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Reveals the audit JSONL in the OS file manager AND returns the
+  // absolute path so the UI can show users exactly where the file
+  // lives — the load-bearing "verify it yourself" affordance for the
+  // privacy story. Failures fall back to a toast; we still update the
+  // path display if the call succeeds.
+  const revealAuditFile = async () => {
+    try {
+      const path = await invoke<string>('reveal_audit_file_in_finder');
+      setAuditPath(path);
+    } catch (err) {
+      toast.error(`Couldn't reveal audit file: ${err}`);
     }
   };
 
@@ -84,13 +101,21 @@ export function Privacy() {
     let columns = 0;
     let bytes = 0;
     let errors = 0;
+    let syncs = 0;
+    let byokCalls = 0;
     for (const e of audit) {
-      datasets += e.dataset_count;
-      columns += e.column_count;
-      bytes += e.total_bytes;
+      const kind = e.kind ?? 'sync';
+      if (kind === 'byok_call') {
+        byokCalls++;
+      } else {
+        syncs++;
+        datasets += e.dataset_count;
+        columns += e.column_count;
+        bytes += e.total_bytes;
+      }
       if (e.status === 'error') errors++;
     }
-    return { datasets, columns, bytes, errors };
+    return { datasets, columns, bytes, errors, syncs, byokCalls };
   }, [audit]);
 
   return (
@@ -162,17 +187,17 @@ export function Privacy() {
 
       {/* Totals */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <TotalCard label="Syncs" value={audit.length.toLocaleString()} />
+        <TotalCard label="Syncs" value={totals.syncs.toLocaleString()} />
         <TotalCard
-          label="Datasets shared"
-          value={totals.datasets.toLocaleString()}
+          label="BYOK calls"
+          value={totals.byokCalls.toLocaleString()}
         />
         <TotalCard
           label="Columns shared"
           value={totals.columns.toLocaleString()}
         />
         <TotalCard
-          label="Failed syncs"
+          label="Errors"
           value={totals.errors.toLocaleString()}
           tone={totals.errors > 0 ? 'warn' : undefined}
         />
@@ -180,6 +205,14 @@ export function Privacy() {
 
       {/* Actions */}
       <div className="mb-6 flex flex-wrap gap-2">
+        <button
+          onClick={revealAuditFile}
+          className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          title="Open the folder containing sync_audit.jsonl in your file manager so you can verify the contents directly"
+        >
+          <Folder className="h-4 w-4" />
+          Reveal audit file
+        </button>
         <button
           onClick={exportBundle}
           className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
@@ -204,10 +237,22 @@ export function Privacy() {
         </button>
       </div>
 
+      {/* Audit file path — only shown after the user clicks Reveal,
+          so the path doesn't get leaked into screenshots by default
+          but is one click away when wanted. */}
+      {auditPath && (
+        <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+          <div className="font-medium text-slate-700 dark:text-slate-300 mb-0.5">
+            Audit file lives at:
+          </div>
+          <code className="font-mono break-all">{auditPath}</code>
+        </div>
+      )}
+
       {/* Audit list */}
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
         <Eye className="h-4 w-4 text-slate-500" />
-        Sync activity
+        Outbound activity
       </div>
 
       {audit.length === 0 ? (
@@ -316,6 +361,9 @@ function AuditRow({
   isLast: boolean;
 }) {
   const ok = entry.status === 'success';
+  const kind = entry.kind ?? 'sync';
+  const isByok = kind === 'byok_call';
+
   return (
     <div
       className={`flex items-start gap-3 px-4 py-3 ${
@@ -323,38 +371,108 @@ function AuditRow({
       }`}
     >
       <div className="mt-0.5 shrink-0">
-        {ok ? (
-          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-        ) : (
+        {!ok ? (
           <AlertCircle className="h-5 w-5 text-rose-500" />
+        ) : isByok ? (
+          // Lock icon for BYOK — the structural privacy proof. If a
+          // user wonders "did this call really skip Sery?" the row's
+          // host badge below answers it: api.anthropic.com, not sery.ai.
+          <Lock className="h-5 w-5 text-emerald-500" />
+        ) : (
+          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <div
-          className="truncate text-sm font-medium text-slate-900 dark:text-slate-100"
-          title={entry.folder}
-        >
-          {folderBasename(entry.folder)}
-        </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-          <span>{new Date(entry.timestamp).toLocaleString()}</span>
-          {ok ? (
-            <>
-              <span>·</span>
-              <span>{entry.dataset_count.toLocaleString()} datasets</span>
-              <span>·</span>
-              <span>{entry.column_count.toLocaleString()} columns</span>
-              <span>·</span>
-              <span>{formatBytes(entry.total_bytes)}</span>
-            </>
-          ) : (
-            <span className="text-rose-600 dark:text-rose-400">
-              {entry.error ?? 'Unknown error'}
-            </span>
-          )}
-        </div>
+        {isByok ? (
+          <ByokRowBody entry={entry} ok={ok} />
+        ) : (
+          <SyncRowBody entry={entry} ok={ok} />
+        )}
       </div>
     </div>
+  );
+}
+
+function SyncRowBody({ entry, ok }: { entry: AuditEntry; ok: boolean }) {
+  return (
+    <>
+      <div
+        className="truncate text-sm font-medium text-slate-900 dark:text-slate-100"
+        title={entry.folder}
+      >
+        {folderBasename(entry.folder)}
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          <Cloud className="h-2.5 w-2.5" />
+          sync
+        </span>
+        <span>{new Date(entry.timestamp).toLocaleString()}</span>
+        {ok ? (
+          <>
+            <span>·</span>
+            <span>{entry.dataset_count.toLocaleString()} datasets</span>
+            <span>·</span>
+            <span>{entry.column_count.toLocaleString()} columns</span>
+            <span>·</span>
+            <span>{formatBytes(entry.total_bytes)}</span>
+          </>
+        ) : (
+          <span className="text-rose-600 dark:text-rose-400">
+            {entry.error ?? 'Unknown error'}
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ByokRowBody({ entry, ok }: { entry: AuditEntry; ok: boolean }) {
+  const provider = entry.provider ?? 'unknown';
+  const host = entry.host ?? 'unknown';
+  const promptChars = entry.prompt_chars ?? 0;
+  const responseChars = entry.response_chars ?? 0;
+  const durationMs = entry.duration_ms ?? 0;
+  return (
+    <>
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+        <span>BYOK call to</span>
+        {/* The host pill is the load-bearing privacy artifact. It's
+            emerald-toned to signal "this stayed off our servers,"
+            and the value is the literal host the request targeted —
+            if it ever reads `*.sery.ai` for a byok_call the privacy
+            guarantee is broken (and the unit test in
+            byok::anthropic would have failed first). */}
+        <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+          <Lock className="h-3 w-3" />
+          {host}
+        </span>
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          ({provider})
+        </span>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+        <span className="inline-flex items-center gap-1 rounded bg-purple-100 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+          <Sparkles className="h-2.5 w-2.5" />
+          byok
+        </span>
+        <span>{new Date(entry.timestamp).toLocaleString()}</span>
+        {ok ? (
+          <>
+            <span>·</span>
+            <span>{promptChars.toLocaleString()} chars in</span>
+            <span>·</span>
+            <span>{responseChars.toLocaleString()} chars out</span>
+            <span>·</span>
+            <span>{durationMs}ms</span>
+          </>
+        ) : (
+          <span className="text-rose-600 dark:text-rose-400">
+            {entry.error ?? 'Unknown error'}
+          </span>
+        )}
+      </div>
+    </>
   );
 }
 
