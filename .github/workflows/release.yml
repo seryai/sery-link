@@ -22,15 +22,22 @@ jobs:
           - platform: macos-14
             args: --target aarch64-apple-darwin
             label: "macOS (Apple Silicon)"
+            pdfium_target: mac-arm64
           - platform: macos-14
             args: --target x86_64-apple-darwin
             label: "macOS (Intel)"
+            # macos-14 runners are arm64 hosts; override TARGET so we
+            # fetch the x86_64 dylib for the cross-compiled artifact
+            # rather than what auto-detect would pick.
+            pdfium_target: mac-x64
           - platform: ubuntu-22.04
             args: ""
             label: "Linux"
+            pdfium_target: linux-x64
           - platform: windows-latest
             args: ""
             label: "Windows"
+            pdfium_target: win-x64
 
     runs-on: ${{ matrix.platform }}
     name: Build ${{ matrix.label }}
@@ -71,6 +78,18 @@ jobs:
       # The Python markitdown sidecar (179 MB per platform) was
       # replaced by the in-process `mdkit` Rust crate. See
       # src-tauri/src/scanner.rs for the dispatch surface.
+
+      # Fetch libpdfium for the build target. mdkit's PDF backend
+      # loads `libpdfium.dylib` / `libpdfium.so` / `pdfium.dll` at
+      # runtime; the file is bundled into the Tauri app via
+      # `tauri.conf.json` `bundle.resources`. The committed copy in
+      # the repo is macOS arm64 (the dev team's primary target);
+      # CI overwrites it with the per-target binary before bundling.
+      - name: Fetch libpdfium
+        shell: bash
+        env:
+          TARGET: ${{ matrix.pdfium_target }}
+        run: scripts/fetch-libpdfium.sh --force
 
       - uses: tauri-apps/tauri-action@v0
         env:
