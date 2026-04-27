@@ -33,3 +33,10 @@ sidecar/build/
 sidecar/dist/
 sidecar/*.spec
 examples/plugins/*/target/
+
+# Bundled runtime binaries fetched via scripts/fetch-pandoc.sh.
+# Pandoc is ~180 MB per platform — too big to commit (GitHub's
+# per-file limit is 100 MB). Devs run `./scripts/fetch-pandoc.sh`
+# after cloning; CI runs it as a release-workflow step.
+src-tauri/resources/pandoc/pandoc
+src-tauri/resources/pandoc/pandoc.exe
