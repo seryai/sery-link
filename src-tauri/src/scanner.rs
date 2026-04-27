@@ -536,6 +536,7 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
     // by hand and keeps mdkit's default registration order intact.
     let (mut engine, errors) = mdkit::Engine::with_defaults_diagnostic();
     let pdf_failed = errors.iter().any(|(name, _)| *name == "pdf");
+    let pandoc_failed = errors.iter().any(|(name, _)| *name == "pandoc");
 
     for (backend, err) in &errors {
         eprintln!(
@@ -543,11 +544,13 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
         );
     }
 
+    let bundled = bundled_resource_dir();
+
     // Bundled libpdfium override. Only attempted when the system
     // search didn't already find it, AND the resource dir + the
     // `libpdfium` subdirectory inside it both exist.
     if pdf_failed {
-        if let Some(resource_dir) = bundled_resource_dir() {
+        if let Some(resource_dir) = bundled.as_ref() {
             let pdfium_dir = resource_dir.join("libpdfium");
             if pdfium_dir.is_dir() {
                 let dir_str = pdfium_dir.to_string_lossy();
@@ -562,6 +565,40 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
                     Err(e) => {
                         eprintln!(
                             "[scanner] mdkit: bundled libpdfium at {dir_str} failed to load: {e}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Bundled pandoc override. Same shape as libpdfium: when system
+    // PATH discovery fails AND the bundled `pandoc` binary exists,
+    // construct a PandocExtractor with the explicit path. Closes the
+    // "consumer-bound app, no Homebrew" gap; without it DOCX / PPTX
+    // / EPUB / RTF / ODT / LaTeX silently fall through to the
+    // anytomd safety net (lower fidelity than Pandoc).
+    if pandoc_failed {
+        if let Some(resource_dir) = bundled.as_ref() {
+            let bin_name = if cfg!(target_os = "windows") {
+                "pandoc.exe"
+            } else {
+                "pandoc"
+            };
+            let pandoc_bin = resource_dir.join("pandoc").join(bin_name);
+            if pandoc_bin.is_file() {
+                let bin_str = pandoc_bin.to_string_lossy();
+                match mdkit::pandoc::PandocExtractor::with_binary(pandoc_bin.clone()) {
+                    Ok(ext) => {
+                        engine.register(Box::new(ext));
+                        eprintln!(
+                            "[scanner] mdkit: backend `pandoc` registered from bundled \
+                             binary at {bin_str}"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[scanner] mdkit: bundled pandoc at {bin_str} failed to verify: {e}"
                         );
                     }
                 }

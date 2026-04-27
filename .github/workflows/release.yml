@@ -23,21 +23,25 @@ jobs:
             args: --target aarch64-apple-darwin
             label: "macOS (Apple Silicon)"
             pdfium_target: mac-arm64
+            pandoc_target: arm64-macOS
           - platform: macos-14
             args: --target x86_64-apple-darwin
             label: "macOS (Intel)"
             # macos-14 runners are arm64 hosts; override TARGET so we
-            # fetch the x86_64 dylib for the cross-compiled artifact
-            # rather than what auto-detect would pick.
+            # fetch the x86_64 binaries for the cross-compiled
+            # artifact rather than what auto-detect would pick.
             pdfium_target: mac-x64
+            pandoc_target: x86_64-macOS
           - platform: ubuntu-22.04
             args: ""
             label: "Linux"
             pdfium_target: linux-x64
+            pandoc_target: linux-amd64
           - platform: windows-latest
             args: ""
             label: "Windows"
             pdfium_target: win-x64
+            pandoc_target: windows-x86_64
 
     runs-on: ${{ matrix.platform }}
     name: Build ${{ matrix.label }}
@@ -90,6 +94,17 @@ jobs:
         env:
           TARGET: ${{ matrix.pdfium_target }}
         run: scripts/fetch-libpdfium.sh --force
+
+      # Same fetch pattern for pandoc — bundled into
+      # `src-tauri/resources/pandoc/` and loaded by mdkit's
+      # PandocExtractor::with_binary when system PATH discovery
+      # fails. ~150 MB per platform; user-visible bundle size
+      # tradeoff was made deliberately (correctness over size).
+      - name: Fetch pandoc
+        shell: bash
+        env:
+          TARGET: ${{ matrix.pandoc_target }}
+        run: scripts/fetch-pandoc.sh --force
 
       - uses: tauri-apps/tauri-action@v0
         env:
