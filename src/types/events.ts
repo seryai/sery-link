@@ -3,6 +3,7 @@
 // exactly or the frontend will silently miss updates.
 
 export const EVENT_NAMES = {
+  SCAN_WALK_PROGRESS: 'scan_walk_progress',
   SCAN_PROGRESS: 'scan_progress',
   SCAN_COMPLETE: 'scan_complete',
   DATASET_SCANNED: 'dataset_scanned',
@@ -17,6 +18,18 @@ export const EVENT_NAMES = {
   STATS_UPDATED: 'stats_updated',
 } as const;
 
+/** Pass-1 (filename-walk) progress. Fires per file during the fast walk
+ *  pass; the frontend renders this as a "Listing files: 1247 found"
+ *  indicator that closes when pass 2 begins (or when scan_complete
+ *  arrives, for cache-only / shallow-only folders). */
+export interface ScanWalkProgress {
+  folder: string;
+  discovered: number;
+}
+
+/** Pass-2 (content extraction) progress. Same shape as before; the only
+ *  semantic shift is that this no longer fires for cache hits and
+ *  shallow-tier files — those finish entirely in pass 1. */
 export interface ScanProgress {
   folder: string;
   current: number;
@@ -52,11 +65,24 @@ export interface DatasetMetadataPayload {
   samples_redacted: boolean;
 }
 
+/** Lifecycle phase of a `DatasetScanned` event. See the Rust-side
+ *  `DatasetPhase` enum for the full contract.
+ *
+ *  - `shallow`: filesystem-only placeholder; a follow-up `content` event
+ *    is coming for the same `relative_path`.
+ *  - `content`: final hydrated record. No further upgrade for this file
+ *    in this scan. Cache hits and shallow-tier files emit `content`
+ *    directly with no preceding `shallow` event. */
+export type DatasetPhase = 'shallow' | 'content';
+
 export interface DatasetScannedPayload {
   folder: string;
   index: number;
   total: number;
   dataset: DatasetMetadataPayload;
+  /** Defaults to `'content'` on Rust ≥ v0.5.x with two-pass scanning;
+   *  optional in TS so older agents still hydrate the type cleanly. */
+  phase?: DatasetPhase;
 }
 
 // Mirror of Rust SearchMatchReason — tagged union for the UI badges.
