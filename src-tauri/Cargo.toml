@@ -50,7 +50,7 @@ futures = "0.3"
 # uses `notify` directly (different concerns — per-folder excludes,
 # tokio debouncing — that don't map cleanly to scankit's single-root
 # Scanner::scan).
-scankit = "0.2"
+scankit = "0.3"
 # tabkit handles "tabular file → schema + sample rows + row count" in
 # one in-process call — see scanner.rs `tabkit_extract` for how it
 # replaces the previous DuckDB-based extract_schema +
