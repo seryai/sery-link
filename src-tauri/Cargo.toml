@@ -43,6 +43,13 @@ uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 walkdir = "2.4"
+# scankit wraps walkdir + size-cap + exclude-glob filtering into one
+# Scanner type — see scanner.rs for the call site. The previous code
+# was inline walkdir + ad-hoc filters, identical to v0.0 of scankit
+# pre-extraction. We keep walkdir as a direct dep too because some
+# legacy code paths still iterate via WalkDir (notify watcher
+# callbacks); those are next on the migration list.
+scankit = "0.1"
 url = "2.5"
 open = "5.0"
 hostname = "0.3"
