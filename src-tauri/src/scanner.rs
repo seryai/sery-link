@@ -764,29 +764,20 @@ fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOu
     }
 }
 
-/// Process-wide mutex serialising libpdfium calls.
-///
-/// pdfium-render is built with the `thread_safe` feature, which is
-/// supposed to wrap every libpdfium call in a global mutex. In
-/// practice, when multiple rayon workers each load *different* PDFs
-/// concurrently we observed `PdfiumLibraryInternalError(FormatError)`
-/// on otherwise-valid PDFs that load fine single-threaded. The
-/// failure mode reproduced reliably with `SERY_SCAN_WORKERS=4` and
-/// disappeared with `SERY_SCAN_WORKERS=1` on the same folder.
-///
-/// Wrapping the whole PDF code path in our own mutex sidesteps it:
-/// PDF extractions queue here while the rayon pool keeps churning
-/// DOCX / PPTX / HTML / IPYNB / tabular files through their backends
-/// in parallel. Net effect: no slowdown for PDF-only folders (the
-/// pdfium mutex bottlenecks us either way) AND a real speedup for
-/// mixed folders, AND no FormatError regressions.
-static PDF_EXTRACT_MUTEX: once_cell::sync::Lazy<std::sync::Mutex<()>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(()));
-
 /// Pass-2 worker. Run the configured backend (DuckDB / mdkit / tabkit)
 /// for one candidate, persist the hydrated record to the cache, and
 /// return it. Falls back to the pre-built shallow record on extraction
 /// error so the file still surfaces in the result list.
+///
+/// **Threading note:** PDFs must only ever be processed from a single
+/// thread (see `scan_folder_blocking` for the partition logic).
+/// pdfium-render's `thread_safe` feature is supposed to serialise
+/// libpdfium calls internally, but in practice concurrent loads of
+/// *different* PDFs throw `PdfiumLibraryInternalError(FormatError)`
+/// on valid PDFs that load fine single-threaded. We sidestep that by
+/// only ever calling the PDF backend from the serial pdf thread.
+/// Other formats (DOCX / PPTX / HTML / IPYNB / tabular) parallelise
+/// safely.
 fn extract_one(
     path: &Path,
     folder_path: &str,
@@ -806,20 +797,7 @@ fn extract_one(
     );
     let _ = std::io::Write::flush(&mut std::io::stderr());
 
-    // Serialise libpdfium access. See PDF_EXTRACT_MUTEX docs for why.
-    // Mutex poisoning (a previous PDF panicked while holding the lock)
-    // is recoverable here — the next file is independent, so we just
-    // unwrap the inner data and continue.
-    let extraction = if ext == "pdf" {
-        let _guard = PDF_EXTRACT_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        extract_metadata_at_tier(path, folder_path, tier)
-    } else {
-        extract_metadata_at_tier(path, folder_path, tier)
-    };
-
-    let metadata = match extraction {
+    let metadata = match extract_metadata_at_tier(path, folder_path, tier) {
         Ok(m) => m,
         Err(e) => {
             eprintln!(
@@ -949,24 +927,37 @@ fn scan_folder_blocking(
     }
 
     // -----------------------------------------------------------------
-    // Pass 2 — content extraction, parallelised across a dedicated
-    // rayon pool sized by `max_scan_workers()`. We use a dedicated
-    // pool (not rayon's global) so a busy scan can't starve the rest
-    // of the app of worker threads. Callbacks already require
-    // Send + Sync so they're safe to call from any worker thread;
-    // Tauri's event emitter is internally synchronised.
+    // Pass 2 — content extraction. PDFs go through a dedicated serial
+    // thread (libpdfium throws FormatError on concurrent loads of
+    // different PDFs despite pdfium-render's `thread_safe` feature),
+    // everything else goes through a parallel rayon pool. The two
+    // halves run **concurrently** via `std::thread::scope` so the pool
+    // isn't starved — a folder of 30 PDFs + 10 DOCX finishes in roughly
+    // max(pdf_serial_time, docx_parallel_time) instead of the sum.
     // -----------------------------------------------------------------
     let pass2_total = pending.len();
     let workers = max_scan_workers();
+
+    let (pdf_pending, other_pending): (Vec<_>, Vec<_>) =
+        pending.into_iter().partition(|(p, _, _, _)| {
+            p.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("pdf"))
+                .unwrap_or(false)
+        });
+
     eprintln!(
         "[scanner] pass 1 complete — {} finalised (cache hits + shallow tier), {} queued for content extraction",
         finalised.len(),
         pass2_total
     );
     eprintln!(
-        "[scanner] pass 2 — extracting content for {} files across {} workers",
-        pass2_total, workers
+        "[scanner] pass 2 — {} PDFs (serial thread, libpdfium isn't concurrent-safe) + {} other files (parallel × {} workers), running concurrently",
+        pdf_pending.len(),
+        other_pending.len(),
+        workers
     );
+
     let done = AtomicUsize::new(0);
 
     let pool = rayon::ThreadPoolBuilder::new()
@@ -975,48 +966,70 @@ fn scan_folder_blocking(
         .build()
         .map_err(|e| AgentError::FileSystem(format!("scanner pool init: {}", e)))?;
 
-    let extracted: Vec<DatasetMetadata> = pool.install(|| {
-        pending
-            .into_par_iter()
-            .map(|(path, shallow, cache_key, tier)| {
-                // Catch Rust panics from per-file extraction so one bad
-                // file just gets logged and we keep the shallow record.
-                // This does NOT catch foreign (C++/Obj-C) exceptions —
-                // those still abort the process. The mdkit + tabkit
-                // backends are pure in-process Rust (mdkit's libpdfium
-                // does its own internal locking, tabkit has no FFI), so
-                // running multiple workers concurrently is safe. The
-                // `extract_metadata_at_tier` error path also routes
-                // backend `Err` results back into the shallow record.
-                let path_for_log = path.clone();
-                let metadata = match std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        extract_one(&path, folder_path, &cache_key, tier, &shallow)
-                    }),
-                ) {
-                    Ok(m) => m,
-                    Err(_payload) => {
-                        eprintln!(
-                            "[scanner] panic while extracting {:?} — keeping shallow record",
-                            path_for_log
-                        );
-                        shallow
-                    }
-                };
+    // Per-entry processor used by both serial + parallel paths. We
+    // borrow `done`, `progress`, `on_dataset`, and `folder_path`
+    // through this closure so the two paths agree on progress
+    // numbering and emit through the same Tauri channel. A single
+    // `Fn` closure is cheaper than duplicating the body twice.
+    //
+    // Catches Rust panics from per-file extraction so one bad file
+    // just gets logged and we keep the shallow record. Does NOT catch
+    // foreign (C++/Obj-C) exceptions — those still abort the process.
+    let process = |entry: (
+        std::path::PathBuf,
+        DatasetMetadata,
+        crate::scan_cache::CacheKey,
+        ScanTier,
+    )|
+     -> DatasetMetadata {
+        let (path, shallow, cache_key, tier) = entry;
+        let path_for_log = path.clone();
+        let metadata = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_one(&path, folder_path, &cache_key, tier, &shallow)
+        })) {
+            Ok(m) => m,
+            Err(_payload) => {
+                eprintln!(
+                    "[scanner] panic while extracting {:?} — keeping shallow record",
+                    path_for_log
+                );
+                shallow
+            }
+        };
+        let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(idx, pass2_total, &path.to_string_lossy());
+        }
+        if let Some(cb) = on_dataset.as_ref() {
+            cb(idx, pass2_total, &metadata, DatasetPhase::Content);
+        }
+        metadata
+    };
 
-                let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if let Some(cb) = progress.as_ref() {
-                    cb(idx, pass2_total, &path.to_string_lossy());
-                }
-                if let Some(cb) = on_dataset.as_ref() {
-                    cb(idx, pass2_total, &metadata, DatasetPhase::Content);
-                }
-                metadata
-            })
-            .collect()
+    // Run the two halves concurrently. `thread::scope` borrows the
+    // surrounding stack frame so the closure can capture local refs
+    // without `'static` bounds.
+    let mut pdf_results: Vec<DatasetMetadata> = Vec::new();
+    let mut other_results: Vec<DatasetMetadata> = Vec::new();
+    std::thread::scope(|s| {
+        let pdf_handle = s.spawn(|| {
+            pdf_pending.into_iter().map(&process).collect::<Vec<_>>()
+        });
+        other_results = pool.install(|| {
+            other_pending
+                .into_par_iter()
+                .map(&process)
+                .collect::<Vec<_>>()
+        });
+        // Unwrap is acceptable: the closure already catches per-file
+        // panics, so the only way this errors is a panic in our scaffold
+        // code (rayon plumbing, AtomicUsize) — those should crash loudly
+        // rather than silently produce a partial result.
+        pdf_results = pdf_handle.join().expect("PDF serial thread panicked");
     });
 
-    finalised.extend(extracted);
+    finalised.extend(pdf_results);
+    finalised.extend(other_results);
     eprintln!(
         "[scanner] pass 2 complete — {} files in final result",
         finalised.len()
