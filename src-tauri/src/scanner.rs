@@ -468,20 +468,41 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
         .collect()
 }
 
-/// Hard cap on concurrent scanner workers. Each worker opens a DuckDB
-/// in-memory database (schema + sample extraction) and, for docx/pptx,
-/// can fork a MarkItDown Python sidecar.
+/// Hard cap on concurrent pass-2 (content extraction) workers.
 ///
-/// Set to 1 after repeated crashes on macOS with the message
-/// "Rust cannot catch foreign exceptions, aborting" during parallel
-/// scans. Multiple rayon workers concurrently calling
-/// `Connection::open_in_memory()` appear to trip a DuckDB internal
-/// race that throws a C++ exception — once that exception unwinds
-/// through a Rust frame, the runtime aborts the whole process.
-/// Serial DuckDB access eliminates the race. The rayon/parallel
-/// plumbing is kept in place so we can re-enable once we've isolated
-/// a safe-to-parallelise call site.
-const MAX_SCAN_WORKERS: usize = 1;
+/// Historical context: previously set to 1 because each worker opened
+/// a DuckDB connection (`Connection::open_in_memory()`) for tabular
+/// schema extraction AND, for DOCX/PPTX, forked a MarkItDown Python
+/// sidecar. Multiple rayon workers tripped a DuckDB internal race
+/// that threw a C++ exception, aborting the whole process.
+///
+/// As of v0.5.x both bottlenecks are gone:
+///
+/// - **Documents** (PDF / DOCX / PPTX / HTML / IPYNB) → mdkit, fully
+///   in-process Rust. libpdfium is `Send + Sync` with internal
+///   locking; pandoc is spawned as a subprocess per file so each
+///   invocation is isolated.
+/// - **Tabular** (CSV / XLSX / Parquet / etc.) → tabkit fast path,
+///   also in-process Rust. The DuckDB fallback only triggers for
+///   formats tabkit can't claim, which is currently nothing.
+///
+/// So we can finally parallelise pass 2. The cap is computed at
+/// runtime as `(num_cpus / 2).clamp(2, 8)` — leave half the cores
+/// free for the UI thread + cache writes + frontend rendering, but
+/// always run at least 2 workers so a folder full of PDFs doesn't
+/// crawl. The `SERY_SCAN_WORKERS` env var overrides the calculation
+/// for users who want to dial it back if they see instability.
+fn max_scan_workers() -> usize {
+    if let Ok(raw) = std::env::var("SERY_SCAN_WORKERS") {
+        if let Ok(n) = raw.parse::<usize>() {
+            if n >= 1 {
+                return n;
+            }
+        }
+    }
+    let cores = num_cpus::get().max(1);
+    (cores / 2).clamp(2, 8)
+}
 
 /// Best-effort discovery of the directory carrying app-bundled
 /// runtime libraries (e.g. `libpdfium.dylib`).
@@ -897,26 +918,27 @@ fn scan_folder_blocking(
 
     // -----------------------------------------------------------------
     // Pass 2 — content extraction, parallelised across a dedicated
-    // rayon pool capped at MAX_SCAN_WORKERS. We avoid the global pool
-    // on purpose — on high-core machines it defaults to num_cpus,
-    // which produced enough concurrent DuckDB connections to trip the
-    // macOS per-process VM region cap and abort(). Callbacks require
-    // Send + Sync so they're safe to call from any worker thread.
+    // rayon pool sized by `max_scan_workers()`. We use a dedicated
+    // pool (not rayon's global) so a busy scan can't starve the rest
+    // of the app of worker threads. Callbacks already require
+    // Send + Sync so they're safe to call from any worker thread;
+    // Tauri's event emitter is internally synchronised.
     // -----------------------------------------------------------------
     let pass2_total = pending.len();
+    let workers = max_scan_workers();
     eprintln!(
         "[scanner] pass 1 complete — {} finalised (cache hits + shallow tier), {} queued for content extraction",
         finalised.len(),
         pass2_total
     );
     eprintln!(
-        "[scanner] pass 2 — extracting content for {} files",
-        pass2_total
+        "[scanner] pass 2 — extracting content for {} files across {} workers",
+        pass2_total, workers
     );
     let done = AtomicUsize::new(0);
 
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(MAX_SCAN_WORKERS.min(num_cpus::get().max(1)))
+        .num_threads(workers)
         .thread_name(|i| format!("scanner-{}", i))
         .build()
         .map_err(|e| AgentError::FileSystem(format!("scanner pool init: {}", e)))?;
@@ -928,10 +950,12 @@ fn scan_folder_blocking(
                 // Catch Rust panics from per-file extraction so one bad
                 // file just gets logged and we keep the shallow record.
                 // This does NOT catch foreign (C++/Obj-C) exceptions —
-                // those still abort the process. For those we rely on
-                // MAX_SCAN_WORKERS=1 (eliminates DuckDB concurrency
-                // races) and the `extract_metadata_at_tier` error path
-                // (which routes DuckDB `Err` results back into shallow).
+                // those still abort the process. The mdkit + tabkit
+                // backends are pure in-process Rust (mdkit's libpdfium
+                // does its own internal locking, tabkit has no FFI), so
+                // running multiple workers concurrently is safe. The
+                // `extract_metadata_at_tier` error path also routes
+                // backend `Err` results back into the shallow record.
                 let path_for_log = path.clone();
                 let metadata = match std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| {
