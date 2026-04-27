@@ -827,7 +827,10 @@ fn scan_folder_blocking(
         .map(|e| e.path)
         .collect();
 
-    eprintln!("[scanner] using shared scan cache");
+    eprintln!(
+        "[scanner] pass 1 — walking {} candidates (filename + cache lookup)",
+        candidates.len()
+    );
 
     // -----------------------------------------------------------------
     // Pass 1 — single-threaded walk.
@@ -901,6 +904,15 @@ fn scan_folder_blocking(
     // Send + Sync so they're safe to call from any worker thread.
     // -----------------------------------------------------------------
     let pass2_total = pending.len();
+    eprintln!(
+        "[scanner] pass 1 complete — {} finalised (cache hits + shallow tier), {} queued for content extraction",
+        finalised.len(),
+        pass2_total
+    );
+    eprintln!(
+        "[scanner] pass 2 — extracting content for {} files",
+        pass2_total
+    );
     let done = AtomicUsize::new(0);
 
     let pool = rayon::ThreadPoolBuilder::new()
@@ -949,6 +961,10 @@ fn scan_folder_blocking(
     });
 
     finalised.extend(extracted);
+    eprintln!(
+        "[scanner] pass 2 complete — {} files in final result",
+        finalised.len()
+    );
     Ok(finalised)
 }
 
