@@ -44,7 +44,6 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
- "walkdir",
  "wasmer",
  "zip 0.6.6",
 ]
@@ -6380,9 +6379,9 @@ dependencies = [
 
 [[package]]
 name = "scankit"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a00aa9420a165bc467ce51aa0375a342a795f3f8869eea1bf1e3dc665c70f52"
+checksum = "8ab409c9efa1b35b23d99962fad2f2cf1f658da58f5a4a06162e5758603226c4"
 dependencies = [
  "globset",
  "thiserror 2.0.18",
