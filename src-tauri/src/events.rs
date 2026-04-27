@@ -31,6 +31,7 @@ pub fn app_handle() -> Option<&'static AppHandle<Wry>> {
 // Event name constants — must match the frontend listener keys.
 // ---------------------------------------------------------------------------
 
+pub const EVT_SCAN_WALK_PROGRESS: &str = "scan_walk_progress";
 pub const EVT_SCAN_PROGRESS: &str = "scan_progress";
 pub const EVT_SCAN_COMPLETE: &str = "scan_complete";
 pub const EVT_DATASET_SCANNED: &str = "dataset_scanned";
@@ -48,6 +49,19 @@ pub const EVT_STATS_UPDATED: &str = "stats_updated";
 // Payload types
 // ---------------------------------------------------------------------------
 
+/// Pass-1 (filename-walk) progress. Fires while the scanner is enumerating
+/// files; finishes much faster than `ScanProgress` because no per-file
+/// extraction has happened yet. UIs typically render this as a "Listing
+/// files: 1247 found" indicator that closes when pass 1 completes.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanWalkProgress {
+    pub folder: String,
+    /// Number of files discovered + shallow-emitted so far in this scan.
+    pub discovered: usize,
+}
+
+/// Pass-2 (content extraction) progress. Same shape as before — kept so
+/// existing frontend listeners keep working unchanged.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanProgress {
     pub folder: String,
@@ -66,16 +80,57 @@ pub struct ScanComplete {
     pub duration_ms: u64,
 }
 
+/// Lifecycle phase of a `DatasetScanned` event.
+///
+/// - `Shallow`: the dataset is a placeholder built from filesystem facts only
+///   (path, size, mtime, extension). Content extraction is still pending —
+///   a follow-up `Content` event will upgrade this record.
+/// - `Content`: the dataset is fully hydrated. For tabular files that means
+///   schema + sample rows; for documents that means extracted markdown.
+///   No further upgrade is coming for this `relative_path` in this scan.
+///
+/// Frontend stores should upsert by `relative_path` — a `Shallow` event
+/// inserts a name-only row; a `Content` event replaces it with the
+/// final hydrated record. Files whose configured tier IS `Shallow`
+/// (e.g. HTML/IPYNB by default) are emitted directly with phase
+/// `Content`, since the minimal record is the final state for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatasetPhase {
+    Shallow,
+    Content,
+}
+
+impl Default for DatasetPhase {
+    fn default() -> Self {
+        // Default to Content so any code path that constructs a
+        // `DatasetScanned` without specifying a phase preserves the
+        // pre-two-pass behaviour ("this is the final record").
+        Self::Content
+    }
+}
+
 /// Emitted once per file as soon as the scanner finishes extracting its
 /// metadata — lets FolderDetail stream rows into view instead of waiting
 /// for the whole folder to finish scanning. `index` is 1-based to match
 /// `ScanProgress.current`.
+///
+/// In two-pass scans this fires twice for files that need content
+/// extraction: first with `phase: Shallow` during the walk pass, then
+/// again with `phase: Content` after extraction completes. Files whose
+/// configured tier is already shallow (and cache hits, which arrive
+/// fully-hydrated) fire once with `phase: Content`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DatasetScanned {
     pub folder: String,
     pub index: usize,
     pub total: usize,
     pub dataset: crate::scanner::DatasetMetadata,
+    /// Pass marker — see [`DatasetPhase`]. Defaults to `Content` so
+    /// existing frontend code that ignores this field keeps treating
+    /// every event as a final record.
+    #[serde(default)]
+    pub phase: DatasetPhase,
 }
 
 /// Fired once per dataset whose cached schema differs from a freshly-
@@ -128,6 +183,10 @@ pub struct QueryCompleted {
 // ---------------------------------------------------------------------------
 // Emission helpers
 // ---------------------------------------------------------------------------
+
+pub fn emit_scan_walk_progress<R: Runtime>(app: &AppHandle<R>, payload: ScanWalkProgress) {
+    let _ = app.emit(EVT_SCAN_WALK_PROGRESS, payload);
+}
 
 pub fn emit_scan_progress<R: Runtime>(app: &AppHandle<R>, payload: ScanProgress) {
     let _ = app.emit(EVT_SCAN_PROGRESS, payload);

@@ -265,6 +265,7 @@ impl ScanCache {
 /// Convenience struct: the three fields the scanner needs to use the cache.
 /// Built once per file from `fs::Metadata` so we don't reach into the file
 /// system twice.
+#[derive(Debug, Clone)]
 pub struct CacheKey {
     pub relative_path: String,
     pub mtime_secs: i64,
