@@ -35,9 +35,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "../sidecar/dist/markitdown-sidecar"
-    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },

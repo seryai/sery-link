@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::io::Write;
 use walkdir::WalkDir;
 
 // ---------------------------------------------------------------------------
@@ -452,20 +450,32 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
 /// a safe-to-parallelise call site.
 const MAX_SCAN_WORKERS: usize = 1;
 
-/// Global serialisation point for MarkItDown sidecar spawns. We saw the
-/// crash specifically when many workers forked Python processes in
-/// parallel — each one pulls in ~100 MB of interpreter + dependencies.
-/// A single mutex means at most one sidecar runs at a time; the per-doc
-/// wall-time cost is linear in file count but the process stays alive.
-/// Tabular extraction and the cheaper anytomd fallback stay parallel.
-static SIDECAR_GUARD: once_cell::sync::Lazy<std::sync::Mutex<()>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(()));
-
-pub(crate) fn lock_sidecar() -> std::sync::MutexGuard<'static, ()> {
-    // Poisoned lock is fine — the inner `()` has no invariants to
-    // break. Recover and move on.
-    SIDECAR_GUARD.lock().unwrap_or_else(|e| e.into_inner())
-}
+/// Process-wide mdkit engine. Replaces the v0.x MarkItDown Python
+/// sidecar — see `extract_document_markdown` for the dispatch surface.
+///
+/// `mdkit` is in-process Rust; no fork-bomb risk, no ~100 MB Python
+/// interpreter per worker, no global mutex needed. The previous
+/// `SIDECAR_GUARD` mutex existed because parallel rayon workers were
+/// each forking Python and tripping `mach_vm_allocate_kernel`; that
+/// constraint is gone with mdkit and document extraction parallelises
+/// naturally with the rest of the scanner.
+///
+/// `with_defaults_diagnostic` returns the backends that failed to
+/// register (e.g. libpdfium not on the library path, pandoc not on
+/// PATH); we log them once at startup so missing runtime deps are
+/// debuggable without reading mdkit source.
+static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Lazy::new(|| {
+    let (engine, errors) = mdkit::Engine::with_defaults_diagnostic();
+    for (backend, err) in &errors {
+        eprintln!(
+            "[scanner] mdkit: backend `{backend}` not registered (will fall through to anytomd): {err}"
+        );
+    }
+    if errors.is_empty() {
+        eprintln!("[scanner] mdkit: all backends registered cleanly");
+    }
+    engine
+});
 
 /// Extract metadata for a single file. Split out of the parallel loop
 /// body so we can wrap the call site in `std::panic::catch_unwind` —
@@ -827,154 +837,62 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
     }
 }
 
-/// Convert a document file to markdown using the MarkItDown sidecar.
-/// Falls back to anytomd if the sidecar fails.
-/// Returns `Some(markdown)` on success, `None` on error (logged and skipped).
+/// Convert a document file to markdown using the in-process `mdkit`
+/// engine. Falls back to `anytomd` (also in-process Rust) if mdkit
+/// returns no markdown — the fallback exists because mdkit's
+/// pandoc-backed extractors return `MissingDependency` when the
+/// `pandoc` binary isn't on PATH, and we'd rather hand the user a
+/// degraded extraction than nothing at all.
+///
+/// Returns `Some(markdown)` on success, `None` on error (logged and
+/// skipped — the file still gets indexed by name + size, just without
+/// extracted content).
 fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
-    // Cap at 50 MB
+    // 50 MB cap. Anything bigger is almost certainly an LLM-spam
+    // artefact (a 200 MB DOCX is rarely useful for grounding) and
+    // pdfium / pandoc / Apple Vision all start to trip on memory
+    // limits past the 50 MB mark anyway.
     let bytes = match fs::read(file_path) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!(
-                "[scanner] failed to read document {:?}: {}",
-                file_path, e
-            );
+            eprintln!("[scanner] failed to read document {file_path:?}: {e}");
             return None;
         }
     };
-
     if bytes.len() > 50 * 1024 * 1024 {
-        eprintln!(
-            "[scanner] document {:?} exceeds 50 MB, skipping conversion",
-            file_path
-        );
+        eprintln!("[scanner] document {file_path:?} exceeds 50 MB, skipping conversion");
         return None;
     }
 
-    // Try sidecar first (MarkItDown)
-    if let Some(markdown) = try_sidecar_conversion(file_path) {
-        eprintln!("[scanner] ✅ MarkItDown sidecar converted {:?}", file_path);
-        return Some(markdown);
+    // Primary: mdkit. In-process, no fork, no mutex, parallel-safe.
+    match MDKIT_ENGINE.extract(file_path) {
+        Ok(doc) if !doc.markdown.trim().is_empty() => {
+            eprintln!("[scanner] ✅ mdkit converted {file_path:?}");
+            return Some(doc.markdown);
+        }
+        Ok(_) => {
+            eprintln!(
+                "[scanner] ⚠️ mdkit returned empty markdown for {file_path:?}, trying anytomd fallback"
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "[scanner] ⚠️ mdkit failed for {file_path:?} ({e}), trying anytomd fallback"
+            );
+        }
     }
 
-    // Fallback to anytomd (Rust-native, faster but less capable)
-    eprintln!("[scanner] ⚠️ Sidecar failed for {:?}, trying anytomd fallback", file_path);
+    // Fallback: anytomd. Lower quality (no Pandoc-class DOCX
+    // fidelity, no OCR) but pure-Rust with zero runtime deps, so
+    // it's the right safety net when mdkit's Pandoc / libpdfium
+    // dependencies aren't available on the user's system.
     match anytomd::convert_bytes(&bytes, ext, &anytomd::ConversionOptions::default()) {
         Ok(result) => {
-            eprintln!("[scanner] ✅ anytomd converted {:?}", file_path);
+            eprintln!("[scanner] ✅ anytomd converted {file_path:?}");
             Some(result.markdown)
-        },
-        Err(e) => {
-            eprintln!(
-                "[scanner] ❌ Both sidecar and anytomd failed for {:?}: {}",
-                file_path, e
-            );
-            None
-        }
-    }
-}
-
-/// Call the MarkItDown sidecar binary to convert a document.
-/// Returns `Some(markdown)` on success, `None` on failure.
-///
-/// Serialised globally via `SIDECAR_GUARD` so a parallel scan can't fork
-/// a dozen Python processes at once — each one is ~100 MB and the pile
-/// of them is what tripped `mach_vm_allocate_kernel` in the scanner crash
-/// reports. One-at-a-time is plenty given how few DOCX/PPTX files most
-/// folders contain.
-fn try_sidecar_conversion(file_path: &Path) -> Option<String> {
-    let _guard = lock_sidecar();
-
-    // Construct sidecar binary path (bundled with the app)
-    let sidecar_path = if cfg!(target_os = "macos") {
-        // macOS: sidecar is in .app/Contents/MacOS/
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar")
-    } else if cfg!(target_os = "windows") {
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar.exe")
-    } else {
-        // Linux
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar")
-    };
-
-    if !sidecar_path.exists() {
-        eprintln!("[scanner] sidecar not found at {:?}", sidecar_path);
-        return None;
-    }
-
-    // Spawn the sidecar process
-    let mut child = match Command::new(&sidecar_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[scanner] failed to spawn sidecar: {}", e);
-            return None;
-        }
-    };
-
-    // Write the file path to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let path_str = file_path.to_string_lossy();
-        if let Err(e) = stdin.write_all(path_str.as_bytes()) {
-            eprintln!("[scanner] failed to write to sidecar stdin: {}", e);
-            return None;
-        }
-        drop(stdin); // Close stdin to signal EOF
-    }
-
-    // Read the JSON response from stdout
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("[scanner] failed to read sidecar output: {}", e);
-            return None;
-        }
-    };
-
-    if !output.status.success() {
-        eprintln!(
-            "[scanner] sidecar exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-
-    // Parse JSON response
-    #[derive(Deserialize)]
-    struct SidecarResponse {
-        success: bool,
-        markdown: Option<String>,
-        error: Option<String>,
-    }
-
-    match serde_json::from_slice::<SidecarResponse>(&output.stdout) {
-        Ok(response) => {
-            if response.success {
-                response.markdown
-            } else {
-                eprintln!(
-                    "[scanner] sidecar conversion failed: {}",
-                    response.error.unwrap_or_else(|| "unknown error".to_string())
-                );
-                None
-            }
         }
         Err(e) => {
-            eprintln!("[scanner] failed to parse sidecar JSON: {}", e);
-            eprintln!("[scanner] stdout was: {}", String::from_utf8_lossy(&output.stdout));
+            eprintln!("[scanner] ❌ Both mdkit and anytomd failed for {file_path:?}: {e}");
             None
         }
     }
