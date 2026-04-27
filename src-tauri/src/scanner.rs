@@ -450,6 +450,63 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
 /// a safe-to-parallelise call site.
 const MAX_SCAN_WORKERS: usize = 1;
 
+/// Best-effort discovery of the directory carrying app-bundled
+/// runtime libraries (e.g. `libpdfium.dylib`).
+///
+/// We avoid plumbing Tauri's `AppHandle` into this module because
+/// `MDKIT_ENGINE` is a process-wide `Lazy` initialised on first use
+/// from any thread, and the scanner is sometimes invoked from places
+/// that don't have a handy `AppHandle` reference (rayon workers,
+/// background indexers). Inferring from `current_exe` is brittle but
+/// matches Tauri's bundle layout convention:
+///
+/// - **macOS production**: binary at `<App>.app/Contents/MacOS/<bin>`,
+///   resources at `<App>.app/Contents/Resources/`.
+/// - **Linux / Windows production**: binary at `<dir>/<bin>`,
+///   resources at `<dir>/resources/` (Tauri's bundler copies
+///   `tauri.conf.json` `bundle.resources` paths there).
+/// - **Debug builds (cargo run / `pnpm tauri dev`)**: nothing is
+///   bundled — the dev pseudo-resources live at
+///   `<src-tauri>/resources/`. We reach them via
+///   `CARGO_MANIFEST_DIR` (set at compile time), gated to
+///   `debug_assertions` so production builds never trust an
+///   embedded build-time path that won't exist on the user's
+///   machine.
+///
+/// Returns `None` if `current_exe` fails or no convention matches —
+/// callers should treat that as "no bundle, fall through to system
+/// search."
+fn bundled_resource_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+
+    if cfg!(target_os = "macos") {
+        let resources = parent.parent()?.join("Resources");
+        if resources.is_dir() {
+            return Some(resources);
+        }
+    }
+
+    let next_to_binary = parent.join("resources");
+    if next_to_binary.is_dir() {
+        return Some(next_to_binary);
+    }
+
+    // Debug-only dev fallback — the path embedded by `env!` is the
+    // build host's `src-tauri/`, which only exists on developers'
+    // machines. `cfg(debug_assertions)` keeps it out of release
+    // binaries shipped to users.
+    #[cfg(debug_assertions)]
+    {
+        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+        if dev.is_dir() {
+            return Some(dev);
+        }
+    }
+
+    None
+}
+
 /// Process-wide mdkit engine. Replaces the v0.x MarkItDown Python
 /// sidecar — see `extract_document_markdown` for the dispatch surface.
 ///
@@ -460,17 +517,59 @@ const MAX_SCAN_WORKERS: usize = 1;
 /// constraint is gone with mdkit and document extraction parallelises
 /// naturally with the rest of the scanner.
 ///
+/// **Bundle path:** when the Tauri-bundled `Resources/libpdfium/`
+/// directory exists, we prefer it over system-wide library search.
+/// This lets shipped builds work on consumer machines without
+/// requiring the user to install libpdfium via Homebrew / apt /
+/// downloading from `bblanchon/pdfium-binaries`. On dev machines
+/// without the bundle, we fall through to
+/// `Pdfium::bind_to_system_library()` which checks
+/// `DYLD_LIBRARY_PATH` + `/usr/lib` + the system dyld cache.
+///
 /// `with_defaults_diagnostic` returns the backends that failed to
 /// register (e.g. libpdfium not on the library path, pandoc not on
-/// PATH); we log them once at startup so missing runtime deps are
-/// debuggable without reading mdkit source.
+/// PATH); we log them so missing runtime deps are debuggable without
+/// reading mdkit source.
 static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Lazy::new(|| {
-    let (engine, errors) = mdkit::Engine::with_defaults_diagnostic();
+    // Start from `with_defaults_diagnostic` (system search for every
+    // backend), then patch in bundled overrides for the backends
+    // that need them. Cheaper than reconstructing the whole engine
+    // by hand and keeps mdkit's default registration order intact.
+    let (mut engine, errors) = mdkit::Engine::with_defaults_diagnostic();
+    let pdf_failed = errors.iter().any(|(name, _)| *name == "pdf");
+
     for (backend, err) in &errors {
         eprintln!(
-            "[scanner] mdkit: backend `{backend}` not registered (will fall through to anytomd): {err}"
+            "[scanner] mdkit: backend `{backend}` failed system search: {err}"
         );
     }
+
+    // Bundled libpdfium override. Only attempted when the system
+    // search didn't already find it, AND the resource dir + the
+    // `libpdfium` subdirectory inside it both exist.
+    if pdf_failed {
+        if let Some(resource_dir) = bundled_resource_dir() {
+            let pdfium_dir = resource_dir.join("libpdfium");
+            if pdfium_dir.is_dir() {
+                let dir_str = pdfium_dir.to_string_lossy();
+                match mdkit::pdf::PdfiumExtractor::with_library_path(&dir_str) {
+                    Ok(ext) => {
+                        engine.register(Box::new(ext));
+                        eprintln!(
+                            "[scanner] mdkit: backend `pdf` registered from bundled \
+                             libpdfium at {dir_str}"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[scanner] mdkit: bundled libpdfium at {dir_str} failed to load: {e}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     if errors.is_empty() {
         eprintln!("[scanner] mdkit: all backends registered cleanly");
     }
