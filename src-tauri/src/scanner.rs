@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -582,7 +581,7 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
 /// file should be skipped from the final list (size cap, missing fs
 /// metadata, or total failure).
 fn scan_one(
-    entry: &walkdir::DirEntry,
+    path: &Path,
     folder_path: &str,
     settings: &FolderSettings,
     done: &std::sync::atomic::AtomicUsize,
@@ -592,7 +591,6 @@ fn scan_one(
 ) -> Option<DatasetMetadata> {
     use std::sync::atomic::Ordering;
 
-    let path = entry.path();
     let file_metadata = fs::metadata(path).ok()?;
 
     // Enforce the file size cap — oversized files are logged and
@@ -703,13 +701,29 @@ fn scan_folder_blocking(
     // First pass — enumerate candidate files so the progress callback can
     // report "current/total" counts. This costs a second walk but keeps the
     // UX responsive, and walking is cheap relative to schema extraction.
-    let candidates: Vec<_> = WalkDir::new(folder_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_supported(e.path()))
-        .filter(|e| !is_excluded(e.path(), folder_path, &settings.exclude_patterns))
+    //
+    // `scankit::Scanner` handles the walkdir + size-cap glue. The
+    // sery-link-specific filters (is_supported by extension list,
+    // is_excluded matching against full path / file name / path
+    // components) layer on top — scankit's own globset excludes are
+    // a narrower API than what FolderSettings.exclude_patterns can
+    // express, so we keep the existing pattern logic post-walk for now.
+    let scanner = scankit::Scanner::new(
+        scankit::ScanConfig::default()
+            .max_file_size_bytes(settings.max_file_size_bytes)
+            .follow_symlinks(false),
+    )
+    .map_err(|e| AgentError::FileSystem(format!("scankit init: {e}")))?;
+    let candidates: Vec<std::path::PathBuf> = scanner
+        .walk(folder_path)
+        // The local `Result` alias is `Result<T, AgentError>`, not
+        // std::result::Result, so the bare `.filter_map(Result::ok)`
+        // shorthand doesn't compile here. Closure form makes the
+        // method-resolution unambiguous.
+        .filter_map(|r| r.ok())
+        .filter(|e| is_supported(&e.path))
+        .filter(|e| !is_excluded(&e.path, folder_path, &settings.exclude_patterns))
+        .map(|e| e.path)
         .collect();
 
     let total = candidates.len();
@@ -743,7 +757,7 @@ fn scan_folder_blocking(
     let datasets: Vec<DatasetMetadata> = pool.install(|| {
         candidates
             .into_par_iter()
-            .filter_map(|entry| {
+            .filter_map(|entry: std::path::PathBuf| {
                 // Catch Rust panics from per-file extraction so one bad
                 // file just gets logged and skipped instead of poisoning
                 // the whole scan. Note: this does NOT catch foreign (C++/
@@ -752,7 +766,7 @@ fn scan_folder_blocking(
                 // concurrency races) and the `extract_metadata_at_tier`
                 // error path (which already routes DuckDB `Err` results
                 // into `extract_minimal_metadata`).
-                let path_for_log = entry.path().to_path_buf();
+                let path_for_log = entry.clone();
                 let result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| {
                         scan_one(
