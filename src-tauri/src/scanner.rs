@@ -1053,6 +1053,22 @@ fn extract_schema(
     ext: &str,
     _file_metadata: &fs::Metadata,
 ) -> Result<(Vec<ColumnSchema>, i64)> {
+    // Fast path: tabkit handles XLSX / XLS / XLSB / XLSM / ODS /
+    // CSV / TSV / Parquet in one in-process pass — no DuckDB
+    // connection, no XLSX → CSV → Parquet conversion. The DuckDB
+    // pipeline below stays as the fallback for any tabular format
+    // tabkit doesn't claim (currently empty — the matchset above
+    // is exhaustive — but the structure stays for forward-compat).
+    if let Some((columns, row_count, _samples)) = tabkit_extract(file_path, ext)? {
+        eprintln!(
+            "[extract_schema] tabkit handled {} ({} columns, {} rows)",
+            file_path.display(),
+            columns.len(),
+            row_count,
+        );
+        return Ok((columns, row_count));
+    }
+
     eprintln!("[extract_schema] open_in_memory {:?}", file_path);
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("Failed to open DuckDB: {}", e)))?;
@@ -1129,6 +1145,156 @@ fn extract_schema(
     };
 
     Ok((columns, row_count))
+}
+
+// ---------------------------------------------------------------------------
+// tabkit-backed extraction (schema + samples in one in-process pass)
+// ---------------------------------------------------------------------------
+
+/// Process-wide tabkit engine. Cheap to construct, `Send + Sync`,
+/// shared across all parallel scanners. Default features cover
+/// XLSX/XLS/XLSB/XLSM/ODS + CSV/TSV; the `parquet` feature is
+/// enabled in Cargo.toml so we also handle .parquet without
+/// going through DuckDB.
+static TABKIT_ENGINE: once_cell::sync::Lazy<tabkit::Engine> =
+    once_cell::sync::Lazy::new(tabkit::Engine::with_defaults);
+
+/// Best-effort schema + samples + row count extraction via tabkit.
+/// Returns `Ok(Some(_))` when tabkit handled the format; `Ok(None)`
+/// when the format isn't tabular and the caller should fall through
+/// to a different path; `Err(_)` when tabkit recognised the format
+/// but extraction failed (corrupt file, etc.) and the caller should
+/// surface the error.
+///
+/// Replaces the v0.x DuckDB pipeline for `extract_schema` +
+/// `extract_sample_rows` for tabular files. Wins over the old
+/// pipeline:
+///
+/// - One file read instead of three (DESCRIBE + COUNT + sample SELECT,
+///   each potentially through XLSX → CSV → Parquet conversion).
+/// - No DuckDB connection per file.
+/// - No parquet cache writes per scan.
+/// - Type inference uniform across XLSX / CSV / Parquet via the
+///   tabkit `infer_column_type` rules.
+///
+/// The DuckDB pipeline stays for the agent's separate query path
+/// (`agent_metadata` API + executor), where SQL queryability is
+/// the actual requirement.
+fn tabkit_extract(
+    file_path: &Path,
+    ext: &str,
+) -> Result<
+    Option<(
+        Vec<ColumnSchema>,
+        i64,
+        Vec<serde_json::Map<String, serde_json::Value>>,
+    )>,
+> {
+    // Match tabkit's covered extensions exactly. Anything else
+    // returns `Ok(None)` so the caller falls through.
+    if !matches!(
+        ext,
+        "xlsx" | "xls" | "xlsb" | "xlsm" | "ods" | "csv" | "tsv" | "parquet"
+    ) {
+        return Ok(None);
+    }
+
+    let options = tabkit::ReadOptions::default().max_sample_rows(SAMPLE_ROW_LIMIT);
+    let table = match TABKIT_ENGINE.read(file_path, &options) {
+        Ok(t) => t,
+        Err(e) => {
+            return Err(AgentError::FileSystem(format!(
+                "tabkit failed to read {}: {e}",
+                file_path.display()
+            )));
+        }
+    };
+
+    let columns: Vec<ColumnSchema> = table
+        .columns
+        .iter()
+        .map(|c| ColumnSchema {
+            name: c.name.clone(),
+            col_type: tabkit_type_to_duckdb_string(c.data_type),
+            nullable: c.nullable,
+        })
+        .collect();
+
+    let row_count: i64 = table
+        .row_count
+        .and_then(|n| i64::try_from(n).ok())
+        .unwrap_or(0);
+
+    // Convert tabkit sample rows → serde_json::Map with PII
+    // redaction. Re-uses the same `is_pii_column` heuristic the old
+    // DuckDB-backed `extract_sample_rows` used.
+    let redacted_indices: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| if is_pii_column(&c.name) { Some(i) } else { None })
+        .collect();
+
+    let samples: Vec<serde_json::Map<String, serde_json::Value>> = table
+        .sample_rows
+        .iter()
+        .map(|row| {
+            let mut obj = serde_json::Map::with_capacity(columns.len());
+            for (i, col) in columns.iter().enumerate() {
+                let value = if redacted_indices.contains(&i) {
+                    serde_json::Value::String("<redacted>".to_string())
+                } else {
+                    tabkit_value_to_json(row.get(i).unwrap_or(&tabkit::Value::Null))
+                };
+                obj.insert(col.name.clone(), value);
+            }
+            obj
+        })
+        .collect();
+
+    Ok(Some((columns, row_count, samples)))
+}
+
+/// Map tabkit's coarse `DataType` enum to DuckDB-style type
+/// strings. `ColumnSchema.col_type` is consumed downstream by the
+/// agent (which uses DuckDB type names for SQL generation) and the
+/// UI (which renders typed badges); keeping the strings
+/// DuckDB-shaped means callers don't need to learn a new type
+/// vocabulary just because the producer changed.
+fn tabkit_type_to_duckdb_string(t: tabkit::DataType) -> String {
+    match t {
+        tabkit::DataType::Bool => "BOOLEAN",
+        tabkit::DataType::Integer => "BIGINT",
+        tabkit::DataType::Float => "DOUBLE",
+        tabkit::DataType::Date => "DATE",
+        tabkit::DataType::DateTime => "TIMESTAMP",
+        // Text + Unknown both map to VARCHAR — DuckDB's natural
+        // "we don't know more than 'string'" type. The downstream
+        // agent treats VARCHAR as opaque, which matches what we
+        // want for these cases.
+        tabkit::DataType::Text | tabkit::DataType::Unknown => "VARCHAR",
+        // Wildcard for forward-compat — tabkit's DataType is
+        // #[non_exhaustive].
+        _ => "VARCHAR",
+    }
+    .to_string()
+}
+
+/// tabkit `Value` → `serde_json::Value`. Date / DateTime payloads
+/// stay as strings (matches the JSON-IPC contract tabkit advertises).
+fn tabkit_value_to_json(v: &tabkit::Value) -> serde_json::Value {
+    match v {
+        tabkit::Value::Null => serde_json::Value::Null,
+        tabkit::Value::Bool(b) => serde_json::Value::Bool(*b),
+        tabkit::Value::Integer(i) => serde_json::Value::Number((*i).into()),
+        tabkit::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        tabkit::Value::Date(s) | tabkit::Value::DateTime(s) | tabkit::Value::Text(s) => {
+            serde_json::Value::String(s.clone())
+        }
+        // Wildcard for forward-compat — tabkit's Value is
+        // #[non_exhaustive].
+        _ => serde_json::Value::Null,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +1598,28 @@ fn extract_sample_rows(
 ) -> Result<(Option<Vec<serde_json::Map<String, serde_json::Value>>>, bool)> {
     if schema.is_empty() {
         return Ok((None, false));
+    }
+
+    // Fast path: tabkit. Same in-process read used by
+    // `extract_schema`'s fast path; here we discard the schema +
+    // row count it returns and keep the sample rows. The
+    // PII-redaction logic lives inside `tabkit_extract` so the
+    // produced rows already have the right cells substituted.
+    //
+    // Return-shape contract preserved from the v0.x DuckDB path:
+    //
+    // - `(None, false)` when no samples were produced (empty
+    //   sheet, etc.).
+    // - `(Some(samples), redacted)` otherwise, where `redacted`
+    //   is true iff ANY column matched the PII heuristic. Re-
+    //   compute from `schema` rather than threading the flag out
+    //   of `tabkit_extract` to keep that helper's signature lean.
+    if let Some((_cols, _row_count, samples)) = tabkit_extract(file_path, ext)? {
+        if samples.is_empty() {
+            return Ok((None, false));
+        }
+        let redacted = schema.iter().any(|c| is_pii_column(&c.name));
+        return Ok((Some(samples), redacted));
     }
 
     let conn = Connection::open_in_memory()

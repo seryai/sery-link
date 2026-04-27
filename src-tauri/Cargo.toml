@@ -51,6 +51,13 @@ futures = "0.3"
 # tokio debouncing — that don't map cleanly to scankit's single-root
 # Scanner::scan).
 scankit = "0.2"
+# tabkit handles "tabular file → schema + sample rows + row count" in
+# one in-process call — see scanner.rs `tabkit_extract` for how it
+# replaces the previous DuckDB-based extract_schema +
+# extract_sample_rows pipeline. tabkit's `parquet` feature is
+# enabled so we cover all four formats sery-link's extract_schema
+# previously handled (xlsx, xls, csv, parquet).
+tabkit = { version = "0.4", features = ["parquet"] }
 url = "2.5"
 open = "5.0"
 hostname = "0.3"
