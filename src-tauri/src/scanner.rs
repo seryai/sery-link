@@ -764,6 +764,25 @@ fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOu
     }
 }
 
+/// Process-wide mutex serialising libpdfium calls.
+///
+/// pdfium-render is built with the `thread_safe` feature, which is
+/// supposed to wrap every libpdfium call in a global mutex. In
+/// practice, when multiple rayon workers each load *different* PDFs
+/// concurrently we observed `PdfiumLibraryInternalError(FormatError)`
+/// on otherwise-valid PDFs that load fine single-threaded. The
+/// failure mode reproduced reliably with `SERY_SCAN_WORKERS=4` and
+/// disappeared with `SERY_SCAN_WORKERS=1` on the same folder.
+///
+/// Wrapping the whole PDF code path in our own mutex sidesteps it:
+/// PDF extractions queue here while the rayon pool keeps churning
+/// DOCX / PPTX / HTML / IPYNB / tabular files through their backends
+/// in parallel. Net effect: no slowdown for PDF-only folders (the
+/// pdfium mutex bottlenecks us either way) AND a real speedup for
+/// mixed folders, AND no FormatError regressions.
+static PDF_EXTRACT_MUTEX: once_cell::sync::Lazy<std::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(()));
+
 /// Pass-2 worker. Run the configured backend (DuckDB / mdkit / tabkit)
 /// for one candidate, persist the hydrated record to the cache, and
 /// return it. Falls back to the pre-built shallow record on extraction
@@ -787,7 +806,20 @@ fn extract_one(
     );
     let _ = std::io::Write::flush(&mut std::io::stderr());
 
-    let metadata = match extract_metadata_at_tier(path, folder_path, tier) {
+    // Serialise libpdfium access. See PDF_EXTRACT_MUTEX docs for why.
+    // Mutex poisoning (a previous PDF panicked while holding the lock)
+    // is recoverable here — the next file is independent, so we just
+    // unwrap the inner data and continue.
+    let extraction = if ext == "pdf" {
+        let _guard = PDF_EXTRACT_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        extract_metadata_at_tier(path, folder_path, tier)
+    } else {
+        extract_metadata_at_tier(path, folder_path, tier)
+    };
+
+    let metadata = match extraction {
         Ok(m) => m,
         Err(e) => {
             eprintln!(
