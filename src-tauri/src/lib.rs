@@ -193,6 +193,8 @@ pub fn run() {
             commands::add_watched_folder,
             commands::add_remote_source,
             commands::remove_watched_folder,
+            commands::set_folder_mcp_enabled,
+            commands::get_mcp_snippets,
             commands::scan_folder,
             commands::search_all_folders,
             commands::profile_dataset,
