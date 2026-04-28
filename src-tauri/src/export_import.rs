@@ -225,6 +225,7 @@ mod tests {
             max_file_size_mb: 1024,
             last_scan_at: None,
             last_scan_stats: None,
+            mcp_enabled: false,
         }
     }
 
@@ -248,6 +249,7 @@ mod tests {
                 auto_sync_on_change: true,
                 fallback_scan_interval_seconds: 3600,
                 scan_tier_overrides: std::collections::HashMap::new(),
+                include_document_text: false,
             },
             app: crate::config::AppConfig {
                 theme: "system".to_string(),
@@ -295,6 +297,7 @@ mod tests {
                 max_file_size_mb: 1024,
                 last_scan_at: None,
                 last_scan_stats: None,
+                mcp_enabled: false,
             },
         ];
 
@@ -320,6 +323,7 @@ mod tests {
             max_file_size_mb: 1024,
             last_scan_at: None,
             last_scan_stats: None,
+            mcp_enabled: false,
         }];
 
         let import_config = test_config();

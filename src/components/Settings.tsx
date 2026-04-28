@@ -30,9 +30,10 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { McpPanel } from './settings/McpPanel';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'about';
+type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
@@ -226,6 +227,9 @@ export function Settings() {
           <TabButton active={tab === 'app'} onClick={() => setTab('app')}>
             App
           </TabButton>
+          <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')}>
+            MCP
+          </TabButton>
           <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
             About
           </TabButton>
@@ -237,6 +241,7 @@ export function Settings() {
         )}
         {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
         {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
+        {tab === 'mcp' && <McpPanel draft={draft} setDraft={setDraft} />}
         {tab === 'about' && (
           <AboutPanel
             draft={draft}

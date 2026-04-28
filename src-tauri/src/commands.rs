@@ -217,6 +217,154 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ─── MCP integration ───────────────────────────────────────────────────────
+
+/// Toggle whether a watched folder is exposed via the MCP stdio mode.
+/// Just flips the persisted flag — the MCP server is started by the
+/// LLM client (Claude Desktop / Cursor / …) when the user adds the
+/// corresponding `mcp.json` block. We track the state so the Settings
+/// UI can show / hide the snippet generator accordingly.
+#[tauri::command]
+pub async fn set_folder_mcp_enabled(path: String, enabled: bool) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let folder = config
+        .watched_folders
+        .iter_mut()
+        .find(|f| f.path == path)
+        .ok_or_else(|| format!("watched folder not found: {path}"))?;
+    folder.mcp_enabled = enabled;
+    config.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// One ready-to-paste snippet for a specific MCP client + folder.
+/// `language` is `"json"` for Claude Desktop / Cursor / Continue
+/// (they all use JSON `mcp.json` shapes) or `"toml"` for Zed (settings
+/// file). Frontends render with a copy-to-clipboard button.
+#[derive(Debug, serde::Serialize)]
+pub struct McpSnippet {
+    pub client: String,
+    pub label: String,
+    pub language: String,
+    pub config: String,
+    /// User-facing path the snippet should be written to (informational).
+    pub config_path_hint: String,
+}
+
+/// Return ready-to-paste config snippets for each known LLM client,
+/// for a given watched folder. The snippet embeds the absolute path
+/// to the currently-running sery-link binary so users can paste it
+/// straight into their LLM client config.
+///
+/// Frontend renders these in Settings → MCP. The user clicks a copy
+/// button and pastes into their Claude Desktop / Cursor / … config.
+/// We deliberately don't auto-write into those configs — JSON files
+/// elsewhere on disk are easy to corrupt, and the failure mode of a
+/// borked Claude Desktop config is dire. Better to show the snippet,
+/// let the user own the paste.
+#[tauri::command]
+pub async fn get_mcp_snippets(folder_path: String) -> Result<Vec<McpSnippet>, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    if !config.watched_folders.iter().any(|f| f.path == folder_path) {
+        return Err(format!("not a watched folder: {folder_path}"));
+    }
+
+    // Resolve the path to *this* sery-link binary so the snippet
+    // points at the user's actual install. On macOS that's
+    //   /Applications/Sery Link.app/Contents/MacOS/SeryLink
+    // On Windows + Linux it's just the binary alongside the
+    // installer's chosen install dir.
+    let exe = std::env::current_exe().map_err(|e| format!("cannot resolve exe path: {e}"))?;
+    let exe_str = exe
+        .to_str()
+        .ok_or_else(|| "exe path is not valid UTF-8 (rare)".to_string())?
+        .to_string();
+
+    let server_name = "sery-link"; // What the LLM client labels the server.
+
+    Ok(vec![
+        // Claude Desktop — JSON, ~/Library/Application Support/Claude/claude_desktop_config.json
+        McpSnippet {
+            client: "claude-desktop".to_string(),
+            label: "Claude Desktop".to_string(),
+            language: "json".to_string(),
+            config: claude_desktop_snippet(server_name, &exe_str, &folder_path),
+            config_path_hint: claude_desktop_config_path_hint(),
+        },
+        // Cursor — JSON, ~/.cursor/mcp.json (or .cursor/mcp.json per-project)
+        McpSnippet {
+            client: "cursor".to_string(),
+            label: "Cursor".to_string(),
+            language: "json".to_string(),
+            config: cursor_snippet(server_name, &exe_str, &folder_path),
+            config_path_hint: "~/.cursor/mcp.json (global) — or .cursor/mcp.json in your project root for project-scoped MCP".to_string(),
+        },
+        // Continue — JSON, ~/.continue/config.json
+        McpSnippet {
+            client: "continue".to_string(),
+            label: "Continue".to_string(),
+            language: "json".to_string(),
+            config: continue_snippet(server_name, &exe_str, &folder_path),
+            config_path_hint: "~/.continue/config.json under the experimental.modelContextProtocolServers key"
+                .to_string(),
+        },
+    ])
+}
+
+fn claude_desktop_snippet(server: &str, exe: &str, root: &str) -> String {
+    // Claude Desktop's mcp.json shape — top-level "mcpServers"
+    // object keyed by server name. The user adds this entry; if
+    // they already have other MCP servers, they merge.
+    serde_json::to_string_pretty(&serde_json::json!({
+        "mcpServers": {
+            server: {
+                "command": exe,
+                "args": ["--mcp-stdio", "--root", root]
+            }
+        }
+    }))
+    .unwrap_or_else(|_| String::new())
+}
+
+fn cursor_snippet(server: &str, exe: &str, root: &str) -> String {
+    // Cursor's mcp.json uses the same `mcpServers` shape Claude
+    // Desktop pioneered, so the snippet body is identical.
+    claude_desktop_snippet(server, exe, root)
+}
+
+fn continue_snippet(_server: &str, exe: &str, root: &str) -> String {
+    // Continue's config.json embeds MCP servers under a
+    // experimental.modelContextProtocolServers array. Slightly
+    // different shape from the other two; we match the format
+    // documented at https://docs.continue.dev.
+    serde_json::to_string_pretty(&serde_json::json!({
+        "experimental": {
+            "modelContextProtocolServers": [
+                {
+                    "transport": {
+                        "type": "stdio",
+                        "command": exe,
+                        "args": ["--mcp-stdio", "--root", root]
+                    }
+                }
+            ]
+        }
+    }))
+    .unwrap_or_else(|_| String::new())
+}
+
+fn claude_desktop_config_path_hint() -> String {
+    // Platform-specific paths so the snippet card can show the user
+    // exactly where to paste.
+    if cfg!(target_os = "macos") {
+        "~/Library/Application Support/Claude/claude_desktop_config.json".to_string()
+    } else if cfg!(target_os = "windows") {
+        "%APPDATA%\\Claude\\claude_desktop_config.json".to_string()
+    } else {
+        "~/.config/Claude/claude_desktop_config.json".to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Global search — the v1 hero feature. Ranks cached datasets by filename,
 // column name, and document content against a user query. See

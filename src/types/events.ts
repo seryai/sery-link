@@ -239,6 +239,27 @@ export interface WatchedFolder {
   max_file_size_mb: number;
   last_scan_at: string | null;
   last_scan_stats: ScanStats | null;
+  /** Whether this folder is exposed via the `--mcp-stdio` MCP server
+   *  mode. Off by default; the Settings → MCP tab toggles it.
+   *  Optional in TS so configs written by older sery-link versions
+   *  (which didn't have the field) deserialize cleanly. */
+  mcp_enabled?: boolean;
+}
+
+/** One ready-to-paste MCP config snippet returned by the
+ *  `get_mcp_snippets` Tauri command. The frontend renders these as
+ *  cards with a copy-to-clipboard button. */
+export interface McpSnippet {
+  /** Stable client identifier — `claude-desktop`, `cursor`, `continue`. */
+  client: string;
+  /** User-facing client name — `Claude Desktop`, `Cursor`, `Continue`. */
+  label: string;
+  /** Source-language hint for syntax highlighting. */
+  language: 'json' | 'toml';
+  /** The pretty-printed config block. */
+  config: string;
+  /** Where to paste it (file path / location, platform-aware). */
+  config_path_hint: string;
 }
 
 export interface AgentConfig {
