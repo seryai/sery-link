@@ -79,7 +79,6 @@ anytomd = { version = "0.1", default-features = false }
 # zero bundle cost, gives us scanned-PDF support for free.
 mdkit = { version = "0.7", features = ["pandoc", "ocr-platform"] }
 regex = "1.10"
-wasmer = { version = "7.1.0", features = ["cranelift"] }
 rayon = "1.10"
 num_cpus = "1.16"
 
