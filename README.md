@@ -10,7 +10,7 @@ Cross-platform desktop app that indexes every CSV, spreadsheet, and document on 
 - 📊 **Per-file column profiles** — Open any file to see schema, sample rows, and column stats (null %, unique values, min/max/avg) auto-computed locally
 - 📁 **Folder watching** — Auto-detect changes in local Parquet, CSV, Excel, and document files
 - 🌐 **Remote sources** — Add public HTTPS URLs or S3 objects / bucket listings (credentials stored in the OS keychain, data fetched locally — never proxied through our servers)
-- 📄 **Document support** — Convert DOCX, PPTX, HTML, PDF to Markdown using bundled MarkItDown sidecar
+- 📄 **Document support** — Convert DOCX, PPTX, HTML, PDF to Markdown via the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate (bundled libpdfium + pandoc, ~12 MB)
 - 💻 **Multiple machines** — Connect as many devices to a single workspace via workspace keys; cross-machine AI queries on Personal
 - 🧩 **Plugin system** — Extend functionality with WebAssembly plugins (5 built-in examples: CSV parser, JSON transformer, HTML viewer, clipboard utilities, text analyzer)
 - 🛒 **Plugin marketplace** — Discover, search, and install community plugins
@@ -45,26 +45,26 @@ pnpm tauri build
 ## Architecture
 
 - **Frontend**: React 19 + TypeScript + Tailwind CSS
-- **Backend**: Rust with Tauri 2.0, DuckDB, WebSocket
-- **Document Processing**: MarkItDown sidecar (bundled Python binary, 180 MB)
+- **Backend**: Rust with Tauri 2.0 + WebSocket
+- **Folder walking**: [`scankit`](https://crates.io/crates/scankit) — `walkdir` + size cap + exclude globs in one in-process Scanner.
+- **Tabular extraction**: [`tabkit`](https://crates.io/crates/tabkit) — Parquet / CSV / XLSX / XLS schema + sample rows + row count, in-process; DuckDB stays as a fallback for the rare format tabkit doesn't claim.
+- **Document → markdown**: [`mdkit`](https://crates.io/crates/mdkit) — bundled libpdfium for PDF, pandoc subprocess for DOCX/PPTX/EPUB/RTF/ODT/LaTeX, anytomd fallback for everything else. Fully in-process Rust; no Python interpreter, no sidecar fork.
 - **Plugin Runtime**: WebAssembly (wasmer 7.1.0) with sandboxed execution
 - **Storage**: OS-native credential manager (Keychain/Credential Manager/Secret Service)
 
 ### Supported File Types
 
-**Tabular Data** (DuckDB):
+**Tabular Data** (tabkit):
 - Parquet (`.parquet`)
 - CSV (`.csv`)
 - Excel (`.xlsx`, `.xls`)
 
-**Documents** (MarkItDown sidecar):
+**Documents** (mdkit):
 - Word (`.docx`)
 - PowerPoint (`.pptx`)
 - HTML (`.html`, `.htm`)
-- PDF (`.pdf`)
+- PDF (`.pdf`) — text-layer extraction via libpdfium; Apple Vision / Windows.Media.Ocr fallback for scanned pages
 - Jupyter Notebooks (`.ipynb`)
-
-See [SIDECAR_IMPLEMENTATION.md](./SIDECAR_IMPLEMENTATION.md) for details on the document processing architecture.
 
 ### Plugin System
 
