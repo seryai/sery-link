@@ -15,9 +15,6 @@ mod history;
 mod hotkey;
 mod keyring_store;
 mod metadata_cache;
-mod plugin;
-mod plugin_marketplace;
-mod plugin_runtime;
 mod relationship_detector;
 mod remote;
 mod remote_creds;
@@ -196,21 +193,6 @@ pub fn run() {
             commands::import_configuration,
             commands::validate_import_file,
             commands::read_file,
-            commands::list_plugins,
-            commands::enable_plugin,
-            commands::disable_plugin,
-            commands::uninstall_plugin,
-            commands::load_plugin_into_runtime,
-            commands::unload_plugin_from_runtime,
-            commands::is_plugin_loaded,
-            commands::get_loaded_plugins,
-            commands::execute_plugin_with_file,
-            commands::load_marketplace,
-            commands::search_marketplace,
-            commands::get_featured_plugins,
-            commands::get_popular_plugins,
-            commands::get_marketplace_plugin,
-            commands::install_marketplace_plugin,
             commands::get_current_auth_mode,
             commands::check_feature_available,
             commands::set_auth_mode,
