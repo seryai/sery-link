@@ -113,15 +113,24 @@ pub struct ColumnSchema {
     pub nullable: bool,
 }
 
-/// Callback invoked once per file as the scan progresses. Matches the shape
-/// of the `ScanProgress` event so the watcher can adapt it trivially.
+/// Per-file callback for pass-2 (content extraction) progress. Matches the
+/// shape of the `ScanProgress` event. Fires only for files that actually
+/// run extraction in pass 2 (i.e. cache miss + tier > Shallow).
 pub type ProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
 
-/// Callback invoked once per file immediately after its metadata has been
-/// extracted (cache hit or miss). The callback receives the 1-based index,
-/// total file count, and the dataset itself — giving progressive UIs
-/// everything they need to render rows as they land.
-pub type DatasetCb = Box<dyn Fn(usize, usize, &DatasetMetadata) + Send + Sync>;
+/// Pass-1 (filename walk) progress callback. Receives the running count of
+/// files that have been walked + emitted as shallow datasets so far.
+/// Cheap to compute, fires fast — UI typically renders this as a
+/// "Listing files: 1247 found" indicator that closes once pass 1 ends.
+pub type WalkProgressCb = Box<dyn Fn(usize) + Send + Sync>;
+
+/// Callback invoked once per file immediately after a metadata record has
+/// been produced — either a fresh shallow placeholder during pass 1 or the
+/// fully-hydrated final record from pass 2 / cache hit. The phase argument
+/// tells the consumer which it is so frontend stores can upsert correctly.
+pub type DatasetCb = Box<dyn Fn(usize, usize, &DatasetMetadata, DatasetPhase) + Send + Sync>;
+
+pub use crate::events::DatasetPhase;
 
 // ---------------------------------------------------------------------------
 // Public scan entry points
@@ -136,28 +145,48 @@ pub async fn scan_folder(folder_path: &str) -> Result<Vec<DatasetMetadata>> {
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
-        scan_folder_blocking(&owned, &settings, None, None)
+        scan_folder_blocking(&owned, &settings, None, None, None)
     })
     .await
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
 }
 
-/// Scan with both a per-file progress callback AND a per-dataset callback
-/// that fires after each file's metadata is extracted. Used by
-/// `rescan_folder` so FolderDetail can stream rows in as they land instead
-/// of waiting for the whole folder to finish.
+/// Scan with progress + per-dataset callbacks. Used by `rescan_folder` so
+/// FolderDetail can stream rows in as they land instead of waiting for the
+/// whole folder to finish.
+///
+/// The scan runs in two passes:
+///
+/// 1. **Walk**: enumerate files + emit a `Shallow` dataset record per file
+///    (or the cached fully-hydrated record when one exists). Fires
+///    `walk_progress` per discovery and the `on_dataset` callback with
+///    `DatasetPhase::Shallow` (or `Content` for cache hits / shallow-tier
+///    files that need no further work).
+///
+/// 2. **Extract**: for files needing schema / markdown extraction, run the
+///    backend (DuckDB / mdkit / tabkit) and emit `progress` plus an
+///    `on_dataset` callback with `DatasetPhase::Content` carrying the
+///    final hydrated record.
+///
+/// Both callbacks are optional. `walk_progress` is `None` for callers that
+/// don't care about the pre-extraction signal (most existing call sites).
 pub async fn scan_folder_with_events(
     folder_path: &str,
+    walk_progress: Option<WalkProgressCb>,
     progress: Option<ProgressCb>,
     on_dataset: Option<DatasetCb>,
 ) -> Result<Vec<DatasetMetadata>> {
     if crate::url::is_remote_url(folder_path) {
+        // Remote scans don't have a meaningful walk pass — every object
+        // listed gets its schema described via DuckDB DESCRIBE in one
+        // shot. The walk_progress callback is dropped; the existing
+        // single-pass flow is preserved.
         return scan_remote_folder(folder_path, progress, on_dataset).await;
     }
     let owned = folder_path.to_string();
     tokio::task::spawn_blocking(move || {
         let settings = load_folder_settings(&owned);
-        scan_folder_blocking(&owned, &settings, progress, on_dataset)
+        scan_folder_blocking(&owned, &settings, walk_progress, progress, on_dataset)
     })
     .await
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
@@ -244,7 +273,10 @@ async fn scan_remote_single(
     .map_err(|e| AgentError::FileSystem(format!("Remote scan task failed: {}", e)))??;
 
     if let Some(cb) = &on_dataset {
-        cb(1, 1, &metadata);
+        // Remote single-object scans are inherently single-pass — the
+        // metadata returned here is already fully hydrated, so it goes
+        // out as a `Content` phase event with no preceding `Shallow`.
+        cb(1, 1, &metadata, DatasetPhase::Content);
     }
     Ok(vec![metadata])
 }
@@ -345,7 +377,9 @@ async fn scan_s3_listing(
         match result {
             Ok(meta) => {
                 if let Some(cb) = &on_dataset {
-                    cb(idx + 1, total, &meta);
+                    // S3 listing scans are also single-pass — every
+                    // emitted record is already content-hydrated.
+                    cb(idx + 1, total, &meta, DatasetPhase::Content);
                 }
                 datasets.push(meta);
             }
@@ -434,20 +468,41 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
         .collect()
 }
 
-/// Hard cap on concurrent scanner workers. Each worker opens a DuckDB
-/// in-memory database (schema + sample extraction) and, for docx/pptx,
-/// can fork a MarkItDown Python sidecar.
+/// Hard cap on concurrent pass-2 (content extraction) workers.
 ///
-/// Set to 1 after repeated crashes on macOS with the message
-/// "Rust cannot catch foreign exceptions, aborting" during parallel
-/// scans. Multiple rayon workers concurrently calling
-/// `Connection::open_in_memory()` appear to trip a DuckDB internal
-/// race that throws a C++ exception — once that exception unwinds
-/// through a Rust frame, the runtime aborts the whole process.
-/// Serial DuckDB access eliminates the race. The rayon/parallel
-/// plumbing is kept in place so we can re-enable once we've isolated
-/// a safe-to-parallelise call site.
-const MAX_SCAN_WORKERS: usize = 1;
+/// Historical context: previously set to 1 because each worker opened
+/// a DuckDB connection (`Connection::open_in_memory()`) for tabular
+/// schema extraction AND, for DOCX/PPTX, forked a MarkItDown Python
+/// sidecar. Multiple rayon workers tripped a DuckDB internal race
+/// that threw a C++ exception, aborting the whole process.
+///
+/// As of v0.5.x both bottlenecks are gone:
+///
+/// - **Documents** (PDF / DOCX / PPTX / HTML / IPYNB) → mdkit, fully
+///   in-process Rust. libpdfium is `Send + Sync` with internal
+///   locking; pandoc is spawned as a subprocess per file so each
+///   invocation is isolated.
+/// - **Tabular** (CSV / XLSX / Parquet / etc.) → tabkit fast path,
+///   also in-process Rust. The DuckDB fallback only triggers for
+///   formats tabkit can't claim, which is currently nothing.
+///
+/// So we can finally parallelise pass 2. The cap is computed at
+/// runtime as `(num_cpus / 2).clamp(2, 8)` — leave half the cores
+/// free for the UI thread + cache writes + frontend rendering, but
+/// always run at least 2 workers so a folder full of PDFs doesn't
+/// crawl. The `SERY_SCAN_WORKERS` env var overrides the calculation
+/// for users who want to dial it back if they see instability.
+fn max_scan_workers() -> usize {
+    if let Ok(raw) = std::env::var("SERY_SCAN_WORKERS") {
+        if let Ok(n) = raw.parse::<usize>() {
+            if n >= 1 {
+                return n;
+            }
+        }
+    }
+    let cores = num_cpus::get().max(1);
+    (cores / 2).clamp(2, 8)
+}
 
 /// Best-effort discovery of the directory carrying app-bundled
 /// runtime libraries (e.g. `libpdfium.dylib`).
@@ -612,23 +667,42 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
     engine
 });
 
-/// Extract metadata for a single file. Split out of the parallel loop
-/// body so we can wrap the call site in `std::panic::catch_unwind` —
-/// the closure syntax made that awkward inline. Returns `None` if the
-/// file should be skipped from the final list (size cap, missing fs
-/// metadata, or total failure).
-fn scan_one(
-    path: &Path,
-    folder_path: &str,
-    settings: &FolderSettings,
-    done: &std::sync::atomic::AtomicUsize,
-    total: usize,
-    progress: Option<&ProgressCb>,
-    on_dataset: Option<&DatasetCb>,
-) -> Option<DatasetMetadata> {
-    use std::sync::atomic::Ordering;
+/// Outcome of pass 1 (filename-walk) for a single candidate file.
+///
+/// The walk is single-threaded and cheap: stat + cache lookup + minimal
+/// metadata. Whatever it returns dictates pass-2 behaviour for this file.
+enum WalkOutcome {
+    /// Drop the file from the result list entirely (size cap exceeded,
+    /// fs::metadata failed, or the path can't be made relative to the
+    /// folder root).
+    Skip,
+    /// Cache hit — the previously-extracted record is fresh, no work
+    /// remains. Emit straight away with `DatasetPhase::Content`.
+    CacheHit(DatasetMetadata),
+    /// The file's configured tier is `Shallow`, so the minimal record
+    /// IS the final state. Emit with `DatasetPhase::Content` (no
+    /// pending upgrade) and skip pass 2.
+    ShallowFinal(DatasetMetadata),
+    /// Tier > `Shallow`: emit the shallow record now with
+    /// `DatasetPhase::Shallow`, queue this file for pass-2 extraction.
+    NeedsContent {
+        shallow: DatasetMetadata,
+        cache_key: crate::scan_cache::CacheKey,
+        tier: ScanTier,
+    },
+}
 
-    let file_metadata = fs::metadata(path).ok()?;
+/// Pass-1 worker. Stat the file, check the cache, build either the
+/// final-shallow record or a placeholder shallow record + a pass-2
+/// work-queue entry.
+///
+/// Cheap to run sequentially: the heavy cost is in the cache-miss
+/// branch's `extract_metadata_at_tier`, which is deferred to pass 2.
+fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOutcome {
+    let file_metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return WalkOutcome::Skip,
+    };
 
     // Enforce the file size cap — oversized files are logged and
     // skipped so one bad file doesn't take the whole scan down.
@@ -639,13 +713,13 @@ fn scan_one(
             file_metadata.len(),
             settings.max_file_size_bytes / (1024 * 1024)
         );
-        return None;
+        return WalkOutcome::Skip;
     }
 
     // Cache fast path: if (mtime, size) match what we stored, reuse
-    // the previously-extracted metadata and skip DuckDB entirely. Runs
-    // through the process-wide `with_cache` so there's only ever one
-    // DuckDB connection to scan_cache.db open at a time.
+    // the previously-extracted metadata and skip extraction entirely.
+    // Runs through the process-wide `with_cache` so there's only ever
+    // one DuckDB connection to scan_cache.db open at a time.
     let cache_key = crate::scan_cache::CacheKey::from_metadata(path, folder_path, &file_metadata);
     if let Some(key) = &cache_key {
         let hit = crate::scan_cache::with_cache(|c| {
@@ -658,23 +732,64 @@ fn scan_one(
         })
         .flatten();
         if let Some(hit) = hit {
-            let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if let Some(cb) = progress {
-                cb(idx, total, &path.to_string_lossy());
-            }
-            if let Some(cb) = on_dataset {
-                cb(idx, total, &hit);
-            }
-            return Some(hit);
+            return WalkOutcome::CacheHit(hit);
         }
     }
+
+    // Cache miss — build the shallow record up-front. We need it as
+    // either the final answer (Shallow tier) or as a placeholder while
+    // pass 2 runs, so it's worth doing once here.
+    let shallow = match extract_minimal_metadata(path, folder_path) {
+        Ok(m) => m,
+        Err(_) => return WalkOutcome::Skip,
+    };
 
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
     let tier = tier_for(ext, &settings.tier_overrides);
 
+    match (tier, cache_key) {
+        (ScanTier::Shallow, _) => WalkOutcome::ShallowFinal(shallow),
+        // No cache key (pathological — strip_prefix or mtime failed).
+        // Without a key we can't write back to the cache; treat the
+        // shallow record as final rather than running extraction we
+        // wouldn't be able to memoise.
+        (_, None) => WalkOutcome::ShallowFinal(shallow),
+        (ScanTier::Content | ScanTier::Full, Some(cache_key)) => {
+            WalkOutcome::NeedsContent {
+                shallow,
+                cache_key,
+                tier,
+            }
+        }
+    }
+}
+
+/// Pass-2 worker. Run the configured backend (DuckDB / mdkit / tabkit)
+/// for one candidate, persist the hydrated record to the cache, and
+/// return it. Falls back to the pre-built shallow record on extraction
+/// error so the file still surfaces in the result list.
+///
+/// **Threading note:** PDFs must only ever be processed from a single
+/// thread (see `scan_folder_blocking` for the partition logic).
+/// pdfium-render's `thread_safe` feature is supposed to serialise
+/// libpdfium calls internally, but in practice concurrent loads of
+/// *different* PDFs throw `PdfiumLibraryInternalError(FormatError)`
+/// on valid PDFs that load fine single-threaded. We sidestep that by
+/// only ever calling the PDF backend from the serial pdf thread.
+/// Other formats (DOCX / PPTX / HTML / IPYNB / tabular) parallelise
+/// safely.
+fn extract_one(
+    path: &Path,
+    folder_path: &str,
+    cache_key: &crate::scan_cache::CacheKey,
+    tier: ScanTier,
+    shallow_fallback: &DatasetMetadata,
+) -> DatasetMetadata {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
     // Trace log so if the process aborts mid-scan the last line tells us
-    // exactly which file + tier was being processed. This is essential
-    // for diagnosing foreign (C++ / Obj-C) exceptions that catch_unwind
+    // exactly which file + tier was being processed. Essential for
+    // diagnosing foreign (C++ / Obj-C) exceptions that catch_unwind
     // can't intercept — we get a breadcrumb even though we can't recover.
     eprintln!(
         "[scanner] ▶ {:?} tier={:?} ext={}",
@@ -685,66 +800,46 @@ fn scan_one(
     let metadata = match extract_metadata_at_tier(path, folder_path, tier) {
         Ok(m) => m,
         Err(e) => {
-            // Full extraction failed — most commonly because DuckDB's
-            // CSV sniffer rejected a file it couldn't parse, or an Excel
-            // file was corrupted. We still want the user to see the
-            // file exists in the folder detail view, just without
-            // queryable schema. Build a minimal DatasetMetadata from
-            // the filesystem-level info we DO have.
             eprintln!(
-                "[scanner] schema extraction failed for {:?} — degrading to file-only entry: {}",
+                "[scanner] schema extraction failed for {:?} — keeping shallow record: {}",
                 path, e
             );
-            extract_minimal_metadata(path, folder_path).ok()?
+            shallow_fallback.clone()
         }
     };
 
     eprintln!("[scanner] ✓ {:?}", path);
 
     // Persist freshly-extracted metadata so the next scan for this
-    // file short-circuits. Goes through the shared singleton so we
-    // never open a second DuckDB connection to scan_cache.db.
-    if let Some(key) = &cache_key {
-        let _ = crate::scan_cache::with_cache(|c| {
-            c.put(
-                folder_path,
-                &key.relative_path,
-                key.mtime_secs,
-                key.size_bytes,
-                &metadata,
-            )
-        });
-    }
+    // file short-circuits via the cache hit path in pass 1.
+    let _ = crate::scan_cache::with_cache(|c| {
+        c.put(
+            folder_path,
+            &cache_key.relative_path,
+            cache_key.mtime_secs,
+            cache_key.size_bytes,
+            &metadata,
+        )
+    });
 
-    let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
-    if let Some(cb) = progress {
-        cb(idx, total, &path.to_string_lossy());
-    }
-    if let Some(cb) = on_dataset {
-        cb(idx, total, &metadata);
-    }
-    Some(metadata)
+    metadata
 }
 
 fn scan_folder_blocking(
     folder_path: &str,
     settings: &FolderSettings,
+    walk_progress: Option<WalkProgressCb>,
     progress: Option<ProgressCb>,
     on_dataset: Option<DatasetCb>,
 ) -> Result<Vec<DatasetMetadata>> {
     use rayon::prelude::*;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // First pass — enumerate candidate files so the progress callback can
-    // report "current/total" counts. This costs a second walk but keeps the
-    // UX responsive, and walking is cheap relative to schema extraction.
-    //
-    // `scankit::Scanner` handles the walkdir + size-cap glue. The
-    // sery-link-specific filters (is_supported by extension list,
-    // is_excluded matching against full path / file name / path
-    // components) layer on top — scankit's own globset excludes are
-    // a narrower API than what FolderSettings.exclude_patterns can
-    // express, so we keep the existing pattern logic post-walk for now.
+    // Walk via scankit (walkdir + size cap). The sery-link-specific
+    // filters (is_supported by extension list, is_excluded matching
+    // against full path / file name / path components) layer on top —
+    // scankit's globset excludes are a narrower API than what
+    // FolderSettings.exclude_patterns can express.
     let scanner = scankit::Scanner::new(
         scankit::ScanConfig::default()
             .max_file_size_bytes(settings.max_file_size_bytes)
@@ -763,75 +858,183 @@ fn scan_folder_blocking(
         .map(|e| e.path)
         .collect();
 
-    let total = candidates.len();
+    eprintln!(
+        "[scanner] pass 1 — walking {} candidates (filename + cache lookup)",
+        candidates.len()
+    );
 
-    // No local ScanCache instance — we route every get/put through the
-    // process-wide `scan_cache::with_cache` singleton so there's only
-    // ever one DuckDB connection to scan_cache.db, regardless of how
-    // many scans / cached-read calls run concurrently. Multiple opens
-    // on the same file tripped DuckDB's internal locking and aborted
-    // the process with a foreign C++ exception.
-    eprintln!("[scanner] using shared scan cache");
+    // -----------------------------------------------------------------
+    // Pass 1 — single-threaded walk.
+    //
+    // For each candidate, decide whether the file's record is final
+    // (cache hit / shallow tier) or needs pass-2 extraction. Emit
+    // immediately so search-by-name works as soon as the row reaches
+    // the frontend.
+    //
+    // The `index/total` numbers passed to `on_dataset` during pass 1
+    // are both the running discovered-count, since the true total isn't
+    // known until the walk finishes. Frontend listeners that care about
+    // a percentage should wait for the pass-2 events (which use the
+    // accurate `pending.len()` total).
+    // -----------------------------------------------------------------
+    let mut finalised: Vec<DatasetMetadata> = Vec::new();
+    let mut pending: Vec<(
+        std::path::PathBuf,
+        DatasetMetadata,
+        crate::scan_cache::CacheKey,
+        ScanTier,
+    )> = Vec::new();
+    let mut walk_index: usize = 0;
 
-    // Atomic so parallel workers agree on progress numbering without
-    // stepping on each other. We report finishes (not starts) — with
-    // rayon a "start" order isn't meaningful.
+    for path in candidates {
+        match walk_one(&path, folder_path, settings) {
+            WalkOutcome::Skip => continue,
+            WalkOutcome::CacheHit(meta) => {
+                walk_index += 1;
+                if let Some(cb) = walk_progress.as_ref() {
+                    cb(walk_index);
+                }
+                if let Some(cb) = on_dataset.as_ref() {
+                    cb(walk_index, walk_index, &meta, DatasetPhase::Content);
+                }
+                finalised.push(meta);
+            }
+            WalkOutcome::ShallowFinal(meta) => {
+                walk_index += 1;
+                if let Some(cb) = walk_progress.as_ref() {
+                    cb(walk_index);
+                }
+                if let Some(cb) = on_dataset.as_ref() {
+                    cb(walk_index, walk_index, &meta, DatasetPhase::Content);
+                }
+                finalised.push(meta);
+            }
+            WalkOutcome::NeedsContent {
+                shallow,
+                cache_key,
+                tier,
+            } => {
+                walk_index += 1;
+                if let Some(cb) = walk_progress.as_ref() {
+                    cb(walk_index);
+                }
+                if let Some(cb) = on_dataset.as_ref() {
+                    cb(walk_index, walk_index, &shallow, DatasetPhase::Shallow);
+                }
+                pending.push((path, shallow, cache_key, tier));
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Pass 2 — content extraction. PDFs go through a dedicated serial
+    // thread (libpdfium throws FormatError on concurrent loads of
+    // different PDFs despite pdfium-render's `thread_safe` feature),
+    // everything else goes through a parallel rayon pool. The two
+    // halves run **concurrently** via `std::thread::scope` so the pool
+    // isn't starved — a folder of 30 PDFs + 10 DOCX finishes in roughly
+    // max(pdf_serial_time, docx_parallel_time) instead of the sum.
+    // -----------------------------------------------------------------
+    let pass2_total = pending.len();
+    let workers = max_scan_workers();
+
+    let (pdf_pending, other_pending): (Vec<_>, Vec<_>) =
+        pending.into_iter().partition(|(p, _, _, _)| {
+            p.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("pdf"))
+                .unwrap_or(false)
+        });
+
+    eprintln!(
+        "[scanner] pass 1 complete — {} finalised (cache hits + shallow tier), {} queued for content extraction",
+        finalised.len(),
+        pass2_total
+    );
+    eprintln!(
+        "[scanner] pass 2 — {} PDFs (serial thread, libpdfium isn't concurrent-safe) + {} other files (parallel × {} workers), running concurrently",
+        pdf_pending.len(),
+        other_pending.len(),
+        workers
+    );
+
     let done = AtomicUsize::new(0);
 
-    // Fan the per-file work out over a DEDICATED rayon pool capped at
-    // MAX_SCAN_WORKERS. We avoid the global pool on purpose — on high-core
-    // machines it defaults to num_cpus, which produced enough concurrent
-    // DuckDB connections + sidecar forks to trip the macOS per-process
-    // VM region cap and abort(). The callbacks already require Send + Sync
-    // so they're safe to call from any worker thread; Tauri's event emit
-    // is internally synchronised.
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(MAX_SCAN_WORKERS.min(num_cpus::get().max(1)))
+        .num_threads(workers)
         .thread_name(|i| format!("scanner-{}", i))
         .build()
         .map_err(|e| AgentError::FileSystem(format!("scanner pool init: {}", e)))?;
 
-    let datasets: Vec<DatasetMetadata> = pool.install(|| {
-        candidates
-            .into_par_iter()
-            .filter_map(|entry: std::path::PathBuf| {
-                // Catch Rust panics from per-file extraction so one bad
-                // file just gets logged and skipped instead of poisoning
-                // the whole scan. Note: this does NOT catch foreign (C++/
-                // Obj-C) exceptions — those still abort the process. For
-                // those we rely on MAX_SCAN_WORKERS=1 (eliminates DuckDB
-                // concurrency races) and the `extract_metadata_at_tier`
-                // error path (which already routes DuckDB `Err` results
-                // into `extract_minimal_metadata`).
-                let path_for_log = entry.clone();
-                let result = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        scan_one(
-                            &entry,
-                            folder_path,
-                            settings,
-                            &done,
-                            total,
-                            progress.as_ref(),
-                            on_dataset.as_ref(),
-                        )
-                    }),
+    // Per-entry processor used by both serial + parallel paths. We
+    // borrow `done`, `progress`, `on_dataset`, and `folder_path`
+    // through this closure so the two paths agree on progress
+    // numbering and emit through the same Tauri channel. A single
+    // `Fn` closure is cheaper than duplicating the body twice.
+    //
+    // Catches Rust panics from per-file extraction so one bad file
+    // just gets logged and we keep the shallow record. Does NOT catch
+    // foreign (C++/Obj-C) exceptions — those still abort the process.
+    let process = |entry: (
+        std::path::PathBuf,
+        DatasetMetadata,
+        crate::scan_cache::CacheKey,
+        ScanTier,
+    )|
+     -> DatasetMetadata {
+        let (path, shallow, cache_key, tier) = entry;
+        let path_for_log = path.clone();
+        let metadata = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            extract_one(&path, folder_path, &cache_key, tier, &shallow)
+        })) {
+            Ok(m) => m,
+            Err(_payload) => {
+                eprintln!(
+                    "[scanner] panic while extracting {:?} — keeping shallow record",
+                    path_for_log
                 );
-                match result {
-                    Ok(metadata) => metadata,
-                    Err(_payload) => {
-                        eprintln!(
-                            "[scanner] panic while scanning {:?} — skipping",
-                            path_for_log
-                        );
-                        None
-                    }
-                }
-            })
-            .collect()
+                shallow
+            }
+        };
+        let idx = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(idx, pass2_total, &path.to_string_lossy());
+        }
+        if let Some(cb) = on_dataset.as_ref() {
+            cb(idx, pass2_total, &metadata, DatasetPhase::Content);
+        }
+        metadata
+    };
+
+    // Run the two halves concurrently. `thread::scope` borrows the
+    // surrounding stack frame so the closure can capture local refs
+    // without `'static` bounds.
+    let mut pdf_results: Vec<DatasetMetadata> = Vec::new();
+    let mut other_results: Vec<DatasetMetadata> = Vec::new();
+    std::thread::scope(|s| {
+        let pdf_handle = s.spawn(|| {
+            pdf_pending.into_iter().map(&process).collect::<Vec<_>>()
+        });
+        other_results = pool.install(|| {
+            other_pending
+                .into_par_iter()
+                .map(&process)
+                .collect::<Vec<_>>()
+        });
+        // Unwrap is acceptable: the closure already catches per-file
+        // panics, so the only way this errors is a panic in our scaffold
+        // code (rayon plumbing, AtomicUsize) — those should crash loudly
+        // rather than silently produce a partial result.
+        pdf_results = pdf_handle.join().expect("PDF serial thread panicked");
     });
 
-    Ok(datasets)
+    finalised.extend(pdf_results);
+    finalised.extend(other_results);
+    eprintln!(
+        "[scanner] pass 2 complete — {} files in final result",
+        finalised.len()
+    );
+    Ok(finalised)
 }
 
 fn is_supported(path: &Path) -> bool {

@@ -761,6 +761,18 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // rows into view incrementally instead of waiting for the whole folder
     // to finish — important for first-time scans of large folders where
     // the wait would otherwise be minutes of empty screen.
+    let folder_for_walk = folder_path.clone();
+    let app_for_walk = app.clone();
+    let walk_progress_cb: scanner::WalkProgressCb = Box::new(move |discovered| {
+        events::emit_scan_walk_progress(
+            &app_for_walk,
+            events::ScanWalkProgress {
+                folder: folder_for_walk.clone(),
+                discovered,
+            },
+        );
+    });
+
     let folder_for_progress = folder_path.clone();
     let app_for_progress = app.clone();
     let progress_cb: scanner::ProgressCb = Box::new(move |current, total, current_file| {
@@ -777,7 +789,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
 
     let folder_for_dataset = folder_path.clone();
     let app_for_dataset = app.clone();
-    let dataset_cb: scanner::DatasetCb = Box::new(move |index, total, dataset| {
+    let dataset_cb: scanner::DatasetCb = Box::new(move |index, total, dataset, phase| {
         events::emit_dataset_scanned(
             &app_for_dataset,
             events::DatasetScanned {
@@ -785,13 +797,18 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 index,
                 total,
                 dataset: dataset.clone(),
+                phase,
             },
         );
     });
 
-    let datasets =
-        scanner::scan_folder_with_events(&folder_path, Some(progress_cb), Some(dataset_cb))
-            .await
+    let datasets = scanner::scan_folder_with_events(
+        &folder_path,
+        Some(walk_progress_cb),
+        Some(progress_cb),
+        Some(dataset_cb),
+    )
+    .await
         .map_err(|e| {
             audit::record(&folder_path, 0, 0, 0, Some(e.to_string()));
             events::emit_sync_failed(&app, &folder_path, &e.to_string());
