@@ -14,6 +14,7 @@ mod machines;
 mod history;
 mod hotkey;
 mod keyring_store;
+mod mcp;
 mod metadata_cache;
 mod relationship_detector;
 mod remote;
@@ -33,6 +34,49 @@ use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── MCP stdio mode dispatch ─────────────────────────────────
+    //
+    // When the LLM client (Claude Desktop / Cursor / Zed / …) spawns
+    // us with `--mcp-stdio --root <dir>`, we don't start the Tauri
+    // GUI at all — we hand control to `mcp::run_stdio()` which serves
+    // the same six tools exposed by the standalone `sery-mcp` binary
+    // (it's the same library underneath).
+    //
+    // Detection happens BEFORE Tauri builder so we never open an
+    // empty window or steal focus from the spawning process. The
+    // user's `mcp.json` config typically looks like:
+    //
+    //   {
+    //     "mcpServers": {
+    //       "sery": {
+    //         "command": "/Applications/Sery Link.app/.../sery-link",
+    //         "args": ["--mcp-stdio", "--root", "/Users/me/Documents"]
+    //       }
+    //     }
+    //   }
+    //
+    // For users who want only the MCP bridge without the GUI, the
+    // standalone `cargo install sery-mcp` is still the right answer.
+    let cli_args: Vec<String> = std::env::args().collect();
+    if cli_args.iter().any(|a| a == "--mcp-stdio") {
+        match mcp::parse_stdio_args(&cli_args) {
+            Some(root) => {
+                if let Err(e) = mcp::run_stdio(root) {
+                    eprintln!("sery-link MCP stdio server exited with error: {e:#}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            None => {
+                eprintln!(
+                    "--mcp-stdio requires --root <path>\n\
+                     Example: sery-link --mcp-stdio --root /Users/me/Documents"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -149,6 +193,8 @@ pub fn run() {
             commands::add_watched_folder,
             commands::add_remote_source,
             commands::remove_watched_folder,
+            commands::set_folder_mcp_enabled,
+            commands::get_mcp_snippets,
             commands::scan_folder,
             commands::search_all_folders,
             commands::profile_dataset,
