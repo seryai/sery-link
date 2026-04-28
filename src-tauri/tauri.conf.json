@@ -35,12 +35,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "../sidecar/dist/markitdown-sidecar"
-    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
+    "resources": [
+      "resources/libpdfium/*",
+      "resources/pandoc/*"
+    ],
     "createUpdaterArtifacts": true
   },
   "plugins": {

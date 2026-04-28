@@ -22,15 +22,26 @@ jobs:
           - platform: macos-14
             args: --target aarch64-apple-darwin
             label: "macOS (Apple Silicon)"
+            pdfium_target: mac-arm64
+            pandoc_target: arm64-macOS
           - platform: macos-14
             args: --target x86_64-apple-darwin
             label: "macOS (Intel)"
+            # macos-14 runners are arm64 hosts; override TARGET so we
+            # fetch the x86_64 binaries for the cross-compiled
+            # artifact rather than what auto-detect would pick.
+            pdfium_target: mac-x64
+            pandoc_target: x86_64-macOS
           - platform: ubuntu-22.04
             args: ""
             label: "Linux"
+            pdfium_target: linux-x64
+            pandoc_target: linux-amd64
           - platform: windows-latest
             args: ""
             label: "Windows"
+            pdfium_target: win-x64
+            pandoc_target: windows-x86_64
 
     runs-on: ${{ matrix.platform }}
     name: Build ${{ matrix.label }}
@@ -68,29 +79,32 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      # The Python markitdown sidecar (179 MB per platform) was
+      # replaced by the in-process `mdkit` Rust crate. See
+      # src-tauri/src/scanner.rs for the dispatch surface.
 
-      - name: Build MarkItDown sidecar
+      # Fetch libpdfium for the build target. mdkit's PDF backend
+      # loads `libpdfium.dylib` / `libpdfium.so` / `pdfium.dll` at
+      # runtime; the file is bundled into the Tauri app via
+      # `tauri.conf.json` `bundle.resources`. The committed copy in
+      # the repo is macOS arm64 (the dev team's primary target);
+      # CI overwrites it with the per-target binary before bundling.
+      - name: Fetch libpdfium
         shell: bash
-        run: |
-          cd sidecar
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python build.py
+        env:
+          TARGET: ${{ matrix.pdfium_target }}
+        run: scripts/fetch-libpdfium.sh --force
 
-      - name: Verify sidecar binary is present
+      # Same fetch pattern for pandoc — bundled into
+      # `src-tauri/resources/pandoc/` and loaded by mdkit's
+      # PandocExtractor::with_binary when system PATH discovery
+      # fails. ~150 MB per platform; user-visible bundle size
+      # tradeoff was made deliberately (correctness over size).
+      - name: Fetch pandoc
         shell: bash
-        run: |
-          cd sidecar/dist
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            ls markitdown-sidecar-*-pc-windows-msvc.exe
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            ls markitdown-sidecar-*-apple-darwin
-          else
-            ls markitdown-sidecar-*-unknown-linux-gnu
-          fi
+        env:
+          TARGET: ${{ matrix.pandoc_target }}
+        run: scripts/fetch-pandoc.sh --force
 
       - uses: tauri-apps/tauri-action@v0
         env:

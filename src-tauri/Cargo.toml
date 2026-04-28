@@ -42,7 +42,15 @@ reqwest = { version = "0.11", features = ["json"] }
 uuid = { version = "1.6", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
-walkdir = "2.4"
+# scankit wraps walkdir + size-cap + exclude-glob filtering into one
+# Scanner type — see scanner.rs for the call site. The previous code
+# was inline walkdir + ad-hoc filters, identical to v0.0 of scankit
+# pre-extraction. walkdir comes through transitively; no need for a
+# direct dep now that scanner.rs is the only consumer and watcher.rs
+# uses `notify` directly (different concerns — per-folder excludes,
+# tokio debouncing — that don't map cleanly to scankit's single-root
+# Scanner::scan).
+scankit = "0.2"
 url = "2.5"
 open = "5.0"
 hostname = "0.3"
@@ -54,6 +62,15 @@ calamine = "0.24"
 glob = "0.3"
 zip = "0.6"
 anytomd = { version = "0.1", default-features = false }
+# mdkit replaces the Python markitdown sidecar (179 MB → ~10 MB compiled
+# in). Default features cover PDF, HTML, IPYNB, plus calamine + csv (we
+# don't use those via this path — sery-link uses DuckDB for tabular —
+# but disabling them isn't worth the dep churn). `pandoc` adds DOCX /
+# PPTX / EPUB / RTF / ODT / LaTeX via a pandoc binary on PATH at
+# runtime; falls through to anytomd when pandoc isn't available.
+# `ocr-platform` enables Apple Vision (macOS) and Windows.Media.Ocr —
+# zero bundle cost, gives us scanned-PDF support for free.
+mdkit = { version = "0.7", features = ["pandoc", "ocr-platform"] }
 regex = "1.10"
 wasmer = { version = "7.1.0", features = ["cranelift"] }
 rayon = "1.10"
