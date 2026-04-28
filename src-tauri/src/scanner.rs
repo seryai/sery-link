@@ -19,9 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::io::Write;
-use walkdir::WalkDir;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -452,20 +449,168 @@ fn compile_patterns(globs: &[String]) -> Vec<Pattern> {
 /// a safe-to-parallelise call site.
 const MAX_SCAN_WORKERS: usize = 1;
 
-/// Global serialisation point for MarkItDown sidecar spawns. We saw the
-/// crash specifically when many workers forked Python processes in
-/// parallel — each one pulls in ~100 MB of interpreter + dependencies.
-/// A single mutex means at most one sidecar runs at a time; the per-doc
-/// wall-time cost is linear in file count but the process stays alive.
-/// Tabular extraction and the cheaper anytomd fallback stay parallel.
-static SIDECAR_GUARD: once_cell::sync::Lazy<std::sync::Mutex<()>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(()));
+/// Best-effort discovery of the directory carrying app-bundled
+/// runtime libraries (e.g. `libpdfium.dylib`).
+///
+/// We avoid plumbing Tauri's `AppHandle` into this module because
+/// `MDKIT_ENGINE` is a process-wide `Lazy` initialised on first use
+/// from any thread, and the scanner is sometimes invoked from places
+/// that don't have a handy `AppHandle` reference (rayon workers,
+/// background indexers). Inferring from `current_exe` is brittle but
+/// matches Tauri's bundle layout convention:
+///
+/// - **macOS production**: binary at `<App>.app/Contents/MacOS/<bin>`,
+///   resources at `<App>.app/Contents/Resources/`.
+/// - **Linux / Windows production**: binary at `<dir>/<bin>`,
+///   resources at `<dir>/resources/` (Tauri's bundler copies
+///   `tauri.conf.json` `bundle.resources` paths there).
+/// - **Debug builds (cargo run / `pnpm tauri dev`)**: nothing is
+///   bundled — the dev pseudo-resources live at
+///   `<src-tauri>/resources/`. We reach them via
+///   `CARGO_MANIFEST_DIR` (set at compile time), gated to
+///   `debug_assertions` so production builds never trust an
+///   embedded build-time path that won't exist on the user's
+///   machine.
+///
+/// Returns `None` if `current_exe` fails or no convention matches —
+/// callers should treat that as "no bundle, fall through to system
+/// search."
+fn bundled_resource_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
 
-pub(crate) fn lock_sidecar() -> std::sync::MutexGuard<'static, ()> {
-    // Poisoned lock is fine — the inner `()` has no invariants to
-    // break. Recover and move on.
-    SIDECAR_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    if cfg!(target_os = "macos") {
+        let resources = parent.parent()?.join("Resources");
+        if resources.is_dir() {
+            return Some(resources);
+        }
+    }
+
+    let next_to_binary = parent.join("resources");
+    if next_to_binary.is_dir() {
+        return Some(next_to_binary);
+    }
+
+    // Debug-only dev fallback — the path embedded by `env!` is the
+    // build host's `src-tauri/`, which only exists on developers'
+    // machines. `cfg(debug_assertions)` keeps it out of release
+    // binaries shipped to users.
+    #[cfg(debug_assertions)]
+    {
+        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
+        if dev.is_dir() {
+            return Some(dev);
+        }
+    }
+
+    None
 }
+
+/// Process-wide mdkit engine. Replaces the v0.x MarkItDown Python
+/// sidecar — see `extract_document_markdown` for the dispatch surface.
+///
+/// `mdkit` is in-process Rust; no fork-bomb risk, no ~100 MB Python
+/// interpreter per worker, no global mutex needed. The previous
+/// `SIDECAR_GUARD` mutex existed because parallel rayon workers were
+/// each forking Python and tripping `mach_vm_allocate_kernel`; that
+/// constraint is gone with mdkit and document extraction parallelises
+/// naturally with the rest of the scanner.
+///
+/// **Bundle path:** when the Tauri-bundled `Resources/libpdfium/`
+/// directory exists, we prefer it over system-wide library search.
+/// This lets shipped builds work on consumer machines without
+/// requiring the user to install libpdfium via Homebrew / apt /
+/// downloading from `bblanchon/pdfium-binaries`. On dev machines
+/// without the bundle, we fall through to
+/// `Pdfium::bind_to_system_library()` which checks
+/// `DYLD_LIBRARY_PATH` + `/usr/lib` + the system dyld cache.
+///
+/// `with_defaults_diagnostic` returns the backends that failed to
+/// register (e.g. libpdfium not on the library path, pandoc not on
+/// PATH); we log them so missing runtime deps are debuggable without
+/// reading mdkit source.
+static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Lazy::new(|| {
+    // Start from `with_defaults_diagnostic` (system search for every
+    // backend), then patch in bundled overrides for the backends
+    // that need them. Cheaper than reconstructing the whole engine
+    // by hand and keeps mdkit's default registration order intact.
+    let (mut engine, errors) = mdkit::Engine::with_defaults_diagnostic();
+    let pdf_failed = errors.iter().any(|(name, _)| *name == "pdf");
+    let pandoc_failed = errors.iter().any(|(name, _)| *name == "pandoc");
+
+    for (backend, err) in &errors {
+        eprintln!(
+            "[scanner] mdkit: backend `{backend}` failed system search: {err}"
+        );
+    }
+
+    let bundled = bundled_resource_dir();
+
+    // Bundled libpdfium override. Only attempted when the system
+    // search didn't already find it, AND the resource dir + the
+    // `libpdfium` subdirectory inside it both exist.
+    if pdf_failed {
+        if let Some(resource_dir) = bundled.as_ref() {
+            let pdfium_dir = resource_dir.join("libpdfium");
+            if pdfium_dir.is_dir() {
+                let dir_str = pdfium_dir.to_string_lossy();
+                match mdkit::pdf::PdfiumExtractor::with_library_path(&dir_str) {
+                    Ok(ext) => {
+                        engine.register(Box::new(ext));
+                        eprintln!(
+                            "[scanner] mdkit: backend `pdf` registered from bundled \
+                             libpdfium at {dir_str}"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[scanner] mdkit: bundled libpdfium at {dir_str} failed to load: {e}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Bundled pandoc override. Same shape as libpdfium: when system
+    // PATH discovery fails AND the bundled `pandoc` binary exists,
+    // construct a PandocExtractor with the explicit path. Closes the
+    // "consumer-bound app, no Homebrew" gap; without it DOCX / PPTX
+    // / EPUB / RTF / ODT / LaTeX silently fall through to the
+    // anytomd safety net (lower fidelity than Pandoc).
+    if pandoc_failed {
+        if let Some(resource_dir) = bundled.as_ref() {
+            let bin_name = if cfg!(target_os = "windows") {
+                "pandoc.exe"
+            } else {
+                "pandoc"
+            };
+            let pandoc_bin = resource_dir.join("pandoc").join(bin_name);
+            if pandoc_bin.is_file() {
+                let bin_str = pandoc_bin.to_string_lossy();
+                match mdkit::pandoc::PandocExtractor::with_binary(pandoc_bin.clone()) {
+                    Ok(ext) => {
+                        engine.register(Box::new(ext));
+                        eprintln!(
+                            "[scanner] mdkit: backend `pandoc` registered from bundled \
+                             binary at {bin_str}"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[scanner] mdkit: bundled pandoc at {bin_str} failed to verify: {e}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        eprintln!("[scanner] mdkit: all backends registered cleanly");
+    }
+    engine
+});
 
 /// Extract metadata for a single file. Split out of the parallel loop
 /// body so we can wrap the call site in `std::panic::catch_unwind` —
@@ -473,7 +618,7 @@ pub(crate) fn lock_sidecar() -> std::sync::MutexGuard<'static, ()> {
 /// file should be skipped from the final list (size cap, missing fs
 /// metadata, or total failure).
 fn scan_one(
-    entry: &walkdir::DirEntry,
+    path: &Path,
     folder_path: &str,
     settings: &FolderSettings,
     done: &std::sync::atomic::AtomicUsize,
@@ -483,7 +628,6 @@ fn scan_one(
 ) -> Option<DatasetMetadata> {
     use std::sync::atomic::Ordering;
 
-    let path = entry.path();
     let file_metadata = fs::metadata(path).ok()?;
 
     // Enforce the file size cap — oversized files are logged and
@@ -594,13 +738,29 @@ fn scan_folder_blocking(
     // First pass — enumerate candidate files so the progress callback can
     // report "current/total" counts. This costs a second walk but keeps the
     // UX responsive, and walking is cheap relative to schema extraction.
-    let candidates: Vec<_> = WalkDir::new(folder_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_supported(e.path()))
-        .filter(|e| !is_excluded(e.path(), folder_path, &settings.exclude_patterns))
+    //
+    // `scankit::Scanner` handles the walkdir + size-cap glue. The
+    // sery-link-specific filters (is_supported by extension list,
+    // is_excluded matching against full path / file name / path
+    // components) layer on top — scankit's own globset excludes are
+    // a narrower API than what FolderSettings.exclude_patterns can
+    // express, so we keep the existing pattern logic post-walk for now.
+    let scanner = scankit::Scanner::new(
+        scankit::ScanConfig::default()
+            .max_file_size_bytes(settings.max_file_size_bytes)
+            .follow_symlinks(false),
+    )
+    .map_err(|e| AgentError::FileSystem(format!("scankit init: {e}")))?;
+    let candidates: Vec<std::path::PathBuf> = scanner
+        .walk(folder_path)
+        // The local `Result` alias is `Result<T, AgentError>`, not
+        // std::result::Result, so the bare `.filter_map(Result::ok)`
+        // shorthand doesn't compile here. Closure form makes the
+        // method-resolution unambiguous.
+        .filter_map(|r| r.ok())
+        .filter(|e| is_supported(&e.path))
+        .filter(|e| !is_excluded(&e.path, folder_path, &settings.exclude_patterns))
+        .map(|e| e.path)
         .collect();
 
     let total = candidates.len();
@@ -634,7 +794,7 @@ fn scan_folder_blocking(
     let datasets: Vec<DatasetMetadata> = pool.install(|| {
         candidates
             .into_par_iter()
-            .filter_map(|entry| {
+            .filter_map(|entry: std::path::PathBuf| {
                 // Catch Rust panics from per-file extraction so one bad
                 // file just gets logged and skipped instead of poisoning
                 // the whole scan. Note: this does NOT catch foreign (C++/
@@ -643,7 +803,7 @@ fn scan_folder_blocking(
                 // concurrency races) and the `extract_metadata_at_tier`
                 // error path (which already routes DuckDB `Err` results
                 // into `extract_minimal_metadata`).
-                let path_for_log = entry.path().to_path_buf();
+                let path_for_log = entry.clone();
                 let result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| {
                         scan_one(
@@ -827,154 +987,62 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
     }
 }
 
-/// Convert a document file to markdown using the MarkItDown sidecar.
-/// Falls back to anytomd if the sidecar fails.
-/// Returns `Some(markdown)` on success, `None` on error (logged and skipped).
+/// Convert a document file to markdown using the in-process `mdkit`
+/// engine. Falls back to `anytomd` (also in-process Rust) if mdkit
+/// returns no markdown — the fallback exists because mdkit's
+/// pandoc-backed extractors return `MissingDependency` when the
+/// `pandoc` binary isn't on PATH, and we'd rather hand the user a
+/// degraded extraction than nothing at all.
+///
+/// Returns `Some(markdown)` on success, `None` on error (logged and
+/// skipped — the file still gets indexed by name + size, just without
+/// extracted content).
 fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
-    // Cap at 50 MB
+    // 50 MB cap. Anything bigger is almost certainly an LLM-spam
+    // artefact (a 200 MB DOCX is rarely useful for grounding) and
+    // pdfium / pandoc / Apple Vision all start to trip on memory
+    // limits past the 50 MB mark anyway.
     let bytes = match fs::read(file_path) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!(
-                "[scanner] failed to read document {:?}: {}",
-                file_path, e
-            );
+            eprintln!("[scanner] failed to read document {file_path:?}: {e}");
             return None;
         }
     };
-
     if bytes.len() > 50 * 1024 * 1024 {
-        eprintln!(
-            "[scanner] document {:?} exceeds 50 MB, skipping conversion",
-            file_path
-        );
+        eprintln!("[scanner] document {file_path:?} exceeds 50 MB, skipping conversion");
         return None;
     }
 
-    // Try sidecar first (MarkItDown)
-    if let Some(markdown) = try_sidecar_conversion(file_path) {
-        eprintln!("[scanner] ✅ MarkItDown sidecar converted {:?}", file_path);
-        return Some(markdown);
+    // Primary: mdkit. In-process, no fork, no mutex, parallel-safe.
+    match MDKIT_ENGINE.extract(file_path) {
+        Ok(doc) if !doc.markdown.trim().is_empty() => {
+            eprintln!("[scanner] ✅ mdkit converted {file_path:?}");
+            return Some(doc.markdown);
+        }
+        Ok(_) => {
+            eprintln!(
+                "[scanner] ⚠️ mdkit returned empty markdown for {file_path:?}, trying anytomd fallback"
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "[scanner] ⚠️ mdkit failed for {file_path:?} ({e}), trying anytomd fallback"
+            );
+        }
     }
 
-    // Fallback to anytomd (Rust-native, faster but less capable)
-    eprintln!("[scanner] ⚠️ Sidecar failed for {:?}, trying anytomd fallback", file_path);
+    // Fallback: anytomd. Lower quality (no Pandoc-class DOCX
+    // fidelity, no OCR) but pure-Rust with zero runtime deps, so
+    // it's the right safety net when mdkit's Pandoc / libpdfium
+    // dependencies aren't available on the user's system.
     match anytomd::convert_bytes(&bytes, ext, &anytomd::ConversionOptions::default()) {
         Ok(result) => {
-            eprintln!("[scanner] ✅ anytomd converted {:?}", file_path);
+            eprintln!("[scanner] ✅ anytomd converted {file_path:?}");
             Some(result.markdown)
-        },
-        Err(e) => {
-            eprintln!(
-                "[scanner] ❌ Both sidecar and anytomd failed for {:?}: {}",
-                file_path, e
-            );
-            None
-        }
-    }
-}
-
-/// Call the MarkItDown sidecar binary to convert a document.
-/// Returns `Some(markdown)` on success, `None` on failure.
-///
-/// Serialised globally via `SIDECAR_GUARD` so a parallel scan can't fork
-/// a dozen Python processes at once — each one is ~100 MB and the pile
-/// of them is what tripped `mach_vm_allocate_kernel` in the scanner crash
-/// reports. One-at-a-time is plenty given how few DOCX/PPTX files most
-/// folders contain.
-fn try_sidecar_conversion(file_path: &Path) -> Option<String> {
-    let _guard = lock_sidecar();
-
-    // Construct sidecar binary path (bundled with the app)
-    let sidecar_path = if cfg!(target_os = "macos") {
-        // macOS: sidecar is in .app/Contents/MacOS/
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar")
-    } else if cfg!(target_os = "windows") {
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar.exe")
-    } else {
-        // Linux
-        std::env::current_exe()
-            .ok()?
-            .parent()?
-            .join("markitdown-sidecar")
-    };
-
-    if !sidecar_path.exists() {
-        eprintln!("[scanner] sidecar not found at {:?}", sidecar_path);
-        return None;
-    }
-
-    // Spawn the sidecar process
-    let mut child = match Command::new(&sidecar_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[scanner] failed to spawn sidecar: {}", e);
-            return None;
-        }
-    };
-
-    // Write the file path to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        let path_str = file_path.to_string_lossy();
-        if let Err(e) = stdin.write_all(path_str.as_bytes()) {
-            eprintln!("[scanner] failed to write to sidecar stdin: {}", e);
-            return None;
-        }
-        drop(stdin); // Close stdin to signal EOF
-    }
-
-    // Read the JSON response from stdout
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("[scanner] failed to read sidecar output: {}", e);
-            return None;
-        }
-    };
-
-    if !output.status.success() {
-        eprintln!(
-            "[scanner] sidecar exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-
-    // Parse JSON response
-    #[derive(Deserialize)]
-    struct SidecarResponse {
-        success: bool,
-        markdown: Option<String>,
-        error: Option<String>,
-    }
-
-    match serde_json::from_slice::<SidecarResponse>(&output.stdout) {
-        Ok(response) => {
-            if response.success {
-                response.markdown
-            } else {
-                eprintln!(
-                    "[scanner] sidecar conversion failed: {}",
-                    response.error.unwrap_or_else(|| "unknown error".to_string())
-                );
-                None
-            }
         }
         Err(e) => {
-            eprintln!("[scanner] failed to parse sidecar JSON: {}", e);
-            eprintln!("[scanner] stdout was: {}", String::from_utf8_lossy(&output.stdout));
+            eprintln!("[scanner] ❌ Both mdkit and anytomd failed for {file_path:?}: {e}");
             None
         }
     }
