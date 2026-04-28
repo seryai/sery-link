@@ -4132,9 +4132,9 @@ checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
 name = "mdkit"
-version = "0.7.2"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c4b23ec4927dc8ffaf46474ceaf88ab99c247f9c2151ad90f3d62be9dc20dfe"
+checksum = "54efd2d9a229380d570521b92df121f8379b9d2d37b14e99379d03c2bd607925"
 dependencies = [
  "calamine 0.34.0",
  "csv",
@@ -6414,9 +6414,9 @@ dependencies = [
 
 [[package]]
 name = "scankit"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ab409c9efa1b35b23d99962fad2f2cf1f658da58f5a4a06162e5758603226c4"
+checksum = "c9fddf080177a64442f9795dab4b995efbfb792520e0eaa0255b91a685fb6ac4"
 dependencies = [
  "globset",
  "thiserror 2.0.18",
@@ -7204,9 +7204,9 @@ dependencies = [
 
 [[package]]
 name = "tabkit"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29da8e3af0e78cd25577b4da76b5ceb37938e58093e6f589ad99f1a465005a7a"
+checksum = "7659153984ee0bbd4eaa3ad1fa88082d546ed86a863c7d0d607af550de8c266c"
 dependencies = [
  "calamine 0.34.0",
  "csv",
