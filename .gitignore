@@ -28,8 +28,6 @@ dist-ssr
 *.sln
 *.sw?
 
-examples/plugins/*/target/
-
 # Bundled runtime binaries fetched via scripts/fetch-pandoc.sh.
 # Pandoc is ~180 MB per platform — too big to commit (GitHub's
 # per-file limit is 100 MB). Devs run `./scripts/fetch-pandoc.sh`

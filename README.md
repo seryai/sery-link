@@ -12,8 +12,6 @@ Cross-platform desktop app that indexes every CSV, spreadsheet, and document on 
 - 🌐 **Remote sources** — Add public HTTPS URLs or S3 objects / bucket listings (credentials stored in the OS keychain, data fetched locally — never proxied through our servers)
 - 📄 **Document support** — Convert DOCX, PPTX, HTML, PDF to Markdown via the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate (bundled libpdfium + pandoc, ~12 MB)
 - 💻 **Multiple machines** — Connect as many devices to a single workspace via workspace keys; cross-machine AI queries on Personal
-- 🧩 **Plugin system** — Extend functionality with WebAssembly plugins (5 built-in examples: CSV parser, JSON transformer, HTML viewer, clipboard utilities, text analyzer)
-- 🛒 **Plugin marketplace** — Discover, search, and install community plugins
 - ⌨️ **Keyboard-first UX** — Command Palette (Cmd+K), keyboard shortcuts, fuzzy search
 - 📜 **Query history** — Local JSONL persistence with statistics and CSV export
 - 🔒 **Privacy-first** — Raw files never leave your machines (read-only file access). Works fully offline; connecting to sery.ai for AI queries is an explicit opt-in.
@@ -49,7 +47,6 @@ pnpm tauri build
 - **Folder walking**: [`scankit`](https://crates.io/crates/scankit) — `walkdir` + size cap + exclude globs in one in-process Scanner.
 - **Tabular extraction**: [`tabkit`](https://crates.io/crates/tabkit) — Parquet / CSV / XLSX / XLS schema + sample rows + row count, in-process; DuckDB stays as a fallback for the rare format tabkit doesn't claim.
 - **Document → markdown**: [`mdkit`](https://crates.io/crates/mdkit) — bundled libpdfium for PDF, pandoc subprocess for DOCX/PPTX/EPUB/RTF/ODT/LaTeX, anytomd fallback for everything else. Fully in-process Rust; no Python interpreter, no sidecar fork.
-- **Plugin Runtime**: WebAssembly (wasmer 7.1.0) with sandboxed execution
 - **Storage**: OS-native credential manager (Keychain/Credential Manager/Secret Service)
 
 ### Supported File Types
@@ -65,38 +62,6 @@ pnpm tauri build
 - HTML (`.html`, `.htm`)
 - PDF (`.pdf`) — text-layer extraction via libpdfium; Apple Vision / Windows.Media.Ocr fallback for scanned pages
 - Jupyter Notebooks (`.ipynb`)
-
-### Plugin System
-
-Extend Sery Link with WebAssembly plugins. Plugins run in a sandboxed environment with fine-grained permissions.
-
-**Built-in Example Plugins:**
-- 📊 **CSV Parser** (2.4KB) - Parse, validate, count rows/columns
-- 🔄 **JSON Transformer** (5.7KB) - Pretty-print, minify, validate JSON
-- 📝 **HTML Viewer** (9.8KB) - Extract text, count tags, validate structure
-- 📋 **Clipboard Utility** (4.2KB) - Read, write, transform clipboard content
-- 📖 **Text Analyzer** (9.9KB) - Readability metrics, sentiment analysis, statistics
-
-**Plugin Capabilities:**
-- `data-source` - Custom file format parsers
-- `viewer` - Data renderers and visualizers
-- `transform` - Data transformations
-- `exporter` - Export to custom formats
-- `ui-component` - UI extensions
-
-**Plugin Permissions:**
-- `read-files` - Read from watched folders
-- `execute-commands` - Run external commands
-- `network` - Make HTTP requests
-- `clipboard` - Access clipboard
-
-**Plugin Location:** `~/.sery/plugins/[plugin-id]/`
-
-**Marketplace:** Discover, search, install community plugins from the app UI.
-
-See example plugins in `examples/plugins/` for development reference.
-The public community plugin directory lives at
-[seryai/serylink-releases](https://github.com/seryai/serylink-releases).
 
 ## License
 
