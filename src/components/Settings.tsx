@@ -30,11 +30,9 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
-import { PluginsPanel } from './PluginsPanel';
-import { MarketplacePanel } from './MarketplacePanel';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'plugins' | 'marketplace' | 'about';
+type Tab = 'general' | 'sync' | 'app' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
@@ -195,7 +193,7 @@ export function Settings() {
               Settings
             </h1>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              Manage your Sery Link preferences, sync behavior, and plugins.
+              Manage your Sery Link preferences and sync behavior.
             </p>
           </div>
           {dirty && (
@@ -228,12 +226,6 @@ export function Settings() {
           <TabButton active={tab === 'app'} onClick={() => setTab('app')}>
             App
           </TabButton>
-          <TabButton active={tab === 'plugins'} onClick={() => setTab('plugins')}>
-            Plugins
-          </TabButton>
-          <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')}>
-            Marketplace
-          </TabButton>
           <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
             About
           </TabButton>
@@ -245,8 +237,6 @@ export function Settings() {
         )}
         {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
         {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
-        {tab === 'plugins' && <PluginsPanel />}
-        {tab === 'marketplace' && <MarketplacePanel />}
         {tab === 'about' && (
           <AboutPanel
             draft={draft}

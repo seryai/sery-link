@@ -63,7 +63,6 @@ See [../PROJECT.md §5](../PROJECT.md) for the full tier philosophy. Workspace k
 - **Tabular extraction:** [`tabkit`](https://crates.io/crates/tabkit) — Parquet / CSV / XLSX / XLS schema + sample rows + row count, in-process. DuckDB stays as the fallback for formats tabkit doesn't claim.
 - **Document → markdown:** [`mdkit`](https://crates.io/crates/mdkit) — bundled libpdfium for PDF, pandoc subprocess for DOCX/PPTX/EPUB/RTF/ODT/LaTeX, anytomd fallback. Fully in-process Rust; no Python interpreter.
 - **File watcher:** `notify` crate (debounced 1s)
-- **Plugin Runtime:** WebAssembly (wasmer 7.1.0), sandboxed
 - **Storage:** OS-native credential manager (Keychain / Credential Manager / Secret Service), local DuckDB scan cache (`~/.sery/scan_cache.db`), JSONL for query history
 - **Packaging:** `.dmg` (mac), `.msi` (win), `.deb` + `.AppImage` (linux)
 
@@ -80,9 +79,6 @@ websocket.rs            WebSocket client for cloud tunnel
 keyring_store.rs        OS keychain wrapper for tokens
 tray.rs                 macOS/Windows system tray
 recipe_executor.rs      SQL recipe loader, parameter validation, template rendering
-plugin.rs               WebAssembly plugin lifecycle
-plugin_runtime.rs       wasmer host functions (read-files, clipboard, network)
-plugin_marketplace.rs   Search / filter / install (6 Tauri commands)
 relationship_detector.rs  Schema + query-based dataset relationship inference
 metadata_cache.rs       Local SQLite for offline search
 history.rs              Query history JSONL persistence
@@ -321,31 +317,7 @@ Both halves run **concurrently** via `std::thread::scope`. Wall time = `max(pdf_
 
 ---
 
-## 7. Plugin System (WebAssembly)
-
-### Built-in plugins (production)
-1. **CSV Parser** (2.4 KB) — parse, validate, row/column count
-2. **JSON Transformer** (5.7 KB) — pretty-print, minify, validate
-3. **HTML Viewer** (9.8 KB) — text extraction, tag counting, structure validation
-4. **Clipboard Utility** (4.2 KB) — read, write, transform
-5. **Text Analyzer** (9.9 KB) — readability, sentiment, statistics
-
-Plugins are **no_std Rust → WASM** — tiny modules, sandboxed, startup <1ms with module caching.
-
-### Capabilities (plugin manifest)
-`data-source`, `viewer`, `transform`, `exporter`, `ui-component`
-
-### Permissions
-`read-files`, `execute-commands`, `network`, `clipboard` — all path-validated, permission-gated via host functions (FunctionEnvMut pattern).
-
-### Marketplace (backend ready, UI pending)
-6 Tauri commands (load, search, featured, popular, get, install). Install sources: GitHub releases, arbitrary HTTPS, local folders. Metrics: downloads, stars, ratings, reviews. **UI frontend slated for v0.2.0 completion.**
-
-Plugin install path: `~/.sery/plugins/<plugin-id>/`.
-
----
-
-## 8. SQL Recipe Marketplace (v0.3.0 — shipped)
+## 7. SQL Recipe Marketplace (v0.3.0 — shipped)
 
 ### What a recipe is
 Pre-built SQL templates for common analytics questions. Users fill in parameters (date range, thresholds) and run — no SQL knowledge required. 530 lines Rust executor (`recipe_executor.rs`) + 8 Tauri commands.
@@ -392,7 +364,7 @@ Recipes live under the **Analytics** primary tab (promoted from Settings). Conte
 
 ---
 
-## 9. UX Direction (v0.4.0 restructure)
+## 8. UX Direction (v0.4.0 restructure)
 
 ### The workflow shift
 From implicit "figure out what to do" to explicit **Data → Analysis → Results**.
@@ -441,7 +413,7 @@ Known issues flagged for cleanup: `TEST NAV` debug button in `App.tsx:192-200` s
 
 ---
 
-## 10. Testing
+## 9. Testing
 
 ### Unit tests (Rust)
 ```bash
@@ -451,7 +423,7 @@ cargo test auth::tests::test_local_only_mode_defaults  # One
 cargo test --lib                                     # Library only
 ```
 
-Coverage: auth mode logic (9), config (10), recipe execution (3), plugins (8), and more.
+Coverage: auth mode logic (9), config (10), recipe execution (3), and more.
 
 ### mdkit / tabkit smoke test
 The kit-family crates have their own test suites; sery-link's scanner just composes them. To smoke-test the document path end-to-end:
@@ -503,7 +475,7 @@ const config = await invoke('get_config');
 
 ---
 
-## 11. Backend API Contract
+## 10. Backend API Contract
 
 Sery Link talks to the backend (`api/`) via 5 HTTP endpoints + 1 WebSocket. Full schemas and Python reference implementation live in `api/app/api/v1/`. This section is a pointer, not a duplication.
 
@@ -554,11 +526,10 @@ Agent disconnect → backend marks offline after 30s → pending queries queue i
 
 ---
 
-## 12. Strategic Roadmap
+## 11. Strategic Roadmap
 
-### v0.2.0 — Marketplace UI ✅ SHIPPED
-Frontend marketplace browser, plugin detail pages, one-click install, seed 5 plugins.
-**Deferred:** HTTP/GitHub auto-download (still manual install).
+### v0.2.0 — Plugin Marketplace UI ✅ SHIPPED (later removed in v0.5.0)
+Frontend marketplace browser, plugin detail pages, one-click install, seed 5 WebAssembly plugins. Removed in v0.5.0 — the kit-family crates (mdkit / tabkit / scankit) cover the file-extraction use case in-process and faster than WASM, making the plugin runtime + 5 demo plugins net-negative.
 
 ### v0.3.0 — SQL Recipe Marketplace ✅ SHIPPED (January 2025)
 9 recipes, parameter validation, tier gating, UI, CSV export.
@@ -566,23 +537,30 @@ Frontend marketplace browser, plugin detail pages, one-click install, seed 5 plu
 ### v0.4.0 — Three-Tier + UX Restructure ✅ SHIPPED (April 2026)
 Local Vault mode, BYOK mode, feature gating across modes, Analytics tab, "Analyze This Folder" CTA, Results rename, More dropdown.
 
-### v0.5.0 — Mobile / Windows / Linux parity [NEXT]
-- Windows + Linux builds in CI (currently macOS primary; Linux exists)
-- Mobile apps via Tauri (iOS + Android) — same WASM plugins, same recipes
-- Mobile-optimized UI (bottom sheets, swipe, offline-first)
-- **Rust BYOK agent loop** (port `api/app/services/agent/agent.py` to Rust) — unblocks offline AI
-- Custom recipe builder (AI-assisted)
-- In-app visualizations (charts)
+### v0.5.0 — Pure Rust + Two-Pass Scanner ✅ SHIPPED (April 2026)
+- Replaced the 179 MB Python markitdown sidecar with the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate.
+- Routed schema + sample extraction through [`tabkit`](https://crates.io/crates/tabkit) (in-process, no DuckDB sidecar dance).
+- Routed walking through [`scankit`](https://crates.io/crates/scankit).
+- Removed the WebAssembly plugin runtime + marketplace UI.
+- Two-pass scanner: pass 1 walks + emits shallow records (filename search instant); pass 2 extracts content (PDFs serial behind a libpdfium thread, others parallel × `(cores/2).clamp(2,8)` workers).
 
-### v0.6.0 — Self-Hosted Backend [ENTERPRISE]
+### v0.6.0 — Mobile / Windows / Linux parity [NEXT]
+- Windows + Linux builds in CI (currently macOS primary; Linux exists).
+- Mobile apps via Tauri (iOS + Android) — same kit family, same recipes.
+- Mobile-optimized UI (bottom sheets, swipe, offline-first).
+- **Rust BYOK agent loop** (port `api/app/services/agent/agent.py` to Rust) — unblocks offline AI.
+- Custom recipe builder (AI-assisted).
+- In-app visualizations (charts).
+
+### v0.7.0 — Self-Hosted Backend [ENTERPRISE]
 Docker Compose for TEAM tier, same API contract as cloud, team recipe library, audit logs. `docker-compose up` → working Sery backend <10 min.
 
 ### Pricing
 
 | Tier | Price | What's included |
 |---|---|---|
-| **FREE** | $0 | Unlimited folders, tunnel mode, 5 FREE recipes, basic metadata sync, 5 built-in plugins, local query history (last 1000) |
-| **PRO** | $15/mo | Everything FREE + all 9 recipes + cloud query execution + advanced relationship graph + priority support + community plugins + Excel export |
+| **FREE** | $0 | Unlimited folders, tunnel mode, 5 FREE recipes, basic metadata sync, local query history (last 1000) |
+| **PRO** | $15/mo | Everything FREE + all 9 recipes + cloud query execution + advanced relationship graph + priority support + Excel export |
 | **TEAM** | $50/mo (up to 10 users) | Everything PRO + shared folders + collaborative history + team recipe library + RBAC + audit logs + SSO (Google, Okta) |
 
 Note: Parent project (Sery.ai) uses a different tier structure ([../PROJECT.md §8](../PROJECT.md)). Sery Link tiers align operationally.
@@ -593,12 +571,11 @@ Note: Parent project (Sery.ai) uses a different tier structure ([../PROJECT.md �
 - 20 TEAM accounts → $10,000 MRR
 - **Total: $17,500 MRR**
 - 100 SQL recipes (50 FREE, 50 PRO)
-- 25 community plugins
 - 1st enterprise deal ($50k ARR)
 
 ---
 
-## 13. Release Process
+## 12. Release Process
 
 ### Pre-release checklist
 - [ ] Update version in `src-tauri/tauri.conf.json` + `package.json`
@@ -630,7 +607,7 @@ Build on push to `main` / `feat/*`. Matrix: macos-latest (arm64 + x86_64), windo
 
 ---
 
-## 14. Runbook & Troubleshooting
+## 13. Runbook & Troubleshooting
 
 ### Log locations
 - macOS: `~/Library/Logs/ai.sery.link/`
@@ -641,7 +618,6 @@ Build on push to `main` / `feat/*`. Matrix: macos-latest (arm64 + x86_64), windo
 - Config: `~/.seryai/config.json`
 - Metadata cache: `~/.seryai/metadata.db` (SQLite)
 - Query history: `~/.seryai/history.jsonl`
-- Plugins: `~/.sery/plugins/<id>/`
 
 ### Common issues
 
@@ -690,7 +666,7 @@ cargo run --manifest-path ../mdkit/Cargo.toml --example convert -- /path/to/prob
 
 ---
 
-## 15. File Structure Reference
+## 14. File Structure Reference
 
 ```
 sery-link/
@@ -704,10 +680,8 @@ sery-link/
 │   │   ├── RecipeExecutor.tsx    # Parameter form + execution (380 lines)
 │   │   ├── History.tsx           # Query history ("Results" in UI)
 │   │   ├── CommandPalette.tsx    # Cmd+K fuzzy search
-│   │   ├── Settings.tsx          # 6 tabs: General, Sync, App, Plugins, Marketplace, About
+│   │   ├── Settings.tsx          # 4 tabs: General, Sync, App, About
 │   │   ├── Privacy.tsx           # Sync audit log
-│   │   ├── PluginsPanel.tsx
-│   │   ├── MarketplacePanel.tsx
 │   │   ├── RelationshipGraph.tsx
 │   │   ├── StatusBar.tsx, Toast.tsx, ReAuthModal.tsx, UpgradePrompt.tsx,
 │   │   │   KeyboardShortcuts.tsx, FolderDetailModal.tsx
@@ -734,7 +708,6 @@ sery-link/
 ├── examples/
 │   └── recipes/                  # 9 recipe JSON files (5 FREE, 4 PRO)
 │
-├── marketplace.json              # Plugin marketplace seed
 ├── recipe-schema.json            # Recipe JSON schema (validation)
 │
 ├── README.md                     # User-facing README (live)
@@ -745,12 +718,11 @@ sery-link/
 
 ---
 
-## 16. Metrics to Watch
+## 15. Metrics to Watch
 
 ### Leading (user behavior)
 - Command Palette usage rate
 - Recipe search CTR
-- Plugin install rate
 - Query repeat rate
 - "Analyze This Folder" button CTR (target >40%)
 - Analytics tab engagement (target >70%)
@@ -763,7 +735,6 @@ sery-link/
 
 ### Vanity (don't optimize for)
 - Total signups (meaningless if no query run)
-- Total plugins downloaded (meaningless if unused)
 - Total recipes viewed (meaningless if not executed)
 
 ### Technical
@@ -774,7 +745,7 @@ sery-link/
 
 ---
 
-## 17. Open Questions
+## 16. Open Questions
 
 ### Product
 - Recipe authorship: curate seed set first, or open community contributions day 1?
@@ -787,14 +758,13 @@ sery-link/
 - PRO pricing A/B test ($10 vs $15 vs $20)?
 
 ### Technical
-- Recipe sandboxing: run in WASM like plugins?
 - Recipe result caching (with TTL)?
 - Mobile offline recipe caching strategy?
 - Bump pass-2 worker count higher than `(cores / 2).clamp(2, 8)` if memory headroom allows?
 
 ---
 
-## 18. Getting Help
+## 17. Getting Help
 
 - **Support:** support@sery.ai
 - **Issues:** https://github.com/seryai/sery-link/issues
