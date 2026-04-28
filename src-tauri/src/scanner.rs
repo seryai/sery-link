@@ -61,9 +61,9 @@ const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb", "
 /// - `Content`: extract markdown text but skip schema/samples. For docs where
 ///   searchable content is the whole point.
 /// - `Shallow`: record file-system facts only (path, size, mtime). Used for
-///   formats where content extraction is expensive per-file (sidecar spawn,
-///   full-document parse) and the marginal signal isn't worth the wall-time —
-///   the user can still find the file by name and locate it in Finder.
+///   formats whose content rarely justifies the wall-time of a full parse —
+///   the user can still find the file by name and locate it in their file
+///   manager.
 ///
 /// Defaults per-extension live in [`default_tier_for`]; users override via
 /// `config.sync.scan_tier_overrides`.
@@ -75,12 +75,13 @@ pub enum ScanTier {
 }
 
 /// Map an extension to the default tier. Tuned for the common case: tabular
-/// files are cheap + valuable so go Full; DOCX/PPTX are slow per-file but
-/// document content is usually the reason someone's scanning them, so Content;
-/// HTML and IPYNB are often dumped in bulk (saved pages, notebook exports)
-/// and each one pays the sidecar spawn cost for questionable value, so
-/// Shallow. An unrecognised extension falls through to Shallow — we'll still
-/// index the filename but won't waste time trying to parse it.
+/// files are cheap + valuable via tabkit so go Full; DOCX/PPTX/PDF are slow
+/// per-file (pandoc subprocess / libpdfium parse) but document content is
+/// usually the reason someone's scanning them, so Content; HTML and IPYNB are
+/// often dumped in bulk (saved pages, notebook exports) and the marginal
+/// signal rarely justifies the wall-time, so Shallow. An unrecognised
+/// extension falls through to Shallow — we'll still index the filename but
+/// won't waste time trying to parse it.
 fn default_tier_for(ext: &str) -> ScanTier {
     match ext {
         "parquet" | "csv" | "xlsx" | "xls" => ScanTier::Full,
@@ -561,15 +562,8 @@ fn bundled_resource_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Process-wide mdkit engine. Replaces the v0.x MarkItDown Python
-/// sidecar — see `extract_document_markdown` for the dispatch surface.
-///
-/// `mdkit` is in-process Rust; no fork-bomb risk, no ~100 MB Python
-/// interpreter per worker, no global mutex needed. The previous
-/// `SIDECAR_GUARD` mutex existed because parallel rayon workers were
-/// each forking Python and tripping `mach_vm_allocate_kernel`; that
-/// constraint is gone with mdkit and document extraction parallelises
-/// naturally with the rest of the scanner.
+/// Process-wide mdkit engine. In-process Rust, no subprocess fork.
+/// See `extract_document_markdown` for the dispatch surface.
 ///
 /// **Bundle path:** when the Tauri-bundled `Resources/libpdfium/`
 /// directory exists, we prefer it over system-wide library search.
@@ -1115,8 +1109,8 @@ fn extract_minimal_metadata(file_path: &Path, base_path: &str) -> Result<Dataset
 /// Tier-aware dispatcher. Callers pass in the resolved tier (from config or
 /// defaults); we route to the appropriate extraction path. A Shallow tier
 /// returns filename-only metadata without ever opening the file, which is
-/// the big win for folders full of HTML/IPYNB that would otherwise each
-/// pay a sidecar spawn.
+/// the big win for folders full of HTML/IPYNB the user doesn't actually
+/// want indexed for content.
 fn extract_metadata_at_tier(
     file_path: &Path,
     base_path: &str,
@@ -1651,8 +1645,9 @@ mod tier_tests {
 
     #[test]
     fn html_and_ipynb_default_to_shallow() {
-        // The motivating case — these were the main perf culprit because
-        // every one spawned the MarkItDown sidecar. Shallow by default.
+        // These extensions are typically dumped in bulk (saved web pages,
+        // exported notebooks) and the user rarely cares about indexed
+        // content. Shallow by default keeps the wall time honest.
         for ext in ["html", "htm", "ipynb"] {
             assert_eq!(
                 default_tier_for(ext),
