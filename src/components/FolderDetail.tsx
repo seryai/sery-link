@@ -37,8 +37,21 @@ import {
   type DatasetScannedPayload,
   type ScanComplete,
   type ScanProgress,
+  type ScanWalkProgress,
   type DatasetMetadataPayload as DatasetMetadata,
 } from '../types/events';
+
+/** Which phase of the two-pass scan we're rendering.
+ *
+ *  - `idle`: no scan running; the file list reflects the cache.
+ *  - `walking`: pass 1 in progress — running file count, no total yet.
+ *  - `extracting`: pass 2 in progress — accurate `current/total` for
+ *    files that need content extraction (cache hits + shallow-tier files
+ *    aren't counted here because they finished in pass 1). */
+type ScanState =
+  | { kind: 'idle' }
+  | { kind: 'walking'; discovered: number }
+  | { kind: 'extracting'; current: number; total: number };
 
 export function FolderDetail() {
   const { folderId } = useParams<{ folderId: string }>();
@@ -55,11 +68,7 @@ export function FolderDetail() {
   const [datasetMap, setDatasetMap] = useState<Map<string, DatasetMetadata>>(
     new Map(),
   );
-  const [scanState, setScanState] = useState<{
-    running: boolean;
-    current: number;
-    total: number;
-  }>({ running: false, current: 0, total: 0 });
+  const [scanState, setScanState] = useState<ScanState>({ kind: 'idle' });
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const initialLoadRef = useRef(false);
@@ -73,13 +82,16 @@ export function FolderDetail() {
   );
 
   const startRescan = async () => {
-    setScanState({ running: true, current: 0, total: 0 });
+    // Optimistically enter the walk phase so the UI shows *something*
+    // before the first scan_walk_progress event arrives. The first
+    // event will replace the discovered count almost immediately.
+    setScanState({ kind: 'walking', discovered: 0 });
     setError(null);
     try {
       await invoke('rescan_folder', { folderPath });
     } catch (err) {
       setError(String(err));
-      setScanState({ running: false, current: 0, total: 0 });
+      setScanState({ kind: 'idle' });
     }
   };
 
@@ -128,6 +140,25 @@ export function FolderDetail() {
     if (!folderPath) return;
     const unlisteners: Array<() => void> = [];
 
+    // Pass-1 walk progress. Drives the running discovered count.
+    // Doesn't tell us the total — the walk is still in progress when
+    // these fire — so the UI shows "Listing files: 1247 found" without
+    // a percent bar.
+    void listen<ScanWalkProgress>(EVENT_NAMES.SCAN_WALK_PROGRESS, (evt) => {
+      if (evt.payload.folder !== folderPath) return;
+      setScanState((prev) =>
+        prev.kind === 'extracting'
+          ? prev // pass 2 already started; ignore late walk events
+          : { kind: 'walking', discovered: evt.payload.discovered },
+      );
+    }).then((off) => unlisteners.push(off));
+
+    // Per-file dataset events. Both passes upsert by relative_path —
+    // shallow inserts the placeholder row, content replaces it with
+    // the hydrated record. We deliberately don't drive scanState from
+    // these events anymore; pass-1 events would otherwise fight the
+    // pass-2 progress bar (their index/total numbers are running
+    // discovery counts, not extraction percentages).
     void listen<DatasetScannedPayload>(EVENT_NAMES.DATASET_SCANNED, (evt) => {
       if (evt.payload.folder !== folderPath) return;
       const d = evt.payload.dataset;
@@ -136,17 +167,14 @@ export function FolderDetail() {
         next.set(d.relative_path, d);
         return next;
       });
-      setScanState({
-        running: true,
-        current: evt.payload.index,
-        total: evt.payload.total,
-      });
     }).then((off) => unlisteners.push(off));
 
+    // Pass-2 (content extraction) progress. First event flips the UI
+    // from "Listing files…" to "Indexing content N of T".
     void listen<ScanProgress>(EVENT_NAMES.SCAN_PROGRESS, (evt) => {
       if (evt.payload.folder !== folderPath) return;
       setScanState({
-        running: true,
+        kind: 'extracting',
         current: evt.payload.current,
         total: evt.payload.total,
       });
@@ -168,7 +196,7 @@ export function FolderDetail() {
       } catch {
         /* keep what we have */
       }
-      setScanState({ running: false, current: 0, total: 0 });
+      setScanState({ kind: 'idle' });
     }).then((off) => unlisteners.push(off));
 
     return () => {
@@ -276,13 +304,13 @@ export function FolderDetail() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={rescan}
-              disabled={scanState.running}
+              disabled={scanState.kind !== 'idle'}
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               <RefreshCw
-                className={`h-3.5 w-3.5 ${scanState.running ? 'animate-spin' : ''}`}
+                className={`h-3.5 w-3.5 ${scanState.kind !== 'idle' ? 'animate-spin' : ''}`}
               />
-              {scanState.running ? 'Scanning…' : 'Rescan'}
+              {scanState.kind !== 'idle' ? 'Scanning…' : 'Rescan'}
             </button>
             {!isRemoteUrl(folderPath) && (
               <button
@@ -316,30 +344,58 @@ export function FolderDetail() {
           )}
         </div>
 
-        {scanState.running && (
+        {scanState.kind !== 'idle' && (
           <div className="mt-3 rounded-md border border-purple-200 bg-purple-50 p-3 text-xs text-purple-800 dark:border-purple-900 dark:bg-purple-950/40 dark:text-purple-200">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {scanState.total > 0
-                  ? `Scanning ${scanState.current} of ${scanState.total}`
-                  : 'Scanning folder…'}
-              </span>
-              {scanState.total > 0 && (
-                <span>
-                  {Math.round((scanState.current / scanState.total) * 100)}%
+            {scanState.kind === 'walking' && (
+              // Pass 1: file list is filling in. Total isn't known yet,
+              // so no percent bar — just the running count. Files in
+              // the list below are already searchable by name even
+              // while this indicator is up.
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Listing files
                 </span>
-              )}
-            </div>
-            {scanState.total > 0 && (
-              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-purple-200 dark:bg-purple-900">
-                <div
-                  className="h-full rounded-full bg-purple-600 transition-all duration-300"
-                  style={{
-                    width: `${Math.max(2, (scanState.current / scanState.total) * 100)}%`,
-                  }}
-                />
+                <span>
+                  {scanState.discovered === 0
+                    ? '…'
+                    : `${scanState.discovered} found`}
+                </span>
               </div>
+            )}
+            {scanState.kind === 'extracting' && (
+              // Pass 2: schema/markdown extraction. Total here counts
+              // ONLY files that need extraction (cache misses on
+              // content/full tier) — cache hits and shallow files
+              // already finished in pass 1.
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {scanState.total > 0
+                      ? `Indexing content ${scanState.current} of ${scanState.total}`
+                      : 'Indexing content…'}
+                  </span>
+                  {scanState.total > 0 && (
+                    <span>
+                      {Math.round(
+                        (scanState.current / scanState.total) * 100,
+                      )}
+                      %
+                    </span>
+                  )}
+                </div>
+                {scanState.total > 0 && (
+                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-purple-200 dark:bg-purple-900">
+                    <div
+                      className="h-full rounded-full bg-purple-600 transition-all duration-300"
+                      style={{
+                        width: `${Math.max(2, (scanState.current / scanState.total) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -353,7 +409,7 @@ export function FolderDetail() {
 
       <VirtualizedDatasetList
         filtered={filtered}
-        scanRunning={scanState.running}
+        scanRunning={scanState.kind !== 'idle'}
         search={search}
         folderPath={folderPath}
       />
