@@ -28,10 +28,6 @@ dist-ssr
 *.sln
 *.sw?
 
-# Sidecar build artifacts (PyInstaller)
-sidecar/build/
-sidecar/dist/
-sidecar/*.spec
 examples/plugins/*/target/
 
 # Bundled runtime binaries fetched via scripts/fetch-pandoc.sh.

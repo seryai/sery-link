@@ -14,7 +14,7 @@ To remove the "Login Wall" and build instant trust, we adopt a tiered approach t
 *   **Capabilities:**
     *   **Local Vault:** Browse file tree, see schemas, and preview data (first 100 rows).
     *   **Zero-ETL Indexer:** Background worker converts CSV/Parquet/Excel to local DuckDB views.
-    *   **MarkItDown:** Parse PDFs, DOCX, and PPTX into searchable Markdown/Text in DuckDB.
+    *   **mdkit:** Parse PDFs, DOCX, and PPTX into searchable Markdown/Text in DuckDB.
     *   **Local Search:** Instant fuzzy search across filenames and column names (powered by local DuckDB).
     *   **SQL Workbench:** Run raw SQL queries against local files without any cloud roundtrip.
 
@@ -63,7 +63,7 @@ To achieve this without a full Swift/C# rewrite, we leverage the **Tauri + Rust*
 *   **Responsibility:**
     *   Watch folders for changes.
     *   Manage the persistent **Local DuckDB Index**.
-    *   Run `MarkItDown` workers for unstructured data.
+    *   Run `mdkit` workers for unstructured data.
     *   Maintain the WebSocket Tunnel for Tier 2/3 users.
 *   **Benefit:** Indexing happens even when the UI window is closed.
 
@@ -89,7 +89,7 @@ To achieve this without a full Swift/C# rewrite, we leverage the **Tauri + Rust*
 ### Phase 2: The Speed Phase (3-4 Weeks)
 - [ ] **Cmd+K Palette:** Build the lightweight search overlay in Tauri.
 - [ ] **Fuzzy Search:** Connect the palette to DuckDB's `PRAGMA word_similarity`.
-- [ ] **MarkItDown Worker:** Auto-convert dropped PDFs to searchable text.
+- [ ] **mdkit Worker:** Auto-convert dropped PDFs to searchable text.
 
 ### Phase 3: The Ecosystem Phase (2+ Months)
 - [ ] **MCP Server Support:** Allow local plugins (Postgres, Slack) via MCP.

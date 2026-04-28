@@ -58,10 +58,13 @@ See [../PROJECT.md §5](../PROJECT.md) for the full tier philosophy. Workspace k
 
 ### Stack
 - **Frontend:** React 19 + TypeScript + Tailwind CSS + Vite, Zustand stores
-- **Backend:** Rust (Tauri 2.0), DuckDB 0.10+ with calamine (Excel), `notify` crate file watcher, `tokio-tungstenite` WebSocket
-- **Document Processing:** MarkItDown sidecar (PyInstaller-bundled Python binary, ~180 MB)
+- **Backend:** Rust (Tauri 2.0), `tokio-tungstenite` WebSocket
+- **Folder walking:** [`scankit`](https://crates.io/crates/scankit) — `walkdir` + size cap + exclude globs in one in-process Scanner
+- **Tabular extraction:** [`tabkit`](https://crates.io/crates/tabkit) — Parquet / CSV / XLSX / XLS schema + sample rows + row count, in-process. DuckDB stays as the fallback for formats tabkit doesn't claim.
+- **Document → markdown:** [`mdkit`](https://crates.io/crates/mdkit) — bundled libpdfium for PDF, pandoc subprocess for DOCX/PPTX/EPUB/RTF/ODT/LaTeX, anytomd fallback. Fully in-process Rust; no Python interpreter.
+- **File watcher:** `notify` crate (debounced 1s)
 - **Plugin Runtime:** WebAssembly (wasmer 7.1.0), sandboxed
-- **Storage:** OS-native credential manager (Keychain / Credential Manager / Secret Service), local SQLite for metadata cache, JSONL for query history
+- **Storage:** OS-native credential manager (Keychain / Credential Manager / Secret Service), local DuckDB scan cache (`~/.sery/scan_cache.db`), JSONL for query history
 - **Packaging:** `.dmg` (mac), `.msi` (win), `.deb` + `.AppImage` (linux)
 
 ### Components (src-tauri/src/)
@@ -70,7 +73,7 @@ See [../PROJECT.md §5](../PROJECT.md) for the full tier philosophy. Workspace k
 auth.rs                 OAuth loopback + auth mode detection (LocalOnly / BYOK / WorkspaceKey)
 commands.rs             All Tauri RPC commands (add_folder, rescan, execute_recipe, etc.)
 config.rs               Config schema + persistence (~/.seryai/config.json)
-scanner.rs              File scanning + sidecar integration + schema extraction
+scanner.rs              Two-pass scan: scankit walk → mdkit/tabkit extract (PDFs serial, others parallel)
 watcher.rs              notify-based file watcher (debounced 1s)
 duckdb_engine.rs        Local query execution
 websocket.rs            WebSocket client for cloud tunnel
@@ -93,23 +96,24 @@ stats.rs                Usage statistics
 ### System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Sery Link (Tauri Desktop App)                              │
-│                                                             │
-│  ┌──────────────┐         ┌──────────────────────────┐     │
-│  │ File Watcher │────────▶│  scanner.rs              │     │
-│  │ (notify)     │  event  │  - extract_metadata()    │     │
-│  └──────────────┘         │  - try_sidecar_conversion()    │
-│                           └───────────┬──────────────┘     │
-│                                       │ stdin/stdout       │
-│                                       ▼                    │
-│                           ┌──────────────────────────┐     │
-│                           │ markitdown-sidecar       │     │
-│                           │ (PyInstaller bundle)     │     │
-│                           │ • Python 3.11            │     │
-│                           │ • MarkItDown + magika    │     │
-│                           └──────────────────────────┘     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  Sery Link (Tauri Desktop App)                                       │
+│                                                                      │
+│  ┌──────────────┐         ┌────────────────────────────────────┐     │
+│  │ File Watcher │────────▶│  scanner.rs (two-pass)             │     │
+│  │ (notify)     │  event  │                                    │     │
+│  └──────────────┘         │  Pass 1: scankit::Scanner.walk()   │     │
+│                           │   → emit shallow DatasetMetadata   │     │
+│                           │                                    │     │
+│                           │  Pass 2: extract_one() per file    │     │
+│                           │   ├─ PDF   → mdkit (libpdfium)     │     │
+│                           │   │          serial thread         │     │
+│                           │   ├─ DOCX  → mdkit (pandoc subproc)│     │
+│                           │   ├─ HTML  → mdkit (html2md)       │     │
+│                           │   └─ tabular → tabkit (in-process) │     │
+│                           │     ↑ both run on rayon pool ×N    │     │
+│                           └────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼ WebSocket (TLS)
                           ┌──────────────────────────┐
@@ -141,15 +145,19 @@ Feature gating uses `useFeatureGate('pro_recipes')` hook on the frontend which c
 
 ## 4. Supported File Types
 
-**Tabular (DuckDB):**
+**Tabular (tabkit fast path, DuckDB fallback):**
 - Parquet (`.parquet`, `.pq`) — best performance
 - CSV (`.csv`, `.tsv`) — auto-detect delimiters
-- Excel (`.xlsx`, `.xls`) — via calamine extension, reads all sheets
+- Excel (`.xlsx`, `.xls`) — via calamine, reads all sheets
 
-**Documents (MarkItDown sidecar → Markdown):**
-- Word (`.docx`), PowerPoint (`.pptx`), HTML (`.html`, `.htm`), PDF (`.pdf`), Jupyter (`.ipynb`)
+**Documents (mdkit → Markdown):**
+- Word (`.docx`), PowerPoint (`.pptx`) — pandoc subprocess (bundled binary)
+- PDF (`.pdf`) — libpdfium text layer; Apple Vision / Windows.Media.Ocr fallback for scanned pages
+- HTML (`.html`, `.htm`) — html2md
+- Jupyter (`.ipynb`) — serde_json
+- mdkit also handles EPUB / RTF / ODT / LaTeX via pandoc when the user adds them to a watched folder
 
-Scanner tries MarkItDown sidecar first; falls back to Rust-native `anytomd` if sidecar fails.
+Scanner falls back to the Rust-native `anytomd` crate if mdkit returns an error for a given format.
 
 ---
 
@@ -161,21 +169,21 @@ Scanner tries MarkItDown sidecar first; falls back to Rust-native `anytomd` if s
 node --version        # 18+ (22 LTS recommended)
 pnpm --version        # 9+
 cargo --version       # 1.88+
-python3 --version     # 3.11+ (for sidecar build)
 ```
+
+No Python required — mdkit replaced the old PyInstaller sidecar.
 
 ### First-time setup
 
 ```bash
 pnpm install
 
-# Build the MarkItDown sidecar (one-time, ~2-3 min)
-cd sidecar
-python3 build.py
-cd ..
+# Fetch bundled runtime binaries (libpdfium ~7 MB, pandoc ~180 MB).
+# Pandoc is gitignored because it exceeds GitHub's per-file 100 MB cap;
+# devs run this once per clone, CI runs it as a release-workflow step.
+./scripts/fetch-libpdfium.sh
+./scripts/fetch-pandoc.sh
 ```
-
-Sidecar output: `sidecar/dist/markitdown-sidecar-<triple>` (~180 MB) with generic symlink `markitdown-sidecar`.
 
 ### Development
 
@@ -201,7 +209,8 @@ pnpm tauri build --target aarch64-apple-darwin    # or x86_64-apple-darwin
 **Windows:**
 ```bash
 # Pre-req: WebView2 runtime installed
-cd sidecar && python build.py    # Creates markitdown-sidecar-x86_64-pc-windows-msvc.exe
+./scripts/fetch-libpdfium.sh    # fetches per-target libpdfium.dll
+./scripts/fetch-pandoc.sh       # fetches pandoc.exe for the build target
 pnpm tauri build
 # → src-tauri/target/release/bundle/msi/Sery Link_<v>_x64_en-US.msi
 ```
@@ -210,14 +219,15 @@ pnpm tauri build
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
   libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-cd sidecar && python3 build.py
+./scripts/fetch-libpdfium.sh
+./scripts/fetch-pandoc.sh
 pnpm tauri build
 # → src-tauri/target/release/bundle/deb/sery-link_<v>_amd64.deb
 # → src-tauri/target/release/bundle/appimage/sery-link_<v>_amd64.AppImage
 ```
 
 ### Installed size
-~10 MB main binary + ~180 MB sidecar = ~200 MB installed. Compressed installers ~60–80 MB.
+~12 MB main binary (mdkit + tabkit + scankit compiled in) + ~7 MB libpdfium + ~180 MB pandoc = ~200 MB installed. Compressed installers ~60–80 MB. Pandoc dominates; mdkit's `pandoc` feature is the only reason we ship it (DOCX / PPTX / EPUB / RTF / ODT / LaTeX → markdown). Without pandoc the whole bundle drops to ~25 MB at the cost of those formats falling back to anytomd's lower-fidelity output.
 
 ### Env vars (dev)
 ```bash
@@ -229,73 +239,85 @@ export API_URL=http://localhost:8000  # Backend URL (prod: https://api.sery.ai)
 
 ---
 
-## 6. Sidecar Architecture (MarkItDown)
+## 6. Kit-family Architecture (mdkit / tabkit / scankit)
 
-### Why a sidecar
-Sery Link is Rust; MarkItDown is Python. We bundle a PyInstaller-compiled Python worker inside the app so users don't need Python. The sidecar runs sandboxed (inherits agent's read-only perms), spawns on demand, exits after conversion.
+Three sibling crates were extracted from sery-link's scanner during the v0.5.0 cycle and published to crates.io. They replaced the old MarkItDown Python sidecar (179 MB PyInstaller bundle, slow subprocess spawn, missing-deps headaches) with in-process Rust.
 
-### Sidecar files
+### Why kits
+1. **No Python interpreter shipping with the app.** Users don't install Python; we don't ship one. Bundle drops from ~200 MB sidecar to ~12 MB compiled Rust + ~180 MB pandoc binary that's optional.
+2. **No subprocess spawn per file.** Each conversion is an in-process function call. Pass-2 parallelism becomes meaningful — see scanner.rs comments for the libpdfium serialisation gotcha.
+3. **Reusable across Tauri / Iced / native desktop apps.** Anyone building "index files on the user's machine" can pull these in.
+4. **Stable APIs documented per crate.** `#[non_exhaustive]` on every public type so we can grow them without major-version churn.
+
+### The three kits
+
+| Crate | Job | Used by sery-link for |
+|---|---|---|
+| [`scankit`](https://crates.io/crates/scankit) | Walk + filter + emit ScanEntry | Pass 1 of the scan (the "what files exist" iterator) |
+| [`tabkit`](https://crates.io/crates/tabkit) | Tabular file → schema + sample rows + row count | `extract_schema()` fast path; DuckDB stays as the fallback |
+| [`mdkit`](https://crates.io/crates/mdkit) | Document file → markdown | `extract_document_markdown()`; PDF/DOCX/PPTX/HTML/IPYNB |
+
+### Bundled runtime binaries
+
+mdkit's PDF backend depends on libpdfium (C++ library, ~7 MB per platform). The pandoc backend depends on the `pandoc` binary (~45 MB compressed, ~180 MB on disk per platform).
+
+`tauri.conf.json` `bundle.resources` ships:
 ```
-sidecar/
-├── markitdown_worker.py        # stdin: file path; stdout: JSON {success, markdown, error}
-├── requirements.txt            # markitdown[all]>=0.0.1
-├── build.py                    # PyInstaller build script
-├── markitdown-sidecar.spec     # PyInstaller config (bundles magika models)
-├── dist/
-│   ├── markitdown-sidecar               # Generic symlink
-│   └── markitdown-sidecar-<triple>      # ~180 MB standalone binary
-└── test-integration.sh         # Integration test
+src-tauri/resources/libpdfium/libpdfium.{dylib,so,dll}
+src-tauri/resources/pandoc/pandoc{,.exe}
 ```
 
-### Tauri bundling (`src-tauri/tauri.conf.json`)
+`scripts/fetch-libpdfium.sh` and `scripts/fetch-pandoc.sh` fetch the per-target binary into those folders. The pandoc binary is gitignored (per-file 100 MB cap on GitHub); CI runs the fetch script as a release-workflow step. libpdfium is small enough to commit for the dev macOS arm64 path; CI fetches per-target on release builds.
 
-```json
-{
-  "bundle": {
-    "externalBin": ["../sidecar/dist/markitdown-sidecar"]
-  }
-}
-```
-
-Tauri resolves the platform-specific binary name at build time and places it next to the main executable. Users see one app — the sidecar is invisible.
+`scanner.rs` resolves these at runtime via `bundled_resource_dir()` → `MDKIT_ENGINE` constructs `PdfiumExtractor::with_library_path(...)` and `PandocExtractor::with_binary(...)` from those paths.
 
 ### Rust integration (scanner.rs)
 
 ```rust
-fn try_sidecar_conversion(file_path: &Path) -> Option<String> {
-    let sidecar_path = std::env::current_exe().ok()?.parent()?.join("markitdown-sidecar");
-    let mut child = Command::new(&sidecar_path)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().ok()?;
-    child.stdin.as_mut()?.write_all(file_path.to_string_lossy().as_bytes()).ok()?;
-    let output = child.wait_with_output().ok()?;
-    let response: SidecarResponse = serde_json::from_slice(&output.stdout).ok()?;
-    response.markdown
-}
+static MDKIT_ENGINE: Lazy<mdkit::Engine> = Lazy::new(|| {
+    let (mut engine, errors) = mdkit::Engine::with_defaults_diagnostic();
+    // ... patch in bundled libpdfium + pandoc paths if system search failed ...
+    engine
+});
+
+static TABKIT_ENGINE: Lazy<tabkit::Engine> = Lazy::new(tabkit::Engine::with_defaults);
 
 fn extract_document_markdown(file_path: &Path, ext: &str) -> Option<String> {
-    // Try sidecar first (MarkItDown — full DOCX/PPTX/PDF)
-    if let Some(md) = try_sidecar_conversion(file_path) { return Some(md); }
-    // Fallback: Rust-native anytomd (faster, less capable)
-    anytomd::convert_bytes(&bytes, ext, &default()).ok().map(|r| r.markdown)
+    let bytes = fs::read(file_path).ok()?;
+    match MDKIT_ENGINE.extract_bytes(&bytes, ext) {
+        Ok(doc) => Some(doc.markdown),
+        Err(_) => anytomd::convert_bytes(&bytes, ext, &Default::default())
+            .ok().map(|r| r.markdown),
+    }
 }
 ```
 
 ### Conversion performance
-| Format | Avg size | Time |
-|---|---|---|
-| DOCX | 50 KB | ~200–500 ms |
-| PPTX | 2 MB | ~500 ms–2 s |
-| HTML | 100 KB | ~100 ms |
-| PDF | 1 MB | ~800 ms–3 s |
-| IPYNB | 500 KB | ~150 ms |
+| Format | Avg size | Time | Backend |
+|---|---|---|---|
+| DOCX | 50 KB | ~200–800 ms | pandoc subprocess |
+| PPTX | 2 MB | ~500 ms–2 s | pandoc subprocess |
+| HTML | 100 KB | ~10–50 ms | html2md (in-process) |
+| PDF (text) | 1 MB | ~100–500 ms | libpdfium (in-process) |
+| PDF (scanned) | 1 MB | ~2–10 s/page | Apple Vision / Windows.Media.Ocr |
+| IPYNB | 500 KB | ~10 ms | serde_json (in-process) |
+| Tabular (CSV / XLSX / Parquet) | varies | ~50–500 ms | tabkit (in-process) |
 
-Bottleneck: subprocess spawn (~100 ms). Future optimization ideas (not required for MVP): daemon mode, batch processing, markdown cache.
+The dominant cost is now PDF text extraction; DOCX dropped from ~500 ms (sidecar spawn floor) to ~200 ms (pandoc spawn). HTML / IPYNB are essentially free.
 
-### Sidecar troubleshooting
-- **"Sidecar binary not found":** rebuild with `cd sidecar && python3 build.py`
-- **"Conversion failed":** check file < 50 MB, format supported (DOCX/PPTX/HTML/PDF/IPYNB)
-- **"magika data files missing":** `rm -rf build/ dist/ venv/ && python3 build.py` (full clean rebuild)
-- **"Pandas 3.x: Data type 'str' not recognized":** fixed — scanner uses PyArrow tables, not DataFrames
+### Pass 2 threading
+
+libpdfium throws `PdfiumLibraryInternalError(FormatError)` on concurrent loads of *different* PDFs despite pdfium-render's `thread_safe` feature. `scan_folder_blocking` partitions the pass-2 work queue:
+
+- **PDFs** → dedicated serial thread (1 file at a time)
+- **Other formats** → rayon pool sized by `max_scan_workers()` (default `(num_cpus / 2).clamp(2, 8)`)
+
+Both halves run **concurrently** via `std::thread::scope`. Wall time = `max(pdf_serial_time, other_parallel_time)`. The `SERY_SCAN_WORKERS` env var overrides the worker count if instability appears.
+
+### Troubleshooting
+- **"libpdfium not found":** run `./scripts/fetch-libpdfium.sh` (or install via Homebrew on macOS dev machines).
+- **"pandoc binary not found":** run `./scripts/fetch-pandoc.sh`. mdkit will silently fall through to anytomd for DOCX/PPTX/EPUB without it.
+- **PDF FormatError on parallel scans:** shouldn't happen since the partition lands in main; if it does, set `SERY_SCAN_WORKERS=1` and file an issue.
 
 ---
 
@@ -431,18 +453,19 @@ cargo test --lib                                     # Library only
 
 Coverage: auth mode logic (9), config (10), recipe execution (3), plugins (8), and more.
 
-### Sidecar integration test
+### mdkit / tabkit smoke test
+The kit-family crates have their own test suites; sery-link's scanner just composes them. To smoke-test the document path end-to-end:
+
 ```bash
-cd sidecar
-./test-integration.sh
-# Verifies: binary found, direct conversion works, Tauri build succeeds, sidecar bundled
+# Drop a sample DOCX / PDF / XLSX into a watched folder and run dev.
+pnpm tauri dev
+# Click Rescan in FolderDetail; watch terminal for:
+#   [scanner] pass 2 — N PDFs (serial …) + M others (parallel × W workers)
+#   [scanner] ✅ mdkit converted "..."
+#   [scanner] ✓ "..."
 ```
 
-### Manual sidecar test
-```bash
-echo "/path/to/file.docx" | sidecar/dist/markitdown-sidecar | python3 -m json.tool
-# Expected: {"success": true, "markdown": "...", "error": null}
-```
+If a backend is misconfigured (e.g. libpdfium not on the library path), `MDKIT_ENGINE` logs the failed backend name on first init: `[scanner] mdkit: backend 'pdf' failed system search: ...`.
 
 ### E2E dev flow
 1. `cargo test && cd .. && pnpm tauri dev`
@@ -579,7 +602,7 @@ Note: Parent project (Sery.ai) uses a different tier structure ([../PROJECT.md �
 
 ### Pre-release checklist
 - [ ] Update version in `src-tauri/tauri.conf.json` + `package.json`
-- [ ] Rebuild sidecar: `cd sidecar && python3 build.py`
+- [ ] Fetch bundled binaries: `./scripts/fetch-libpdfium.sh && ./scripts/fetch-pandoc.sh`
 - [ ] Test document conversion: DOCX, PPTX, HTML, PDF, IPYNB
 - [ ] Test OAuth flow end-to-end
 - [ ] Test WebSocket tunnel connection + reconnect
@@ -588,15 +611,15 @@ Note: Parent project (Sery.ai) uses a different tier structure ([../PROJECT.md �
 - [ ] `pnpm build` — no TS errors
 - [ ] Production build: `pnpm tauri build`
 - [ ] Install on clean machine — verify onboarding + first query < 60s
-- [ ] Check sidecar bundled (inspect `.app` / `.exe` / AppImage contents)
+- [ ] Check libpdfium + pandoc bundled (inspect `.app` / `.exe` / AppImage contents)
 - [ ] Update CHANGELOG.md
 - [ ] `git tag -a v0.x.0 -m "Release …" && git push origin v0.x.0`
 
 ### CI (GitHub Actions)
-Build on push to `main` / `feat/*`. Matrix: macos-latest, windows-latest, ubuntu-latest. Steps:
+Build on push to `main` / `feat/*`. Matrix: macos-latest (arm64 + x86_64), windows-latest, ubuntu-latest. Steps:
 1. Checkout, setup Node 22, setup Rust stable, install pnpm
 2. `pnpm install`
-3. `cd sidecar && python3 build.py` (platform-specific binary)
+3. `./scripts/fetch-libpdfium.sh <pdfium_target>` and `./scripts/fetch-pandoc.sh <pandoc_target>`
 4. `pnpm tauri build` (universal for macOS, native for win/linux)
 5. Upload artifacts (DMG / MSI / deb / AppImage)
 
@@ -633,24 +656,26 @@ Build on push to `main` / `feat/*`. Matrix: macos-latest, windows-latest, ubuntu
 | App slow / unresponsive | Large query OR scan OR too many folders | Wait for current op; reduce watched folders; exclude `node_modules` |
 | WebSocket won't connect | Backend down OR firewall OR expired token | `curl /health`; allow in firewall; re-auth in Settings |
 | Rust compilation fails (Linux) | Missing `libwebkit2gtk-4.1-dev` | Install system deps (§5 Linux) |
-| "PyInstaller: magika not found" | Incomplete sidecar build | `rm -rf sidecar/build sidecar/dist sidecar/venv && python3 build.py` |
-| "Tauri build: resource path doesn't exist" | Platform binary missing | Rebuild sidecar on target platform |
+| mdkit "backend `pdf` failed system search" | libpdfium not installed | `./scripts/fetch-libpdfium.sh` (or `brew install pdfium-binaries` on macOS) |
+| mdkit DOCX falls through to anytomd (low fidelity) | pandoc not on PATH or not bundled | `./scripts/fetch-pandoc.sh` |
+| "Tauri build: resource path doesn't exist" | libpdfium / pandoc missing in `src-tauri/resources/` | Run the fetch scripts before `pnpm tauri build` |
 
 ### Debugging checklist
 
 ```bash
 # 1. Verbose logs
 RUST_LOG=debug pnpm tauri dev
-# Look for: "Detected document file:", "Trying sidecar conversion...", "Sidecar conversion successful: X chars"
+# Look for: "[scanner] pass 1 — walking …", "[scanner] ▶ <file> tier=Content",
+#           "[scanner] ✅ mdkit converted …", "[scanner] mdkit: backend X failed …"
 
 # 2. Check keychain
 security find-generic-password -s "com.sery.link" -a "access_token"
 
-# 3. Inspect metadata DB
-sqlite3 ~/.seryai/metadata.db ".tables" ".schema datasets" "SELECT COUNT(*) FROM datasets;"
+# 3. Inspect scan cache
+duckdb ~/.sery/scan_cache.db "SELECT COUNT(*) FROM scan_cache;"
 
-# 4. Test sidecar directly
-echo "/path/to/problem.docx" | sidecar/dist/markitdown-sidecar
+# 4. Test mdkit directly (cargo example from the mdkit repo)
+cargo run --manifest-path ../mdkit/Cargo.toml --example convert -- /path/to/problem.docx
 
 # 5. Check OAuth callback
 # Should see: "OAuth callback server listening on 127.0.0.1:7777"
@@ -696,16 +721,15 @@ sery-link/
 │
 ├── src-tauri/
 │   ├── src/                      # Rust backend (see §3 component list)
-│   ├── tauri.conf.json           # Sidecar bundling, window config, permissions
+│   ├── resources/                # Bundled runtime binaries
+│   │   ├── libpdfium/            # libpdfium.{dylib,so,dll} per platform
+│   │   └── pandoc/               # pandoc binary per platform (gitignored, fetched)
+│   ├── tauri.conf.json           # bundle.resources, window config, permissions
 │   └── Cargo.toml
 │
-├── sidecar/                      # MarkItDown document processor
-│   ├── markitdown_worker.py
-│   ├── build.py
-│   ├── requirements.txt
-│   ├── markitdown-sidecar.spec
-│   ├── dist/                     # Build output (~180 MB)
-│   └── test-integration.sh
+├── scripts/
+│   ├── fetch-libpdfium.sh        # per-target libpdfium fetcher
+│   └── fetch-pandoc.sh           # per-target pandoc fetcher
 │
 ├── examples/
 │   └── recipes/                  # 9 recipe JSON files (5 FREE, 4 PRO)
@@ -744,8 +768,8 @@ sery-link/
 
 ### Technical
 - Time to first query (target <60s from install)
-- Cache hit rate (target 30%)
-- Sidecar conversion success rate
+- Scan cache hit rate (target 30%)
+- mdkit conversion success rate per format
 - WebSocket reconnect rate
 
 ---
@@ -766,7 +790,7 @@ sery-link/
 - Recipe sandboxing: run in WASM like plugins?
 - Recipe result caching (with TTL)?
 - Mobile offline recipe caching strategy?
-- Keep sidecar daemon alive to eliminate spawn overhead?
+- Bump pass-2 worker count higher than `(cores / 2).clamp(2, 8)` if memory headroom allows?
 
 ---
 

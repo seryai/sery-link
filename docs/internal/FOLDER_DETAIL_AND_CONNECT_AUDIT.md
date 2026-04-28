@@ -15,39 +15,11 @@ Audited 2026-04-23.
 
 ## FolderDetail findings
 
-### 🔴 F1 — PDF support is promised but not implemented
+### 🟢 F1 — PDF support — RESOLVED in v0.5.0
 
-**Where**:
-- `src-tauri/src/scanner.rs:58` — `DOCUMENT_EXTENSIONS = &["docx", "pptx", "html", "htm", "ipynb"]`
-- `src/components/FolderDetail.tsx:522` — same set, missing pdf
-- `sery-link/README.md` — claims PDF support via MarkItDown sidecar
-- `datalake/LAUNCH_ASSETS/*` — multiple launch drafts mention PDF
+PDF was added to `DOCUMENT_EXTENSIONS` in scanner.rs and `DOCUMENT_FORMATS` in FolderDetail.tsx during the v0.5.0 cycle. PDF text-layer extraction now goes through mdkit's libpdfium backend (in-process Rust); scanned / image-only PDFs fall through to Apple Vision (macOS) or Windows.Media.Ocr via mdkit's `ocr-platform` feature. README + LAUNCH_ASSETS PDF claims are now accurate.
 
-**The mismatch**: every piece of marketing copy claims PDF support
-("your tax PDFs, old reports, client folders"). The scanner's
-`DOCUMENT_EXTENSIONS` list doesn't include `pdf`, so PDF files fall
-through to the tabular path. They either get skipped entirely or
-fail silently with a DuckDB parse error.
-
-**Two possible fixes:**
-
-1. **Add PDF to the supported list.** `DOCUMENT_EXTENSIONS` gets
-   `pdf`; `FolderDetail.tsx:522` gets `pdf` in its DOCUMENT_FORMATS
-   set; the empty-state message (line 411) mentions pdf; tests in
-   `scanner.rs:1275` get `pdf` added. Confirm MarkItDown actually
-   handles PDFs cleanly at the sidecar level — it does for text
-   PDFs but scanned / image-only PDFs are image-OCR territory which
-   it may not handle without Tesseract.
-
-2. **Remove PDF from the marketing claim.** Update the README and
-   LAUNCH_ASSETS to say DOCX, PPTX, HTML, IPYNB only. Weaker launch
-   pitch since "my years of tax PDFs" is a common pain point the
-   launch copy names specifically.
-
-My recommendation: **fix #1**. The sidecar already has MarkItDown
-which ships with PDF support. Add `pdf` to both lists in scanner.rs
-+ FolderDetail.tsx, add a test, verify a real PDF renders. Probably
-a 1-hour fix including validation.
+Original audit text preserved in git history (audit dated 2026-04-23, fix landed 2026-04-27).
 
 ---
 
