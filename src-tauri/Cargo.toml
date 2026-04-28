@@ -80,6 +80,18 @@ anytomd = { version = "0.1", default-features = false }
 mdkit = { version = "0.7", features = ["pandoc", "ocr-platform"] }
 regex = "1.10"
 rayon = "1.10"
+
+# MCP support — when invoked with `sery-link --mcp-stdio --root <dir>`,
+# the binary becomes a stdio Model Context Protocol server exposing
+# the watched folder to LLM clients (Claude Desktop, Cursor, Zed, …).
+# Same Rust crate published standalone at crates.io/crates/sery-mcp;
+# we consume the library surface in-process so cache + extraction
+# state stays shared with the GUI half of the app.
+sery-mcp = "0.4"
+# rmcp gives us `ServiceExt::serve(stdio())`. The library half of
+# sery-mcp doesn't re-export rmcp publicly (consumers pick which
+# transport they want), so we add it directly here.
+rmcp = { version = "1.5", features = ["transport-io"] }
 num_cpus = "1.16"
 
 

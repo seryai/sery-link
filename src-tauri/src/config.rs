@@ -62,6 +62,16 @@ pub struct WatchedFolder {
     pub last_scan_at: Option<String>,
     #[serde(default)]
     pub last_scan_stats: Option<ScanStats>,
+    /// Whether this folder is exposed via the MCP stdio mode
+    /// (`sery-link --mcp-stdio --root <this folder>`). Off by default;
+    /// users opt-in per folder from Settings → MCP. The flag itself
+    /// doesn't run anything — it's the LLM client (Claude Desktop /
+    /// Cursor / Zed / …) that spawns the process when the user adds
+    /// the corresponding `mcp.json` block. We track the state here so
+    /// the Settings UI can show / hide the snippet generator and
+    /// remind users which folders they've already exposed.
+    #[serde(default)]
+    pub mcp_enabled: bool,
 }
 
 fn default_exclude_patterns() -> Vec<String> {
@@ -287,6 +297,7 @@ impl Config {
             max_file_size_mb: default_max_file_size_mb(),
             last_scan_at: None,
             last_scan_stats: None,
+            mcp_enabled: false,
         });
     }
 
