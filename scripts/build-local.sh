@@ -16,11 +16,18 @@
 #   ./scripts/build-local.sh arm64          # arm64 only (faster)
 #   ./scripts/build-local.sh intel          # Intel only
 #
-# Outputs land at:
-#   src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/
-#   src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/
-# and the corresponding .app.tar.gz for the auto-updater are at
-#   src-tauri/target/<target>/release/bundle/macos/
+# Outputs:
+#   dist-builds/Sery-Link_<ver>_<arch>.zip          (user-facing download)
+#   src-tauri/target/<triple>/release/bundle/macos/
+#     Sery Link.app                                  (the bundle itself)
+#     Sery Link.app.tar.gz + .sig                    (auto-updater payload)
+#
+# DMG note:
+#   Tauri's create-dmg wrapper is flaky on macOS 15+ (Sequoia / Tahoe).
+#   We deliberately skip the DMG step (--bundles app --bundles updater)
+#   and ship a `ditto`-produced zip instead. Slack, Zoom, Postman, and
+#   plenty of other major macOS apps distribute as zips for the same
+#   reason — codesigning and Gatekeeper handling are identical.
 #
 # Requires (one-time setup — see README at bottom of this script):
 #   - rustup with both apple-darwin targets installed
@@ -105,8 +112,45 @@ for TARGET in "${TARGETS[@]}"; do
   echo "→ Fetching pandoc for $PANDOC_TARGET..."
   TARGET="$PANDOC_TARGET" "$SCRIPT_DIR/fetch-pandoc.sh" --force
 
-  echo "→ pnpm tauri build --target $TARGET..."
-  pnpm tauri build --target "$TARGET"
+  # We deliberately skip Tauri's DMG bundler (--bundles app --bundles
+  # updater). Tauri's create-dmg wrapper has been flaky on macOS 15+ —
+  # AppleScript / hdiutil edge cases that aren't worth debugging when
+  # `ditto` produces a perfectly distributable zip below. Slack, Zoom,
+  # Postman ship as zips for the same reason. The `app` bundle gives us
+  # `Sery Link.app`; the `updater` bundle gives us the .app.tar.gz +
+  # .sig pair the auto-updater needs.
+  echo "→ pnpm tauri build --target $TARGET --bundles app --bundles updater..."
+  pnpm tauri build --target "$TARGET" --bundles app --bundles updater
+done
+
+# ---- Package the .app as a distributable zip -------------------------
+
+# `ditto -c -k --keepParent` produces a Finder-style zip that preserves
+# extended attributes + symlinks (a regular `zip -r` corrupts code-
+# signing on macOS). The user-facing flow is: download → double-click
+# unzip → drag .app to /Applications → first launch via Gatekeeper
+# override.
+
+VERSION="$(node -p "require('./package.json').version")"
+DIST_DIR="$REPO_ROOT/dist-builds"
+mkdir -p "$DIST_DIR"
+
+for TARGET in "${TARGETS[@]}"; do
+  APP_DIR="src-tauri/target/$TARGET/release/bundle/macos"
+  if [ ! -d "$APP_DIR/Sery Link.app" ]; then
+    echo "✗ Expected $APP_DIR/Sery Link.app but it's missing — skipping zip" >&2
+    continue
+  fi
+
+  case "$TARGET" in
+    aarch64-apple-darwin) ARCH_LABEL="aarch64" ;;
+    x86_64-apple-darwin)  ARCH_LABEL="x64" ;;
+  esac
+
+  ZIP_PATH="$DIST_DIR/Sery-Link_${VERSION}_${ARCH_LABEL}.zip"
+  echo "→ Packaging $ARCH_LABEL distributable zip..."
+  ditto -c -k --keepParent "$APP_DIR/Sery Link.app" "$ZIP_PATH"
+  echo "  → $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"
 done
 
 # ---- Summary ---------------------------------------------------------
@@ -117,16 +161,18 @@ for TARGET in "${TARGETS[@]}"; do
   BUNDLE_DIR="src-tauri/target/$TARGET/release/bundle"
   if [ -d "$BUNDLE_DIR" ]; then
     echo "  $TARGET:"
-    find "$BUNDLE_DIR" -type f \
-      \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) \
-      -exec echo "    {}" \;
+    find "$BUNDLE_DIR/macos" -maxdepth 1 -type f \
+      \( -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) \
+      -exec echo "    {}" \; 2>/dev/null
   fi
 done
+echo "  user-facing zips:"
+ls -1 "$DIST_DIR"/*.zip 2>/dev/null | sed 's/^/    /'
 
 echo ""
 echo "Next steps (manual upload to GitHub Release):"
 echo "  1. Create / find the release: gh release create vX.Y.Z --draft --title 'Sery Link vX.Y.Z'"
-echo "  2. Upload artifacts: gh release upload vX.Y.Z <each .dmg + .app.tar.gz + .sig>"
+echo "  2. Upload artifacts: gh release upload vX.Y.Z dist-builds/*.zip <each .app.tar.gz + .sig>"
 echo "  3. Build latest.json updater manifest (see RELEASE.md §Auto-update manifest)"
 echo "  4. Publish the release in the GitHub UI when ready."
 
