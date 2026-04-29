@@ -110,8 +110,36 @@ pub struct CloudConfig {
     pub web_url: String,
 }
 
+// Cloud endpoint defaults bake into the binary at compile time.
+//
+// Production builds get the real sery.ai URLs out of the box. Developers
+// override per-environment by setting SERY_API_URL / SERY_WEBSOCKET_URL /
+// SERY_WEB_URL when running `cargo build` or `pnpm tauri dev` — e.g.:
+//
+//     SERY_API_URL=http://localhost:8000 \
+//     SERY_WEBSOCKET_URL=ws://localhost:8000 \
+//     SERY_WEB_URL=http://localhost:3000 \
+//     pnpm tauri dev
+//
+// Once the user has connected to a workspace, the resulting `~/.seryai/
+// config.json` overrides these compile-time defaults at runtime, so a
+// rebuild isn't required to point an installed app at a different cloud.
+fn default_api_url() -> String {
+    option_env!("SERY_API_URL")
+        .unwrap_or("https://api.sery.ai")
+        .to_string()
+}
+
+fn default_websocket_url() -> String {
+    option_env!("SERY_WEBSOCKET_URL")
+        .unwrap_or("wss://api.sery.ai")
+        .to_string()
+}
+
 fn default_web_url() -> String {
-    "http://localhost:3000".to_string()
+    option_env!("SERY_WEB_URL")
+        .unwrap_or("https://app.sery.ai")
+        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,8 +246,8 @@ impl Default for Config {
             },
             watched_folders: Vec::new(),
             cloud: CloudConfig {
-                api_url: "http://localhost:8000".to_string(),
-                websocket_url: "ws://localhost:8000".to_string(),
+                api_url: default_api_url(),
+                websocket_url: default_websocket_url(),
                 web_url: default_web_url(),
             },
             sync: SyncConfig {
