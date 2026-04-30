@@ -106,8 +106,10 @@ find "$DEST_DIR" -maxdepth 1 -type f \( \
      \) ! -name "$BIN_FILE" -delete 2>/dev/null || true
 
 echo "fetch-pandoc: downloading $URL"
+# --retry-all-errors covers connection-level failures like
+# "Empty reply from server" (curl error 52) which plain --retry skips.
 curl --fail --silent --show-error --location \
-     --retry 5 --retry-delay 2 \
+     --retry 8 --retry-delay 2 --retry-all-errors --connect-timeout 30 \
      --output "$TMP_DIR/$ARCHIVE" \
      "$URL"
 
