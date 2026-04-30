@@ -106,17 +106,34 @@ jobs:
           TARGET: ${{ matrix.pandoc_target }}
         run: scripts/fetch-pandoc.sh --force
 
+      # Apple code-signing + notarization is OPTIONAL. When
+      # APPLE_CERTIFICATE is uploaded as a GitHub Secret, this step
+      # writes all six APPLE_* env vars to $GITHUB_ENV; tauri-action
+      # picks them up and signs + notarizes automatically. When the
+      # secret is unset (current state — no Apple Developer account
+      # yet), this step is skipped, the env vars are never set, and
+      # tauri-action skips codesign — producing an unsigned but
+      # functional .app. Users hit Gatekeeper on first launch and
+      # follow the documented override flow at sery.ai/docs.
+      - name: Configure Apple signing (skipped if APPLE_CERTIFICATE is unset)
+        if: secrets.APPLE_CERTIFICATE != ''
+        shell: bash
+        run: |
+          echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}" >> "$GITHUB_ENV"
+          echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
+          echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> "$GITHUB_ENV"
+          echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # APPLE_* env vars are inherited from $GITHUB_ENV (set by
+          # the conditional step above) — present only when an
+          # Apple cert is configured.
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "Sery Link __VERSION__"
