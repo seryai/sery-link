@@ -62,14 +62,59 @@ multi-machine.**
 
 ## Install
 
-1. Download from <https://app.sery.ai/download> (or grab the latest
-   from [`seryai/serylink-releases`](https://github.com/seryai/serylink-releases/releases)
-   when the first signed release lands).
+1. Download from <https://sery.ai/download> (or directly from
+   [GitHub Releases](https://github.com/seryai/sery-link/releases)).
 2. macOS: drag the `.app` to `/Applications/`. Windows: run the
-   installer. Linux: AppImage (or `.deb`).
+   `.msi` installer. Linux: `.deb` or AppImage.
 3. Launch. The app shows a **welcome wizard**: pick a folder, or
    skip. No signup, no email, no network calls until you ask for
    them.
+
+### macOS first-launch warnings
+
+Sery Link v0.5.x is **not Apple-notarized** (Developer enrollment
+deferred — see DECISIONS.md). On first launch, depending on your
+macOS version + how you downloaded, you may see one of two warnings:
+
+#### *"Sery Link is damaged and can't be opened"*
+
+Despite the wording, **the app isn't damaged.** macOS shows this for
+any downloaded app that isn't Apple-notarized, and there's no
+"Open Anyway" button for it. Strip the quarantine attribute that
+macOS attached on download:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Sery\ Link.app
+```
+
+The app then opens normally. **One-time fix per install.** This is
+the same approach Homebrew Cask and most independent macOS app
+distributors document.
+
+#### *"Sery Link cannot be opened because the developer cannot be verified"*
+
+Milder variant. Open **System Settings → Privacy & Security**, scroll
+to **Security**, click **"Open Anyway"** next to the Sery Link
+entry. Or right-click the app in Finder → **Open** → **Open** in
+the confirmation dialog.
+
+Future releases will be Apple-notarized once Developer enrollment
+lands; both warnings disappear at that point.
+
+### Windows first-launch warning
+
+SmartScreen says *"Windows protected your PC"*. Click **More info**
+→ **Run anyway**. Once you've done it once, future launches and
+auto-updates work without re-prompting.
+
+### Linux
+
+No warning. AppImage needs `chmod +x` first:
+
+```bash
+chmod +x Sery-Link_*.AppImage
+./Sery-Link_*.AppImage
+```
 
 ### Where things live on disk
 
