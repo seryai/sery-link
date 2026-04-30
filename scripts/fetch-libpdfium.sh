@@ -84,9 +84,11 @@ echo "fetch-libpdfium: downloading $URL"
 # Use curl rather than wget; curl is on every platform's runner image.
 # --fail makes a 404 a hard error (default is silent). --location
 # follows redirects (GitHub's release URLs redirect to S3).
-# --retry handles flaky network on shared runners.
+# --retry-all-errors covers connection-level failures like
+# "Empty reply from server" (curl error 52) which are surprisingly
+# common on Windows runners and aren't covered by plain --retry.
 curl --fail --silent --show-error --location \
-     --retry 5 --retry-delay 2 \
+     --retry 8 --retry-delay 2 --retry-all-errors --connect-timeout 30 \
      --output "$TMP_DIR/$ARCHIVE" \
      "$URL"
 
