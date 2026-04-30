@@ -5,6 +5,28 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-04-30
+
+### Fixed
+
+- **macOS "Sery Link is damaged and can't be opened" alert.** v0.5.1
+  shipped without any code-signing on macOS, which on Sequoia + a
+  quarantined download triggers a stricter alert than the documented
+  Gatekeeper override. Added `signingIdentity: "-"` to
+  `tauri.conf.json` `bundle.macOS` so Tauri ad-hoc-signs the bundle
+  during build. This shifts most users from "is damaged → dead end"
+  to "cannot be opened → System Settings → Open Anyway", which IS
+  documented and overridable.
+- The `xattr -dr com.apple.quarantine /Applications/Sery\ Link.app`
+  workaround still works for users who hit the stricter case
+  (older download paths, certain Sequoia configurations). See the
+  [Install section in RUNBOOK.md](https://github.com/seryai/sery-link/blob/main/RUNBOOK.md#install)
+  for the full per-OS override flow.
+
+The real fix (Apple notarization) lands when Developer enrollment
+succeeds — both warnings disappear at that point. Tracked in
+DECISIONS.md (2026-04-29 "Ship v0.5.1 macOS unsigned + un-notarized").
+
 ## [0.5.1] — 2026-04-30
 
 The first public release. Functionally identical to the unreleased
