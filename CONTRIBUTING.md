@@ -29,12 +29,13 @@ Things we're generally happy to merge:
   improvements, keyring quirks, installer issues.
 - **Bug fixes with a clear reproduction** — file a small, minimal diff
   that describes the bug and how your change fixes it.
-- **Documentation improvements** — README, code comments, `docs/` pages.
+- **Documentation improvements** — README, RUNBOOK, code comments.
 - **Tests** — especially for subtle bugs you just fixed.
-- **Small, focused features** that fit the v0.5.0 positioning (see
-  `../datalake/PROJECT.md` §1). Column-aware search refinements,
-  per-file profile enhancements, remote-source connectors, plugin
-  system improvements.
+- **Small, focused features** that fit the v0.5.x positioning
+  (see [README.md](./README.md) and the data-network framing on
+  [sery.ai/about](https://sery.ai/about)). Column-aware search
+  refinements, per-file profile enhancements, remote-source
+  connectors, plugin system improvements.
 
 ## What we usually won't merge
 

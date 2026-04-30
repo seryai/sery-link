@@ -129,5 +129,5 @@ If a published release has a serious regression:
    who already auto-updated to the bad version will then be pulled
    forward to the fixed version on their next check.
 
-See `datalake/LAUNCH_ASSETS/rollback_playbook.md` for the full
-incident-response procedure.
+For incident response beyond a simple unpublish, contact
+`security@sery.ai`.
