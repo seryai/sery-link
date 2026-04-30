@@ -5,6 +5,29 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-04-30
+
+The first public release. Functionally identical to the unreleased
+v0.5.0 build; the version bump signals the clean-history reset.
+
+### Changed
+
+- Repository made public on GitHub under AGPL-3.0
+  ([github.com/seryai/sery-link](https://github.com/seryai/sery-link)).
+- Internal strategy + UX docs (`docs/internal/`) and icon-generation
+  scripts (`docs/scripts/`) relocated to the private monorepo. Public
+  repo now ships only docs intended for external readers (README,
+  RUNBOOK, RELEASE, SECURITY, CONTRIBUTING, SUPPORT, CHANGELOG).
+- Production URL defaults baked into binaries via `option_env!`
+  (`api.sery.ai` / `wss://api.sery.ai` / `app.sery.ai` instead of
+  localhost). Devs override with `SERY_API_URL` / `SERY_WEBSOCKET_URL`
+  / `SERY_WEB_URL` env vars at build time.
+- Release workflow updated: Apple code-signing is now optional (gated
+  by `APPLE_CERTIFICATE` secret being non-empty); curl fetch scripts
+  use `--retry-all-errors` for resilience to transient network blips.
+- Minisign keypair rotated; new public key in `tauri.conf.json` updater
+  config.
+
 ## [0.6.0] — Unreleased
 
 The data-network release. v0.5.0 made Sery Link local-first; v0.6.0
