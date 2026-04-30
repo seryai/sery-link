@@ -2,10 +2,9 @@
 //
 // Updated 2026-04-18: removed the anonymous bootstrap_workspace path.
 // The app now stays fully local on first run; no cloud contact happens
-// until the user clicks Connect from the StatusBar. Rationale in
-// datalake/PROJECT.md §5 (Three-Tier Strategy, Tier 1 Local Vault)
-// and the CHECKPOINT_2026-04-18.md follow-up — silent anonymous
-// bootstrap was contradicting the brand promise.
+// until the user clicks Connect from the StatusBar. Silent anonymous
+// bootstrap was contradicting the brand promise of "no cloud contact
+// until you ask for it."
 //
 // New one-step flow:
 //   1. User picks a folder (native picker).
