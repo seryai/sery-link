@@ -8,6 +8,7 @@ version = "0.5.2"
 dependencies = [
  "anytomd",
  "axum",
+ "base64 0.22.1",
  "calamine 0.24.0",
  "chrono",
  "dirs 5.0.1",
@@ -21,6 +22,7 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "open",
+ "rand 0.8.5",
  "rayon",
  "regex",
  "reqwest 0.11.27",
@@ -29,6 +31,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sery-mcp",
+ "sha2",
  "tabkit",
  "tauri",
  "tauri-build",

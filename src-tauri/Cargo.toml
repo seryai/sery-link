@@ -40,6 +40,12 @@ axum = "0.7"
 keyring = "2.3"
 reqwest = { version = "0.11", features = ["json"] }
 uuid = { version = "1.6", features = ["v4"] }
+# PKCE dependencies for the Google Drive OAuth flow (Phase 3b of the
+# cloud-connectors migration; see datalake/SETUP_GOOGLE_OAUTH.md).
+# Tiny crates, all `no_std`-compatible, used only by gdrive_oauth.rs.
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 # scankit wraps walkdir + size-cap + exclude-glob filtering into one
