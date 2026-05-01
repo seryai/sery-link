@@ -7,9 +7,12 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Globe, KeyRound, Loader2, X } from 'lucide-react';
+import { Cloud, Globe, KeyRound, Loader2, X } from 'lucide-react';
 import { useToast } from './Toast';
 import { isS3Url } from '../utils/url';
+import { GdriveBrowserPanel } from './GdriveBrowserPanel';
+
+type Tab = 'url' | 'gdrive';
 
 interface AddRemoteSourceModalProps {
   open: boolean;
@@ -29,6 +32,7 @@ export function AddRemoteSourceModal({
   onClose,
   onAdded,
 }: AddRemoteSourceModalProps) {
+  const [tab, setTab] = useState<Tab>('url');
   const [url, setUrl] = useState('');
   const [accessKey, setAccessKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
@@ -102,10 +106,9 @@ export function AddRemoteSourceModal({
               Add a remote source
             </h2>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              Connect an <strong>S3 bucket</strong>, a public HTTPS URL,
-              or an S3 object. Sery Link scans schemas locally and
-              stores credentials in your OS keychain — nothing is
-              uploaded to Sery&apos;s servers.
+              Sery Link reads remote schemas locally and stores
+              credentials in your OS keychain — nothing is uploaded
+              to Sery&apos;s servers.
             </p>
           </div>
           <button
@@ -116,6 +119,112 @@ export function AddRemoteSourceModal({
           </button>
         </div>
 
+        {/* Tabs */}
+        <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-700">
+          <TabButton active={tab === 'url'} onClick={() => setTab('url')}>
+            <Globe className="h-3.5 w-3.5" />
+            S3 / URL
+          </TabButton>
+          <TabButton active={tab === 'gdrive'} onClick={() => setTab('gdrive')}>
+            <Cloud className="h-3.5 w-3.5" />
+            Google Drive
+          </TabButton>
+        </div>
+
+        {tab === 'gdrive' && <GdriveBrowserPanel />}
+
+        {tab === 'url' && (
+          <UrlPanel
+            url={url}
+            setUrl={setUrl}
+            accessKey={accessKey}
+            setAccessKey={setAccessKey}
+            secretKey={secretKey}
+            setSecretKey={setSecretKey}
+            region={region}
+            setRegion={setRegion}
+            sessionToken={sessionToken}
+            setSessionToken={setSessionToken}
+            busy={busy}
+            error={error}
+            canSubmit={canSubmit}
+            insecure={insecure}
+            isS3={isS3}
+            trimmedUrl={trimmedUrl}
+            submit={submit}
+            onClose={onClose}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold transition-colors ${
+        active
+          ? 'border-purple-600 text-purple-700 dark:border-purple-400 dark:text-purple-300'
+          : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function UrlPanel(props: {
+  url: string;
+  setUrl: (s: string) => void;
+  accessKey: string;
+  setAccessKey: (s: string) => void;
+  secretKey: string;
+  setSecretKey: (s: string) => void;
+  region: string;
+  setRegion: (s: string) => void;
+  sessionToken: string;
+  setSessionToken: (s: string) => void;
+  busy: boolean;
+  error: string | null;
+  canSubmit: boolean;
+  insecure: boolean;
+  isS3: boolean;
+  trimmedUrl: string;
+  submit: () => void;
+  onClose: () => void;
+}) {
+  const {
+    url,
+    setUrl,
+    accessKey,
+    setAccessKey,
+    secretKey,
+    setSecretKey,
+    region,
+    setRegion,
+    sessionToken,
+    setSessionToken,
+    busy,
+    error,
+    canSubmit,
+    insecure,
+    isS3,
+    trimmedUrl,
+    submit,
+    onClose,
+  } = props;
+  return (
+    <>
         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           URL
         </label>
@@ -243,7 +352,6 @@ export function AddRemoteSourceModal({
             Add source
           </button>
         </div>
-      </div>
-    </div>
+    </>
   );
 }
