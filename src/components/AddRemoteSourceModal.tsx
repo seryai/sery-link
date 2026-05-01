@@ -102,9 +102,10 @@ export function AddRemoteSourceModal({
               Add a remote source
             </h2>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              Add a public URL, an S3 object, or an S3 bucket prefix.
-              Sery Link reads the schema locally — nothing is uploaded
-              to our servers.
+              Connect an <strong>S3 bucket</strong>, a public HTTPS URL,
+              or an S3 object. Sery Link scans schemas locally and
+              stores credentials in your OS keychain — nothing is
+              uploaded to Sery&apos;s servers.
             </p>
           </div>
           <button

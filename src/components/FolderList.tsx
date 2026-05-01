@@ -113,10 +113,10 @@ export function FolderList() {
             <button
               onClick={() => setRemoteOpen(true)}
               className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-              title="Paste a public HTTPS URL to a CSV or Parquet file"
+              title="Connect an S3 bucket, an HTTPS URL, or other remote data — credentials stay in your OS keychain"
             >
               <Globe className="h-4 w-4" />
-              Add URL
+              Add remote source
             </button>
             <button
               onClick={addFolder}
@@ -134,7 +134,11 @@ export function FolderList() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6">
         {folders.length === 0 ? (
-          <EmptyState onAdd={addFolder} busy={busy} />
+          <EmptyState
+            onAdd={addFolder}
+            onAddRemote={() => setRemoteOpen(true)}
+            busy={busy}
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
             {folders.map((folder) => (
@@ -169,9 +173,11 @@ export function FolderList() {
 
 function EmptyState({
   onAdd,
+  onAddRemote,
   busy,
 }: {
   onAdd: () => void;
+  onAddRemote: () => void;
   busy: boolean;
 }) {
   return (
@@ -180,23 +186,33 @@ function EmptyState({
         <FolderOpen className="h-8 w-8 text-purple-600 dark:text-purple-300" />
       </div>
       <h2 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
-        No folders yet
+        No sources yet
       </h2>
-      <p className="mx-auto mb-6 max-w-sm text-sm text-slate-600 dark:text-slate-400">
-        Pick a folder containing Parquet, CSV, Excel, or document files.
-        Read-only access — your files stay on your machine. Queries can run
-        locally in tunnel mode (zero upload) or use optional cloud sync for
-        performance mode.
+      <p className="mx-auto mb-6 max-w-md text-sm text-slate-600 dark:text-slate-400">
+        Pick a local folder of Parquet/CSV/Excel/documents, or connect
+        an S3 bucket. Either way, credentials and raw files stay on
+        your machine — only schemas + redacted samples sync to your
+        Sery network.
       </p>
-      <button
-        onClick={onAdd}
-        disabled={busy}
-        className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
-        title="Read-only access — your files are never modified"
-      >
-        <Plus className="h-4 w-4" />
-        Watch Your First Folder
-      </button>
+      <div className="flex items-center justify-center gap-2">
+        <button
+          onClick={onAdd}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-purple-700 disabled:opacity-50"
+          title="Read-only access — your files are never modified"
+        >
+          <Plus className="h-4 w-4" />
+          Watch a folder
+        </button>
+        <button
+          onClick={onAddRemote}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          title="Connect an S3 bucket or HTTPS URL"
+        >
+          <Globe className="h-4 w-4" />
+          Add remote source
+        </button>
+      </div>
     </div>
   );
 }
