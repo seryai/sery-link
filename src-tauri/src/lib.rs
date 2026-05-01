@@ -10,6 +10,7 @@ mod error;
 mod events;
 mod excel;
 mod export_import;
+mod gdrive_api;
 mod gdrive_creds;
 mod gdrive_oauth;
 mod machines;
@@ -261,6 +262,8 @@ pub fn run() {
             commands::start_gdrive_oauth,
             commands::gdrive_status,
             commands::disconnect_gdrive,
+            commands::gdrive_list_root_folders,
+            commands::gdrive_list_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

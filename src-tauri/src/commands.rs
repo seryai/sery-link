@@ -234,6 +234,30 @@ pub async fn disconnect_gdrive() -> Result<(), String> {
     Ok(())
 }
 
+/// List the user's top-level Drive folders. Used by the Phase 3c-2
+/// folder picker UI. Auto-refreshes the access token if it's near
+/// expiry — caller doesn't need to think about token lifecycle.
+#[tauri::command]
+pub async fn gdrive_list_root_folders(
+) -> Result<Vec<crate::gdrive_api::DriveFile>, String> {
+    crate::gdrive_api::list_root_folders("default")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List the children of a chosen Drive folder. `include_folders=true`
+/// returns subfolders (so the picker can drill down); the scan
+/// walker (Phase 3c-3) will set false to get just data files.
+#[tauri::command]
+pub async fn gdrive_list_folder(
+    folder_id: String,
+    include_folders: bool,
+) -> Result<Vec<crate::gdrive_api::DriveFile>, String> {
+    crate::gdrive_api::list_folder("default", &folder_id, include_folders)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
