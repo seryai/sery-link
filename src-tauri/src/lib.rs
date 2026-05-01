@@ -10,6 +10,8 @@ mod error;
 mod events;
 mod excel;
 mod export_import;
+mod gdrive_creds;
+mod gdrive_oauth;
 mod machines;
 mod history;
 mod hotkey;
@@ -252,6 +254,13 @@ pub fn run() {
             commands::clear_byok_key,
             commands::validate_byok_key,
             commands::ask_byok,
+            // Phase 3b — Google Drive OAuth (datalake/SETUP_GOOGLE_OAUTH.md).
+            // Browser-based OAuth flow with PKCE; tokens land in OS
+            // keychain via gdrive_creds. UI for these commands ships
+            // in Phase 3c.
+            commands::start_gdrive_oauth,
+            commands::gdrive_status,
+            commands::disconnect_gdrive,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

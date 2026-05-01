@@ -55,12 +55,17 @@ pub fn handle_url<R: Runtime>(app: &AppHandle<R>, raw_url: &str) {
     // The verb lives in the host portion (e.g. `seryai://reveal?path=...`)
     // because url::Url treats anything after `://` as host until `/`.
     let verb = url.host_str().unwrap_or("").to_lowercase();
+    let path = url.path();
 
-    match verb.as_str() {
-        "reveal" => handle_reveal(&url),
-        "pair" => handle_pair(app, &url),
-        other => {
-            eprintln!("[deep-link] unknown verb: {other}");
+    match (verb.as_str(), path) {
+        ("reveal", _) => handle_reveal(&url),
+        ("pair", _) => handle_pair(app, &url),
+        // OAuth callbacks. Verb is `oauth`, path discriminates the
+        // provider so future Phase-4 connectors (Sheets, Dropbox)
+        // slot in beside Drive without renaming anything.
+        ("oauth", "/gdrive/callback") => handle_gdrive_callback(app, &url),
+        (other, p) => {
+            eprintln!("[deep-link] unknown verb {other} (path={p})");
         }
     }
 }
@@ -124,4 +129,50 @@ fn handle_pair<R: Runtime>(app: &AppHandle<R>, url: &Url) {
     if let Err(err) = app.emit("deep-link-pair", &key) {
         eprintln!("[deep-link] pair: failed to emit event: {err}");
     }
+}
+
+fn handle_gdrive_callback<R: Runtime>(app: &AppHandle<R>, url: &Url) {
+    // Pull `code` and `state` from the query string. Either could be
+    // missing if Google's redirect format ever changes — log + bail
+    // rather than panicking.
+    let mut code = None;
+    let mut state = None;
+    let mut error = None;
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "state" => state = Some(v.into_owned()),
+            "error" => error = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+
+    // Google redirects with `?error=access_denied` if the user clicks
+    // Cancel on the consent screen. Surface that distinctly so the
+    // frontend can show "you cancelled" rather than "we crashed."
+    if let Some(err) = error {
+        eprintln!("[deep-link] gdrive callback returned error: {err}");
+        use tauri::Emitter;
+        let _ = app.emit(
+            "gdrive-oauth-complete",
+            serde_json::json!({"ok": false, "error": err}),
+        );
+        return;
+    }
+
+    let (code, state) = match (code, state) {
+        (Some(c), Some(s)) => (c, s),
+        _ => {
+            eprintln!("[deep-link] gdrive callback missing code or state");
+            return;
+        }
+    };
+
+    // Spawn the async exchange on Tauri's runtime so the deep-link
+    // dispatch returns immediately. The frontend listens for the
+    // `gdrive-oauth-complete` event emitted from `handle_callback`.
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::gdrive_oauth::handle_callback(&app_handle, &code, &state).await;
+    });
 }

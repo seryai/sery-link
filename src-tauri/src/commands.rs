@@ -196,6 +196,44 @@ pub async fn add_remote_source(
     Ok(normalised)
 }
 
+// ─── Google Drive OAuth (Phase 3b) ────────────────────────────────
+//
+// `start_gdrive_oauth` is the entry point the frontend calls when the
+// user clicks "Connect Google Drive". Returns immediately after
+// opening the browser; the actual OAuth completion fires the
+// `gdrive-oauth-complete` Tauri event from deep_link.rs once Google
+// redirects back through `seryai://oauth/gdrive/callback`.
+//
+// `gdrive_status` is a synchronous lookup of whether tokens are
+// already stored — used by the frontend to render "Connect" vs
+// "Connected as <email>" state.
+
+#[tauri::command]
+pub async fn start_gdrive_oauth() -> Result<(), String> {
+    let auth_url = crate::gdrive_oauth::start_flow().map_err(|e| e.to_string())?;
+    // tauri-plugin-opener is used elsewhere via the `open` crate;
+    // matching the pattern keeps platform handling consistent.
+    open::that(&auth_url).map_err(|e| format!("could not open browser: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn gdrive_status() -> Result<bool, String> {
+    // True if we have stored tokens for the default account, false
+    // otherwise. Doesn't validate token freshness — the scan/query
+    // path will refresh as needed.
+    match crate::gdrive_creds::load("default").map_err(|e| e.to_string())? {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+#[tauri::command]
+pub async fn disconnect_gdrive() -> Result<(), String> {
+    crate::gdrive_creds::delete("default").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
