@@ -11,6 +11,7 @@ mod events;
 mod excel;
 mod export_import;
 mod gdrive_api;
+mod gdrive_cache;
 mod gdrive_creds;
 mod gdrive_oauth;
 mod machines;
