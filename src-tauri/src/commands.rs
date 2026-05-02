@@ -878,6 +878,14 @@ pub enum SearchMatchReason {
     Content {
         snippet: String,
     },
+    /// The match comes from the gdrive-skipped log — Sery knows this
+    /// Drive file exists but didn't cache its contents (too big,
+    /// non-indexable type, Google Doc, etc.). The UI badges the row
+    /// distinctly and disables navigation since there's no parsed
+    /// content to inspect.
+    SkippedDrive {
+        reason: crate::gdrive_skipped::SkipReason,
+    },
 }
 
 /// One search result: a single dataset plus the reasons it matched and a
@@ -919,10 +927,83 @@ pub async fn search_all_folders(query: String) -> Result<Vec<SearchMatch>, Strin
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
 
-        Ok(rank_matches(&entries, &trimmed))
+        let mut matches = rank_matches(&entries, &trimmed);
+
+        // Append filename-only matches from the gdrive-skipped log.
+        // These represent Drive files Sery knows about but didn't
+        // cache — without this the user gets silent zeros when
+        // searching for them, and Drive becomes a black box. The
+        // log is bounded at 10k entries by rotation, so loading it
+        // all is cheap.
+        if let Ok(skipped) = crate::gdrive_skipped::recent(usize::MAX) {
+            matches.extend(rank_skipped(&skipped, &trimmed));
+        }
+
+        // Stable re-sort so skipped results land where their score
+        // earns them — usually below content-indexed hits since
+        // their score comes from filename only.
+        matches.sort_by(|a, b| b.score.cmp(&a.score));
+        matches.truncate(SEARCH_RESULT_LIMIT);
+        Ok(matches)
     })
     .await
     .map_err(|e| format!("search task failed: {}", e))?
+}
+
+/// Score skipped-log entries against the same query. Filename only
+/// — there's no schema or content to look at, by definition.
+fn rank_skipped(
+    entries: &[crate::gdrive_skipped::SkippedEntry],
+    query: &str,
+) -> Vec<SearchMatch> {
+    let q = query.to_lowercase();
+    let mut out: Vec<SearchMatch> = Vec::new();
+    for entry in entries {
+        let name_lower = entry.name.to_lowercase();
+        let score = if name_lower == q {
+            // Match the rank_matches scoring band so an exact
+            // skipped-file name doesn't outrank an indexed file
+            // with the same name + content match. We dock 20
+            // points across the board since "filename only" is
+            // strictly weaker context.
+            100
+        } else if name_lower.starts_with(&q) {
+            75
+        } else if name_lower.contains(&q) {
+            55
+        } else {
+            continue;
+        };
+
+        // file_format is the extension lowercased; empty string for
+        // the no-extension edge case is fine — the UI badges it as
+        // "filename only" anyway.
+        let file_format = std::path::Path::new(&entry.name)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        out.push(SearchMatch {
+            // Intentionally empty: the row is non-navigable because
+            // there's no cached content to drill into. Frontend
+            // checks for a SkippedDrive reason and disables the
+            // click handler.
+            folder_path: String::new(),
+            relative_path: entry.name.clone(),
+            file_format,
+            size_bytes: entry.size_bytes.unwrap_or(0),
+            last_modified: entry.skipped_at.clone(),
+            row_count_estimate: None,
+            column_count: 0,
+            match_reasons: vec![
+                SearchMatchReason::Filename,
+                SearchMatchReason::SkippedDrive { reason: entry.reason },
+            ],
+            score,
+        });
+    }
+    out
 }
 
 /// Pure scoring function — split out for testing. Caller guarantees

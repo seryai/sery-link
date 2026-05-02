@@ -17,6 +17,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { documentDir } from '@tauri-apps/api/path';
 import {
+  AlertCircle,
   Columns3,
   Database,
   FileText,
@@ -434,6 +435,11 @@ function ResultCard({
   match: SearchMatch;
   onOpen: () => void;
 }) {
+  // Filename-only Drive matches have no folder_path and no cached
+  // content to drill into — the row should look slightly muted
+  // and not respond to clicks. The badge already explains why.
+  const isSkipped = match.match_reasons.some((r) => r.kind === 'skipped_drive');
+
   const icon = useMemo(() => {
     const docExts = ['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf'];
     return docExts.includes(match.file_format.toLowerCase()) ? (
@@ -444,14 +450,24 @@ function ResultCard({
   }, [match.file_format]);
 
   const folderName = useMemo(() => {
+    if (isSkipped) return 'Google Drive';
     const parts = match.folder_path.split(/[\\/]/).filter(Boolean);
     return parts[parts.length - 1] || match.folder_path;
-  }, [match.folder_path]);
+  }, [match.folder_path, isSkipped]);
+
+  const Tag: 'button' | 'div' = isSkipped ? 'div' : 'button';
+  const interactiveProps = isSkipped
+    ? {}
+    : { onClick: onOpen, type: 'button' as const };
 
   return (
-    <button
-      onClick={onOpen}
-      className="group block w-full rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-purple-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-700"
+    <Tag
+      {...interactiveProps}
+      className={`group block w-full rounded-xl border p-4 text-left transition-all ${
+        isSkipped
+          ? 'cursor-default border-slate-200 bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/40'
+          : 'border-slate-200 bg-white hover:border-purple-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-700'
+      }`}
     >
       <div className="flex items-start gap-3">
         <div className="mt-0.5 flex-shrink-0">{icon}</div>
@@ -496,12 +512,14 @@ function ResultCard({
             ))}
           </div>
         </div>
-        <SquareArrowOutUpRight
-          className="mt-1 h-4 w-4 flex-shrink-0 text-slate-300 transition group-hover:text-purple-500 dark:text-slate-600"
-          strokeWidth={1.5}
-        />
+        {!isSkipped && (
+          <SquareArrowOutUpRight
+            className="mt-1 h-4 w-4 flex-shrink-0 text-slate-300 transition group-hover:text-purple-500 dark:text-slate-600"
+            strokeWidth={1.5}
+          />
+        )}
       </div>
-    </button>
+    </Tag>
   );
 }
 
@@ -536,6 +554,31 @@ function ReasonBadge({ reason }: { reason: SearchMatchReason }) {
           </span>
         </span>
       );
+    case 'skipped_drive': {
+      // Honest signal: Drive knows about the file but Sery didn't
+      // cache its bytes. We tell the user WHY so they can decide
+      // whether to bump a setting / open the file in Drive natively
+      // / etc. Yellow tone matches the "warning, but not error"
+      // semantics of Settings → Storage's skipped card.
+      const label = (() => {
+        switch (reason.reason) {
+          case 'native_unexportable':
+            return 'Google Doc / Form / Drawing — not indexed';
+          case 'unsupported_extension':
+            return 'Filename only — file type not indexed';
+          case 'too_large':
+            return 'Filename only — over 1 GiB cap';
+          case 'download_failed':
+            return 'Filename only — download failed, will retry';
+        }
+      })();
+      return (
+        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+          <AlertCircle className="h-3 w-3" />
+          {label}
+        </span>
+      );
+    }
   }
 }
 
