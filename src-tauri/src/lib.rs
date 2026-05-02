@@ -16,6 +16,7 @@ mod gdrive_cache;
 mod gdrive_creds;
 mod gdrive_oauth;
 mod gdrive_refresh;
+mod gdrive_skipped;
 mod gdrive_walker;
 mod machines;
 mod history;
@@ -282,6 +283,7 @@ pub fn run() {
             // so the user can free disk without losing their grant.
             commands::get_storage_info,
             commands::clear_gdrive_cache,
+            commands::get_gdrive_skipped,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,7 +8,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { HardDrive, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  HardDrive,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 import { useToast } from '../Toast';
 
 interface StorageInfo {
@@ -17,17 +25,58 @@ interface StorageInfo {
   free_bytes: number;
 }
 
+type SkipReason =
+  | 'native_unexportable'
+  | 'unsupported_extension'
+  | 'too_large'
+  | 'download_failed';
+
+interface SkippedEntry {
+  account_id: string;
+  watch_folder_id: string;
+  file_id: string;
+  name: string;
+  mime_type: string;
+  size_bytes: number | null;
+  reason: SkipReason;
+  skipped_at: string;
+  detail: string | null;
+}
+
+interface SkippedSummary {
+  recent: SkippedEntry[];
+  by_reason: Partial<Record<SkipReason, number>>;
+  total: number;
+}
+
+const REASON_LABEL: Record<SkipReason, string> = {
+  native_unexportable: 'Google Docs / Forms / Drawings',
+  unsupported_extension: 'Non-indexable file types',
+  too_large: 'Over the 1 GiB cap',
+  download_failed: 'Download failed',
+};
+
 export function StoragePanel() {
   const toast = useToast();
   const [info, setInfo] = useState<StorageInfo | null>(null);
+  const [skipped, setSkipped] = useState<SkippedSummary | null>(null);
+  const [skippedExpanded, setSkippedExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await invoke<StorageInfo>('get_storage_info');
-      setInfo(result);
+      const [storageResult, skippedResult] = await Promise.all([
+        invoke<StorageInfo>('get_storage_info'),
+        invoke<SkippedSummary>('get_gdrive_skipped', { limit: 100 }).catch(() => ({
+          recent: [],
+          by_reason: {},
+          total: 0,
+        })),
+      ]);
+      setInfo(storageResult);
+      setSkipped(skippedResult);
     } catch (err) {
       toast.error(`Couldn't load storage info: ${err}`);
     } finally {
@@ -124,6 +173,74 @@ export function StoragePanel() {
           </dl>
         ) : null}
       </div>
+
+      {skipped && skipped.total > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+          <h3 className="mb-2 flex items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+            <AlertCircle className="h-4 w-4 text-amber-500" />
+            Drive files Sery skipped
+          </h3>
+          <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+            {skipped.total.toLocaleString()} file
+            {skipped.total === 1 ? '' : 's'} weren&apos;t indexed. Hover a row
+            to see why; clearing the Drive cache resets this list.
+          </p>
+          <ul className="mb-3 space-y-1 text-sm">
+            {(Object.keys(REASON_LABEL) as SkipReason[]).map((reason) => {
+              const count = skipped.by_reason[reason] ?? 0;
+              if (count === 0) return null;
+              return (
+                <li
+                  key={reason}
+                  className="flex items-baseline justify-between text-slate-600 dark:text-slate-400"
+                >
+                  <span>{REASON_LABEL[reason]}</span>
+                  <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                    {count.toLocaleString()}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <button
+            onClick={() => setSkippedExpanded((v) => !v)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
+          >
+            {skippedExpanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            {skippedExpanded
+              ? 'Hide files'
+              : `Show ${Math.min(skipped.recent.length, 100)} most recent`}
+          </button>
+
+          {skippedExpanded && skipped.recent.length > 0 && (
+            <ul className="mt-3 max-h-64 divide-y divide-slate-200 overflow-y-auto rounded-md border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+              {skipped.recent.map((entry) => (
+                <li
+                  key={`${entry.skipped_at}-${entry.file_id}`}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs"
+                  title={entry.detail || REASON_LABEL[entry.reason]}
+                >
+                  <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-300">
+                    {entry.name}
+                  </span>
+                  <span className="flex-shrink-0 text-slate-500 dark:text-slate-400">
+                    {REASON_LABEL[entry.reason]}
+                  </span>
+                  {entry.size_bytes !== null && (
+                    <span className="flex-shrink-0 font-mono text-slate-400 dark:text-slate-500">
+                      {formatBytes(entry.size_bytes)}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {info && info.gdrive_cache_bytes > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">

@@ -344,6 +344,39 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Audit the walker's skip decisions before we touch the
+    // network. The user can later inspect these in Settings →
+    // Storage. Native + unsupported are catalogued here; too-large
+    // gets logged inside the download loop because Drive's
+    // reported size lies for native exports.
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    for f in &walked.skipped_native {
+        crate::gdrive_skipped::record(&crate::gdrive_skipped::SkippedEntry {
+            account_id: account.clone(),
+            watch_folder_id: folder_id.clone(),
+            file_id: f.id.clone(),
+            name: f.name.clone(),
+            mime_type: f.mime_type.clone(),
+            size_bytes: f.size,
+            reason: crate::gdrive_skipped::SkipReason::NativeUnexportable,
+            skipped_at: now_iso.clone(),
+            detail: None,
+        });
+    }
+    for f in &walked.skipped_unsupported {
+        crate::gdrive_skipped::record(&crate::gdrive_skipped::SkippedEntry {
+            account_id: account.clone(),
+            watch_folder_id: folder_id.clone(),
+            file_id: f.id.clone(),
+            name: f.name.clone(),
+            mime_type: f.mime_type.clone(),
+            size_bytes: f.size,
+            reason: crate::gdrive_skipped::SkipReason::UnsupportedExtension,
+            skipped_at: now_iso.clone(),
+            detail: None,
+        });
+    }
+
     let total = walked.files.len();
     let mut file_ids: Vec<String> = Vec::with_capacity(total);
     let mut skipped_too_large = 0usize;
@@ -370,10 +403,28 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         match crate::gdrive_cache::download_if_stale(&account, file).await {
             Ok(_) => file_ids.push(file.id.clone()),
             Err(e) => {
-                eprintln!(
-                    "[gdrive-watch] skipped {:?}: {}",
-                    file.name, e
-                );
+                let detail = e.to_string();
+                eprintln!("[gdrive-watch] skipped {:?}: {}", file.name, detail);
+                // Heuristic: differentiate too-large from generic
+                // failures so the Storage page can surface the
+                // right reason. The cache layer's error message
+                // for the size cap mentions "1 GiB cap" / "byte cap".
+                let reason = if detail.contains("cap") {
+                    crate::gdrive_skipped::SkipReason::TooLarge
+                } else {
+                    crate::gdrive_skipped::SkipReason::DownloadFailed
+                };
+                crate::gdrive_skipped::record(&crate::gdrive_skipped::SkippedEntry {
+                    account_id: account.clone(),
+                    watch_folder_id: folder_id.clone(),
+                    file_id: file.id.clone(),
+                    name: file.name.clone(),
+                    mime_type: file.mime_type.clone(),
+                    size_bytes: file.size,
+                    reason,
+                    skipped_at: now_iso.clone(),
+                    detail: Some(detail),
+                });
                 skipped_too_large += 1;
             }
         }
@@ -588,7 +639,48 @@ pub async fn clear_gdrive_cache() -> Result<(), String> {
     config.remove_watched_folder(&cache_dir.to_string_lossy());
     config.save().map_err(|e| e.to_string())?;
 
+    // The skipped log is keyed to specific watches; once they're
+    // gone the entries are stale anecdotes. Drop them too.
+    crate::gdrive_skipped::clear().map_err(|e| e.to_string())?;
+
     Ok(())
+}
+
+/// Surface the skipped log for Settings → Storage. Returns up to
+/// `limit` most-recent entries (newest first) plus a count-by-
+/// reason summary so the UI can render both the totals and an
+/// inspect-the-list view.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GdriveSkippedSummary {
+    pub recent: Vec<crate::gdrive_skipped::SkippedEntry>,
+    pub by_reason: std::collections::HashMap<String, usize>,
+    pub total: usize,
+}
+
+#[tauri::command]
+pub async fn get_gdrive_skipped(limit: Option<usize>) -> Result<GdriveSkippedSummary, String> {
+    let limit = limit.unwrap_or(100);
+    let recent = crate::gdrive_skipped::recent(limit).map_err(|e| e.to_string())?;
+    let counts = crate::gdrive_skipped::count_by_reason().map_err(|e| e.to_string())?;
+    let total = counts.values().sum();
+    // Convert the enum keys to strings via serde so the UI can
+    // index the map without re-implementing the enum on the TS
+    // side (it's already serialised as snake_case by SkipReason's
+    // rename_all).
+    let by_reason = counts
+        .into_iter()
+        .map(|(k, v)| {
+            let key = serde_json::to_string(&k)
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            (key, v)
+        })
+        .collect();
+    Ok(GdriveSkippedSummary {
+        recent,
+        by_reason,
+        total,
+    })
 }
 
 #[tauri::command]
