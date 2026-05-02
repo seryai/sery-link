@@ -5,10 +5,10 @@
 //!
 //!   - `list_root_folders()`   — top-level folders for the picker UI
 //!   - `list_folder()`         — children of a chosen folder, used by
-//!                               the scan walker (Phase 3c-3)
-//!   - `get_file_metadata()`   — single-file lookup, used during scan
-//!   - `download_file_bytes()` — raw content fetch for query path
-//!                               (Phase 3c-4)
+//!                               the scan walker
+//!   - `download_file_to()`    — stream a binary file to a path
+//!   - `download_export_to()`  — same, but for Google-native exports
+//!                               (Sheets → .xlsx, etc.)
 //!
 //! Auth: every method takes a *fresh* access token. Token refresh is
 //! handled by `with_fresh_token()` here, which loads tokens from
@@ -226,35 +226,6 @@ async fn list_folder_inner(
         }
 
         Ok(all)
-    })
-    .await
-}
-
-/// Fetch a single file's metadata by ID. Used during scans when we
-/// have an ID but want full DriveFile fields.
-pub async fn get_file_metadata(account_id: &str, file_id: &str) -> Result<DriveFile> {
-    with_fresh_token(account_id, |access_token| async move {
-        let client = reqwest::Client::new();
-        let resp = client
-            .get(format!("{}/files/{}", API_BASE, file_id))
-            .bearer_auth(&access_token)
-            .query(&[("fields", "id,name,mimeType,size,modifiedTime,parents")])
-            .send()
-            .await
-            .map_err(|e| AgentError::Network(format!("drive get file: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AgentError::Network(format!(
-                "drive get file {}: {}",
-                status, body
-            )));
-        }
-
-        resp.json::<DriveFile>()
-            .await
-            .map_err(|e| AgentError::Serialization(format!("drive file parse: {}", e)))
     })
     .await
 }
