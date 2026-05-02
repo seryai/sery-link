@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
+  Check,
   ChevronRight,
   Cloud,
   Folder,
@@ -26,6 +27,7 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Minus,
   Plus,
   X,
 } from 'lucide-react';
@@ -473,20 +475,15 @@ export function GdriveBrowserPanel() {
             {/* Select-all header — only when there's at least one
                 selectable folder. Hides cleanly for file-only views. */}
             {selectableFolders.length > 0 && (
-              <label
+              <div
+                onClick={toggleSelectAll}
                 className="flex cursor-pointer items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800/60"
               >
-                <input
-                  type="checkbox"
+                <CheckboxBox
                   checked={allSelectableChecked}
-                  ref={(el) => {
-                    // Tri-state: indeterminate when SOME are
-                    // selected. The DOM property has no React
-                    // equivalent, so set it on the ref.
-                    if (el) el.indeterminate = someSelectableChecked;
-                  }}
-                  onChange={toggleSelectAll}
-                  className="h-3.5 w-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                  indeterminate={someSelectableChecked}
+                  onToggle={toggleSelectAll}
+                  ariaLabel="Select all folders"
                 />
                 <span>
                   Select all ({selectableFolders.length})
@@ -496,7 +493,7 @@ export function GdriveBrowserPanel() {
                     {selectedIds.size} selected
                   </span>
                 )}
-              </label>
+              </div>
             )}
 
             <div className="max-h-72 overflow-y-auto">
@@ -530,11 +527,10 @@ export function GdriveBrowserPanel() {
                             checkbox (files, watched folders). */}
                         <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
                           {checkboxAvailable && (
-                            <input
-                              type="checkbox"
+                            <CheckboxBox
                               checked={isChecked}
-                              onChange={() => toggleSelected(f.id)}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                              onToggle={() => toggleSelected(f.id)}
+                              ariaLabel={`Select ${f.name}`}
                             />
                           )}
                         </div>
@@ -638,6 +634,51 @@ export function GdriveBrowserPanel() {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Visible-everywhere checkbox. We don't pull in @tailwindcss/forms
+ *  (would touch every other input in the app) and the native
+ *  checkbox renders inconsistently across macOS Safari / WebView /
+ *  dark mode — it ends up nearly invisible against light grey rows.
+ *  This component is an accessible button (`role="checkbox"`) with
+ *  a guaranteed visible filled / outlined / indeterminate state. */
+function CheckboxBox({
+  checked,
+  indeterminate,
+  onToggle,
+  ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onToggle: () => void;
+  ariaLabel: string;
+}) {
+  const isChecked = checked || indeterminate;
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={indeterminate ? 'mixed' : checked}
+      aria-label={ariaLabel}
+      onClick={(e) => {
+        // Stop propagation so a click on the checkbox of a folder
+        // row doesn't ALSO fire the row's drill-in handler.
+        e.stopPropagation();
+        onToggle();
+      }}
+      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${
+        isChecked
+          ? 'border-purple-600 bg-purple-600 text-white hover:bg-purple-700 dark:border-purple-500 dark:bg-purple-500'
+          : 'border-slate-300 bg-white hover:border-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:hover:border-slate-500'
+      }`}
+    >
+      {indeterminate ? (
+        <Minus className="h-3 w-3" strokeWidth={3} />
+      ) : checked ? (
+        <Check className="h-3 w-3" strokeWidth={3} />
+      ) : null}
+    </button>
   );
 }
 
