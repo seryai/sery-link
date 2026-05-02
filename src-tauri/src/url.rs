@@ -81,11 +81,96 @@ pub enum UrlValidation {
     Invalid { reason: String },
 }
 
+/// Detect a Google Sheets share URL. Matches the standard share-link
+/// shape `https://docs.google.com/spreadsheets/d/{id}/...` — anything
+/// with a Sheets file id in the canonical position. Doesn't try to
+/// parse pubhtml URLs (`/d/e/{id}/pubhtml`) — those are the older
+/// "Publish to web" mechanism and serve their own format; rare enough
+/// to defer.
+pub fn is_google_sheets_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    (lower.starts_with("https://docs.google.com/spreadsheets/d/")
+        || lower.starts_with("http://docs.google.com/spreadsheets/d/"))
+        // Reject the pubhtml form; we don't handle it yet and the
+        // export-URL rewrite below would be wrong for it.
+        && !lower.contains("/d/e/")
+}
+
+/// Rewrite a Sheets share URL into the public CSV export endpoint
+/// (`.../export?format=csv[&gid=N]`). The scan path then treats the
+/// resulting URL like any other public CSV. Only the first tab is
+/// returned by CSV export — if the user pasted a URL with `#gid=N`
+/// (the URL fragment Sheets uses to deep-link to a tab) we forward
+/// that as the `gid` query param so the user gets the tab they were
+/// looking at when they copied the link.
+///
+/// Limitations to flag in the UI:
+///   - CSV export = first tab only unless `#gid=N` is in the input
+///   - Private sheets return Google's login HTML, not CSV — the
+///     remote scanner will error during DuckDB parse; future polish
+///     could detect this via Content-Type for a friendlier message.
+fn rewrite_google_sheets_url(url: &str) -> Option<String> {
+    if !is_google_sheets_url(url) {
+        return None;
+    }
+    let trimmed = url.trim();
+
+    // Pull the file id out of `/spreadsheets/d/{id}/...`. We accept
+    // the id as ANY chars between the `/d/` segment and the next `/`
+    // or end-of-string; Sheets ids are alphanumeric + - / _, so a
+    // permissive cut is safe.
+    let after_d = trimmed.find("/d/")?;
+    let id_start = after_d + 3;
+    let rest = &trimmed[id_start..];
+    let id_end_offset = rest
+        .find(|c: char| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let id = &rest[..id_end_offset];
+    if id.is_empty() {
+        return None;
+    }
+
+    // Extract gid from the URL fragment if present (Sheets writes it
+    // as `#gid=42`). Falls back to None → first tab.
+    let gid = trimmed
+        .split_once('#')
+        .and_then(|(_, frag)| {
+            frag.split('&').find_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                if k.eq_ignore_ascii_case("gid") {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
+        });
+
+    let mut out = format!(
+        "https://docs.google.com/spreadsheets/d/{}/export?format=csv",
+        id
+    );
+    if let Some(g) = gid {
+        out.push_str("&gid=");
+        out.push_str(&g);
+    }
+    Some(out)
+}
+
 /// Sanity-check a user-supplied URL before adding it as a watched
 /// source. Accepts `http(s)://` and `s3://`. We're not trying to be a
 /// full URL parser — just enough to reject common typos and unsupported
 /// schemes before hitting the network.
+///
+/// Special case: Google Sheets share URLs are rewritten to the CSV
+/// export form so the remote scanner can read them as plain CSV
+/// without the user having to know the export URL incantation.
 pub fn validate_url(raw: &str) -> UrlValidation {
+    // Auto-rewrite Sheets share URLs to their CSV export form
+    // BEFORE the rest of validation runs. Both the original and the
+    // rewritten URL are https:// so we don't bypass any guard.
+    let rewritten = rewrite_google_sheets_url(raw);
+    let raw = rewritten.as_deref().unwrap_or(raw);
+
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return UrlValidation::Invalid {
@@ -181,12 +266,29 @@ pub fn infer_filename_from_url(url: &str) -> String {
 /// Extract the file extension from a URL, lower-cased, without the dot.
 /// Returns `""` if none — the caller should then treat it as an
 /// unknown / unsupported format.
+///
+/// As a fallback for URLs whose path has no `.ext` (Google Sheets
+/// export, certain APIs), we honour a `?format=...` query parameter.
+/// That makes `…/export?format=csv` resolve to `csv` for the remote
+/// scanner's read-function dispatch.
 pub fn extension_from_url(url: &str) -> String {
     let filename = infer_filename_from_url(url);
-    match filename.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => ext.to_ascii_lowercase(),
-        _ => String::new(),
+    if let Some((_, ext)) = filename.rsplit_once('.') {
+        if !ext.is_empty() {
+            return ext.to_ascii_lowercase();
+        }
     }
+    // Fall back to ?format=... query param.
+    if let Some((_, query)) = url.split_once('?') {
+        for kv in query.split('&') {
+            if let Some((k, v)) = kv.split_once('=') {
+                if k.eq_ignore_ascii_case("format") && !v.is_empty() {
+                    return v.to_ascii_lowercase();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 /// Minimal percent-decode for filenames. We only handle the ASCII range
@@ -418,5 +520,86 @@ mod tests {
         assert_eq!(extension_from_url("https://x.com/a.csv?foo=1"), "csv");
         assert_eq!(extension_from_url("https://x.com/no_extension"), "");
         assert_eq!(extension_from_url("https://x.com/"), "");
+    }
+
+    #[test]
+    fn extension_from_url_falls_back_to_format_query() {
+        // The Sheets export endpoint has no extension in the path —
+        // the format lives in `?format=csv`. Without this fallback,
+        // the remote scanner errors with "unsupported file type".
+        assert_eq!(
+            extension_from_url(
+                "https://docs.google.com/spreadsheets/d/abc/export?format=csv"
+            ),
+            "csv"
+        );
+        assert_eq!(
+            extension_from_url(
+                "https://api.example.com/data?token=x&format=parquet"
+            ),
+            "parquet"
+        );
+    }
+
+    #[test]
+    fn detects_google_sheets_share_urls() {
+        assert!(is_google_sheets_url(
+            "https://docs.google.com/spreadsheets/d/abc123/edit"
+        ));
+        assert!(is_google_sheets_url(
+            "https://docs.google.com/spreadsheets/d/abc123/edit#gid=42"
+        ));
+        assert!(is_google_sheets_url(
+            "https://docs.google.com/spreadsheets/d/abc123"
+        ));
+        // Case-insensitive on the host.
+        assert!(is_google_sheets_url(
+            "HTTPS://docs.google.com/spreadsheets/d/abc/edit"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_sheets_google_urls() {
+        // Drive file viewer
+        assert!(!is_google_sheets_url(
+            "https://drive.google.com/file/d/abc/view"
+        ));
+        // Pubhtml (older publish-to-web) — different shape, deferred
+        assert!(!is_google_sheets_url(
+            "https://docs.google.com/spreadsheets/d/e/2PACX/pubhtml"
+        ));
+        // Plain remote CSV
+        assert!(!is_google_sheets_url("https://example.com/data.csv"));
+    }
+
+    #[test]
+    fn validate_url_rewrites_sheets_to_csv_export() {
+        match validate_url("https://docs.google.com/spreadsheets/d/abc123/edit") {
+            UrlValidation::Ok { normalised, .. } => {
+                assert_eq!(
+                    normalised,
+                    "https://docs.google.com/spreadsheets/d/abc123/export?format=csv"
+                );
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_url_preserves_sheets_gid_via_fragment() {
+        // User pasted a URL with the tab fragment — the export URL
+        // should carry the gid forward so they get the tab they were
+        // looking at, not the first tab.
+        match validate_url(
+            "https://docs.google.com/spreadsheets/d/abc/edit?usp=sharing#gid=789",
+        ) {
+            UrlValidation::Ok { normalised, .. } => {
+                assert_eq!(
+                    normalised,
+                    "https://docs.google.com/spreadsheets/d/abc/export?format=csv&gid=789"
+                );
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
     }
 }
