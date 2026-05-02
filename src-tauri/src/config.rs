@@ -389,6 +389,27 @@ impl Config {
             .retain(|f| !(f.account_id == account_id && f.folder_id == folder_id));
     }
 
+    /// Replace the file_ids + stamp last_walk_at on a Drive watched
+    /// folder after a successful refresh. Idempotent; no-op if the
+    /// entry has been unwatched between the walk start and the
+    /// config update (the refresh loop tolerates that race).
+    pub fn update_gdrive_walk_state(
+        &mut self,
+        account_id: &str,
+        folder_id: &str,
+        file_ids: Vec<String>,
+        when: String,
+    ) {
+        if let Some(entry) = self
+            .gdrive_watched_folders
+            .iter_mut()
+            .find(|f| f.account_id == account_id && f.folder_id == folder_id)
+        {
+            entry.file_ids = file_ids;
+            entry.last_walk_at = Some(when);
+        }
+    }
+
     pub fn update_folder_scan_stats(&mut self, path: &str, stats: ScanStats, when: String) {
         if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
             folder.last_scan_stats = Some(stats);

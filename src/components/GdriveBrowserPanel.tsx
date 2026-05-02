@@ -163,6 +163,24 @@ export function GdriveBrowserPanel() {
     };
   }, [toast]);
 
+  // ── Background-refresh listener ─────────────────────────────────
+  // The hourly gdrive_refresh tick emits gdrive-refresh per folder.
+  // We just re-fetch the watched list so the "last refreshed N min
+  // ago" label and file count stay accurate without forcing the user
+  // to reopen the modal.
+  useEffect(() => {
+    const unlisten = listen<{
+      folder_id: string;
+      downloaded: number;
+      deleted: number;
+    }>('gdrive-refresh', () => {
+      void loadWatchedFolders();
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, []);
+
   async function loadFolder(folderId: string) {
     setError(null);
     setState({ kind: 'connected', loadingFolders: true });
