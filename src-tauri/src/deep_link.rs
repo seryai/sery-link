@@ -103,11 +103,15 @@ fn handle_reveal(url: &Url) {
 }
 
 fn handle_pair<R: Runtime>(app: &AppHandle<R>, url: &Url) {
-    // First-cut placeholder for the v0.5.x deep-link pairing alternative.
-    // Surface the main window (already done by the dispatcher) and emit
-    // an event the frontend can listen to once the join-existing-workspace
-    // UI lands. Today this just logs the key so a developer poking at
-    // the URL scheme sees it works end-to-end on the routing side.
+    // F1 — deep-link workspace pairing. Drives the join-existing-
+    // workspace flow when the user clicks an `seryai://pair?key=…`
+    // link from email/chat. Routing-side responsibilities here:
+    //   1. Pull the key out of the URL.
+    //   2. Emit `deep-link-pair` with the raw key.
+    // The frontend (StatusBar) listens for that event, opens
+    // ConnectModal pre-filled with the key, and requires explicit
+    // user confirmation before calling auth_with_key — we never
+    // auto-submit a deep-linked credential.
     let key = url
         .query_pairs()
         .find(|(k, _)| k == "key")
@@ -119,15 +123,8 @@ fn handle_pair<R: Runtime>(app: &AppHandle<R>, url: &Url) {
         return;
     }
 
-    eprintln!(
-        "[deep-link] pair: received workspace key (len={}) — UI handler not wired yet",
-        key.len()
-    );
+    eprintln!("[deep-link] pair: received workspace key (len={})", key.len());
 
-    // Emit a frontend event so a future Onboarding/Connect handler can
-    // pre-fill the key field and prompt the user to confirm. The
-    // payload is the raw key — the receiving component is responsible
-    // for confirming with the user before calling auth_with_key.
     use tauri::Emitter;
     if let Err(err) = app.emit("deep-link-pair", &key) {
         eprintln!("[deep-link] pair: failed to emit event: {err}");

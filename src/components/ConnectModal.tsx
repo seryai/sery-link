@@ -31,14 +31,22 @@ type Props = {
    * style string but let them override.
    */
   defaultDisplayName?: string;
+  /**
+   * Pre-populated workspace key. Set by the deep-link pairing flow
+   * (`seryai://pair?key=...`) so users who clicked an invite link in
+   * email/chat don't have to copy-paste. Still requires explicit
+   * Connect-button click — we never auto-submit a deep-linked key.
+   */
+  defaultKey?: string;
 };
 
 export function ConnectModal({
   onClose,
   onConnected,
   defaultDisplayName,
+  defaultKey,
 }: Props) {
-  const [key, setKey] = useState('');
+  const [key, setKey] = useState(defaultKey ?? '');
   const [displayName, setDisplayName] = useState(
     defaultDisplayName ?? defaultMachineName(),
   );
@@ -122,6 +130,13 @@ export function ConnectModal({
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {defaultKey && (
+          <div className="mb-3 rounded-md border border-purple-200 bg-purple-50/60 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
+            This key arrived via an invite link. Confirm the machine
+            name below and click <strong>Connect</strong>.
+          </div>
+        )}
 
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
