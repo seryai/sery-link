@@ -278,6 +278,19 @@ pub async fn gdrive_list_folder(
 /// rescan so the indexer picks up the cached files. Emits
 /// `gdrive-watch-progress` events with `phase` ∈ {walking,
 /// downloading, scanning, done} so the UI can render a progress bar.
+/// Process-wide single-flight guard for Drive watches. Concurrent
+/// invocations (auto-watch on connect + the user manually clicking
+/// Watch on something else, or the hourly refresh racing with a
+/// fresh OAuth) would otherwise stack downloads in memory and load
+/// multiple Drive walks against the same OAuth tokens. Serialising
+/// at the command boundary is the simplest fix: the second caller
+/// blocks on the mutex until the first finishes, then proceeds.
+fn gdrive_watch_lock() -> &'static tokio::sync::Mutex<()> {
+    use std::sync::OnceLock;
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 #[tauri::command]
 pub async fn gdrive_watch_folder<R: Runtime>(
     app: AppHandle<R>,
@@ -286,6 +299,12 @@ pub async fn gdrive_watch_folder<R: Runtime>(
 ) -> Result<Value, String> {
     use tauri::Emitter;
     let account = "default".to_string();
+
+    // Hold the watch mutex for the entire flow. Doesn't block other
+    // commands (just other watches), and the wait shows up to the
+    // user as a delayed "walking" event — acceptable; better than
+    // OOM-ing the process from two parallel walks.
+    let _guard = gdrive_watch_lock().lock().await;
 
     let _ = app.emit(
         "gdrive-watch-progress",
@@ -298,6 +317,11 @@ pub async fn gdrive_watch_folder<R: Runtime>(
 
     let total = walked.files.len();
     let mut file_ids: Vec<String> = Vec::with_capacity(total);
+    let mut skipped_too_large = 0usize;
+    // Captured before the move into GdriveWatchedFolder below; we
+    // use it for the user-facing "indexed N files" toast and the
+    // Tauri command return value.
+    let cached_count: usize;
 
     for (i, file) in walked.files.iter().enumerate() {
         let _ = app.emit(
@@ -310,10 +334,20 @@ pub async fn gdrive_watch_folder<R: Runtime>(
                 "file_name": file.name,
             }),
         );
-        crate::gdrive_cache::download_if_stale(&account, file)
-            .await
-            .map_err(|e| e.to_string())?;
-        file_ids.push(file.id.clone());
+        // Per-file isolation: an oversized file or transient network
+        // hiccup on one item must not abort the whole watch. Log,
+        // count, and continue. The user sees the skipped count on
+        // the `done` event.
+        match crate::gdrive_cache::download_if_stale(&account, file).await {
+            Ok(_) => file_ids.push(file.id.clone()),
+            Err(e) => {
+                eprintln!(
+                    "[gdrive-watch] skipped {:?}: {}",
+                    file.name, e
+                );
+                skipped_too_large += 1;
+            }
+        }
     }
 
     // Persist the watched-folder entry, plus add the cache root to
@@ -323,6 +357,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         .map_err(|e| e.to_string())?;
     let cache_path_str = cache_dir.to_string_lossy().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    cached_count = file_ids.len();
     {
         let mut config = Config::load().map_err(|e| e.to_string())?;
         config.add_gdrive_watched_folder(crate::config::GdriveWatchedFolder {
@@ -351,15 +386,17 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         serde_json::json!({
             "folder_id": folder_id,
             "phase": "done",
-            "total_files": total,
+            "total_files": cached_count,
             "skipped_native": walked.skipped_native.len(),
+            "skipped_too_large": skipped_too_large,
         }),
     );
 
     Ok(serde_json::json!({
         "folder_id": folder_id,
-        "files_cached": total,
+        "files_cached": cached_count,
         "skipped_native": walked.skipped_native.len(),
+        "skipped_too_large": skipped_too_large,
         "folders_walked": walked.folder_count,
         "rescan": rescan_result,
     }))
