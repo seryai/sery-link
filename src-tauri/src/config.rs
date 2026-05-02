@@ -232,6 +232,15 @@ pub struct AppConfig {
     // transient popup, which scan-heavy users can find noisy.
     #[serde(default = "default_true")]
     pub schema_change_toasts_enabled: bool,
+    /// Which BYOK provider the Ask page should dispatch through.
+    /// `None` means "no provider explicitly selected" — the
+    /// status command falls back to the first provider with a
+    /// saved keyring entry, which preserves the v0.5 single-
+    /// provider behaviour for users who haven't picked one yet.
+    /// Set automatically when the user saves a key, mutable from
+    /// Settings → AI provider when multiple keys are stored.
+    #[serde(default)]
+    pub selected_byok_provider: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -253,6 +262,7 @@ impl Default for AppConfig {
             window_hide_notified: false,
             selected_auth_mode: None,
             schema_change_toasts_enabled: true,
+            selected_byok_provider: None,
         }
     }
 }

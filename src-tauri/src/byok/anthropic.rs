@@ -271,8 +271,31 @@ mod tests {
 
     #[test]
     fn provider_rejects_unsupported() {
-        assert!(super::super::Provider::parse("openai").is_err());
+        // openai + gemini are supported as of v0.6 — kept here as a
+        // reminder that adding a provider means updating this list.
         assert!(super::super::Provider::parse("ollama").is_err());
+        assert!(super::super::Provider::parse("mistral").is_err());
         assert!(super::super::Provider::parse("").is_err());
+    }
+
+    #[test]
+    fn provider_parses_openai_and_gemini() {
+        assert_eq!(
+            super::super::Provider::parse("openai").unwrap(),
+            super::super::Provider::OpenAi
+        );
+        assert_eq!(
+            super::super::Provider::parse("OpenAI").unwrap(),
+            super::super::Provider::OpenAi
+        );
+        assert_eq!(
+            super::super::Provider::parse("gemini").unwrap(),
+            super::super::Provider::Gemini
+        );
+        // 'google' is accepted as an alias since users may type it.
+        assert_eq!(
+            super::super::Provider::parse("google").unwrap(),
+            super::super::Provider::Gemini
+        );
     }
 }

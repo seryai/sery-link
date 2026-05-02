@@ -2532,23 +2532,59 @@ use crate::byok::{self, anthropic::AskResponse};
 
 #[derive(serde::Serialize, Debug)]
 pub struct ByokStatus {
+    /// True iff at least one provider has a saved keyring entry.
     pub configured: bool,
+    /// The provider the next ask_byok call will dispatch to. When
+    /// `selected_byok_provider` is set in config, that's the value;
+    /// otherwise we fall back to the first provider in
+    /// `Provider::all()` order with a saved key. `None` only when no
+    /// provider has been configured yet.
     pub provider: Option<String>,
+    /// Every provider that has a saved keyring entry. Populates the
+    /// Settings UI's "switch to" affordance so users with multiple
+    /// keys don't have to re-enter them.
+    pub configured_providers: Vec<String>,
+}
+
+/// Resolve which provider should serve the next BYOK call. Honours
+/// the user's explicit selection if one was saved AND that provider
+/// still has a key; otherwise picks the first configured provider
+/// from `Provider::all()`. Returns None when nothing is configured.
+fn resolve_active_provider() -> Option<byok::Provider> {
+    let cfg = Config::load().ok();
+    let configured: Vec<byok::Provider> = byok::Provider::all()
+        .iter()
+        .copied()
+        .filter(|p| keyring_store::has_byok_key(p.as_str()))
+        .collect();
+    if configured.is_empty() {
+        return None;
+    }
+    if let Some(c) = cfg {
+        if let Some(name) = c.app.selected_byok_provider {
+            if let Ok(p) = byok::Provider::parse(&name) {
+                if configured.contains(&p) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    configured.first().copied()
 }
 
 #[tauri::command]
 pub async fn get_byok_status() -> Result<ByokStatus, String> {
-    if keyring_store::has_byok_key("anthropic") {
-        Ok(ByokStatus {
-            configured: true,
-            provider: Some("anthropic".to_string()),
-        })
-    } else {
-        Ok(ByokStatus {
-            configured: false,
-            provider: None,
-        })
-    }
+    let configured_providers: Vec<String> = byok::Provider::all()
+        .iter()
+        .filter(|p| keyring_store::has_byok_key(p.as_str()))
+        .map(|p| p.as_str().to_string())
+        .collect();
+    let active = resolve_active_provider();
+    Ok(ByokStatus {
+        configured: !configured_providers.is_empty(),
+        provider: active.map(|p| p.as_str().to_string()),
+        configured_providers,
+    })
 }
 
 #[tauri::command]
@@ -2558,14 +2594,46 @@ pub async fn save_byok_key(provider: String, api_key: String) -> Result<(), Stri
         return Err("API key is empty".to_string());
     }
     keyring_store::save_byok_key(provider.as_str(), api_key.trim())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Switch the active provider to whatever the user just saved —
+    // saving a key is the strongest "use this one" signal we have.
+    let mut cfg = Config::load().map_err(|e| e.to_string())?;
+    cfg.app.selected_byok_provider = Some(provider.as_str().to_string());
+    cfg.save().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn clear_byok_key(provider: String) -> Result<(), String> {
     let provider = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
-    keyring_store::delete_byok_key(provider.as_str())
-        .map_err(|e| e.to_string())
+    keyring_store::delete_byok_key(provider.as_str()).map_err(|e| e.to_string())?;
+    // If the cleared provider was the selected one, drop the
+    // selection so the next ask falls back to whatever's still
+    // configured (or returns the "not configured" error).
+    let mut cfg = Config::load().map_err(|e| e.to_string())?;
+    if cfg.app.selected_byok_provider.as_deref() == Some(provider.as_str()) {
+        cfg.app.selected_byok_provider = None;
+        cfg.save().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Switch the active BYOK provider WITHOUT changing keys. Errors if
+/// the target provider has no saved key — keeps the UI honest about
+/// what the next ask will actually dispatch to.
+#[tauri::command]
+pub async fn select_byok_provider(provider: String) -> Result<(), String> {
+    let provider = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
+    if !keyring_store::has_byok_key(provider.as_str()) {
+        return Err(format!(
+            "{} has no saved key — save one before selecting it.",
+            provider.as_str()
+        ));
+    }
+    let mut cfg = Config::load().map_err(|e| e.to_string())?;
+    cfg.app.selected_byok_provider = Some(provider.as_str().to_string());
+    cfg.save().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Validate a BYOK key by making a real, minimal call to the provider.
@@ -2585,16 +2653,20 @@ pub async fn validate_byok_key(provider: String, api_key: String) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
-/// Ask the configured BYOK LLM a single question. Returns the full answer
-/// once the call completes (no streaming in v0.5.0). The HTTPS request goes
-/// from this process directly to the provider — no sery.ai involvement.
+/// Ask the configured BYOK LLM a single question. Returns the full
+/// answer once the call completes (no streaming in v0.6). The HTTPS
+/// request goes from this process directly to the provider — no
+/// sery.ai involvement, regardless of which provider is active.
 #[tauri::command]
 pub async fn ask_byok(prompt: String) -> Result<AskResponse, String> {
-    let api_key = keyring_store::get_byok_key("anthropic")
-        .map_err(|_| "BYOK key not configured. Save an Anthropic key first.".to_string())?;
-
-    let client = byok::anthropic::AnthropicClient::new(api_key);
-    client.ask(&prompt).await.map_err(|e| e.to_string())
+    let provider = resolve_active_provider().ok_or_else(|| {
+        "BYOK key not configured. Save an Anthropic, OpenAI, or Gemini key first.".to_string()
+    })?;
+    let api_key = keyring_store::get_byok_key(provider.as_str())
+        .map_err(|e| format!("Saved {} key disappeared from keychain: {}", provider.as_str(), e))?;
+    byok::ask(provider, &api_key, &prompt)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
