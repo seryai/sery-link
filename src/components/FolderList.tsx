@@ -25,7 +25,12 @@ import {
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { AddRemoteSourceModal } from './AddRemoteSourceModal';
-import { filenameFromUrl, isRemoteUrl } from '../utils/url';
+import { SourceIcon, sourceIconBgClass } from './SourceIcon';
+import {
+  classifySource,
+  filenameFromUrl,
+  sourceKindLabel,
+} from '../utils/url';
 import type { AgentConfig, WatchedFolder } from '../types/events';
 
 export function FolderList() {
@@ -234,6 +239,30 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
   const scanning = !!scan;
   const progress = scan && scan.total > 0 ? scan.current / scan.total : 0;
 
+  // Source-type metadata. Drives the icon, the source label, and
+  // the friendly title — the cache path for Drive folders is too
+  // long and cryptic to use as the user-facing name. Centralised
+  // here so the rest of the card stays readable.
+  const kind = classifySource(folder.path);
+  const { displayName, subtitle } = (() => {
+    switch (kind) {
+      case 'gdrive':
+        return { displayName: 'My Drive', subtitle: 'All files indexed' };
+      case 's3':
+        return {
+          displayName: filenameFromUrl(folder.path) || 'S3 source',
+          subtitle: folder.path,
+        };
+      case 'http':
+        return {
+          displayName: filenameFromUrl(folder.path) || 'Web URL',
+          subtitle: folder.path,
+        };
+      case 'local':
+        return { displayName: folderBasename(folder.path), subtitle: folder.path };
+    }
+  })();
+
   const openDetail = () => {
     navigate(`/folders/${encodeURIComponent(folder.path)}`);
   };
@@ -263,11 +292,24 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
   const remove = async () => {
     setMenuOpen(false);
     try {
-      await invoke('remove_watched_folder', { path: folder.path });
-      await onChanged();
-      toast.success('Folder removed');
+      if (kind === 'gdrive') {
+        // For Drive sources we delegate to disconnect_gdrive instead
+        // of remove_watched_folder because Drive has out-of-band
+        // state (OAuth tokens in keychain, the gdrive_watched_folders
+        // config list, cached file bytes) that remove_watched_folder
+        // doesn't know to clean up. Leaving them behind would yield
+        // a confusing zombie state where tokens still exist but no
+        // cache dir is watched.
+        await invoke('disconnect_gdrive');
+        await onChanged();
+        toast.success('Google Drive disconnected');
+      } else {
+        await invoke('remove_watched_folder', { path: folder.path });
+        await onChanged();
+        toast.success(kind === 'local' ? 'Folder removed' : 'Source removed');
+      }
     } catch (err) {
-      toast.error(`Couldn't remove folder: ${err}`);
+      toast.error(`Couldn't remove: ${err}`);
     }
   };
 
@@ -287,27 +329,29 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
       {/* Header row */}
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/40">
-            {isRemoteUrl(folder.path) ? (
-              <Globe className="h-5 w-5 text-purple-600 dark:text-purple-300" />
-            ) : (
-              <FolderIcon className="h-5 w-5 text-purple-600 dark:text-purple-300" />
-            )}
+          <div
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${sourceIconBgClass(
+              kind,
+            )}`}
+          >
+            <SourceIcon kind={kind} />
           </div>
           <div className="min-w-0 flex-1">
             <div
               className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100"
               title={folder.path}
             >
-              {isRemoteUrl(folder.path)
-                ? filenameFromUrl(folder.path)
-                : folderBasename(folder.path)}
+              {displayName}
             </div>
             <div
               className="truncate text-xs text-slate-500 dark:text-slate-400"
               title={folder.path}
             >
-              {folder.path}
+              <span className="font-medium text-slate-600 dark:text-slate-300">
+                {sourceKindLabel(kind)}
+              </span>
+              {' · '}
+              <span>{subtitle}</span>
             </div>
           </div>
         </div>
@@ -347,7 +391,7 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
                   }}
                 />
                 <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                  {!isRemoteUrl(folder.path) && (
+                  {kind === 'local' && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -367,7 +411,11 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
                   >
                     <Trash2 className="h-4 w-4" />
-                    {isRemoteUrl(folder.path) ? 'Remove source' : 'Remove folder'}
+                    {kind === 'gdrive'
+                      ? 'Disconnect Google Drive'
+                      : kind === 'local'
+                        ? 'Remove folder'
+                        : 'Remove source'}
                   </button>
                 </div>
               </>
