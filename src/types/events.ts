@@ -89,7 +89,19 @@ export interface DatasetScannedPayload {
 export type SearchMatchReason =
   | { kind: 'filename' }
   | { kind: 'column'; name: string; col_type: string }
-  | { kind: 'content'; snippet: string };
+  | { kind: 'content'; snippet: string }
+  | {
+      // Matched a file Sery knows exists in Drive but didn't cache
+      // (too big, Google-native, non-indexable extension). UI uses
+      // this to show a "filename only" badge and disable click-
+      // through since there's no parsed content to drill into.
+      kind: 'skipped_drive';
+      reason:
+        | 'native_unexportable'
+        | 'unsupported_extension'
+        | 'too_large'
+        | 'download_failed';
+    };
 
 export interface SearchMatch {
   folder_path: string;
