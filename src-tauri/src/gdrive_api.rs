@@ -288,6 +288,48 @@ pub async fn download_file_bytes(account_id: &str, file_id: &str) -> Result<Vec<
     .await
 }
 
+/// Download a Google-native file (Sheets, Docs, …) by exporting it
+/// to a parseable format. Drive rejects `alt=media` for native types
+/// and instead exposes `/export?mimeType=...` to convert them on the
+/// fly. The Sheets export to .xlsx preserves all tabs; the older
+/// CSV export was lossy (single sheet only) so we don't use it.
+///
+/// Picking which `export_mime` to request is the caller's job — see
+/// `gdrive_cache::export_mime_for` for the canonical mapping.
+pub async fn download_export_bytes(
+    account_id: &str,
+    file_id: &str,
+    export_mime: &str,
+) -> Result<Vec<u8>> {
+    let export_mime = export_mime.to_string();
+    with_fresh_token(account_id, |access_token| async move {
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("{}/files/{}/export", API_BASE, file_id))
+            .bearer_auth(&access_token)
+            .query(&[("mimeType", export_mime.as_str())])
+            .send()
+            .await
+            .map_err(|e| AgentError::Network(format!("drive export: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AgentError::Network(format!(
+                "drive export {}: {}",
+                status, body
+            )));
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| AgentError::Network(format!("drive export body: {}", e)))?;
+        Ok(bytes.to_vec())
+    })
+    .await
+}
+
 // ── Unit tests ─────────────────────────────────────────────────────
 
 #[cfg(test)]
