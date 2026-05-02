@@ -85,8 +85,50 @@ pub fn file_dir(account_id: &str, file_id: &str) -> Result<PathBuf> {
 /// Path the actual file content lives at. Sanitized name keeps
 /// unsafe characters (slashes, colons, NUL) out of the filesystem
 /// path while remaining recognisable to humans browsing the cache.
+///
+/// For Google-native files we append an export extension (e.g.
+/// `Q3 Budget` → `Q3 Budget.xlsx`) so scanner.rs's parser dispatch
+/// picks up the right reader without inspecting bytes — calamine
+/// for Sheets, etc.
 pub fn content_path(account_id: &str, file: &DriveFile) -> Result<PathBuf> {
-    Ok(file_dir(account_id, &file.id)?.join(sanitize_filename(&file.name)))
+    let base = sanitize_filename(&file.name);
+    let final_name = match export_mime_for(&file.mime_type) {
+        Some((_, ext)) => ensure_extension(&base, ext),
+        None => base,
+    };
+    Ok(file_dir(account_id, &file.id)?.join(final_name))
+}
+
+/// Map a Google-native mime type to (export_mime, extension) tuple.
+/// `None` for native types we can't usefully cache yet (Forms,
+/// Drawings, Sites). Only Sheets in v0.6; Docs/Slides will follow.
+///
+/// Sheets export to .xlsx (not .csv) preserves all tabs and number
+/// formats. The .xlsx mime is verbose; lifting it to a constant
+/// here keeps the call sites clean.
+pub fn export_mime_for(google_native_mime: &str) -> Option<(&'static str, &'static str)> {
+    match google_native_mime {
+        "application/vnd.google-apps.spreadsheet" => Some((
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "xlsx",
+        )),
+        _ => None,
+    }
+}
+
+/// Append `.<ext>` if the filename doesn't already end with it.
+/// Idempotent and case-insensitive on the comparison so a Drive
+/// item named "Report.xlsx" doesn't become "Report.xlsx.xlsx" if
+/// it ever shows up as both an exportable type and a binary upload.
+fn ensure_extension(name: &str, ext: &str) -> String {
+    let dot_ext = format!(".{}", ext);
+    if name
+        .to_ascii_lowercase()
+        .ends_with(&dot_ext.to_ascii_lowercase())
+    {
+        return name.to_string();
+    }
+    format!("{}{}", name, dot_ext)
 }
 
 fn meta_path(account_id: &str, file_id: &str) -> Result<PathBuf> {
@@ -165,15 +207,16 @@ pub fn is_stale(account_id: &str, file: &DriveFile) -> Result<bool> {
 /// file. Returns the path to the (now-fresh) cached content. Skips
 /// the network call when the sidecar's modifiedTime matches Drive's.
 ///
-/// Caller is responsible for filtering out Google-native types
-/// (`application/vnd.google-apps.*`) — Drive rejects `alt=media` for
-/// them and would need an `/export` call. Slice 4 of v0.6 will
-/// teach the walker to handle them; slice 1 keeps a single
-/// download path.
+/// For Google-native types: dispatches to `download_export_bytes`
+/// with the mime type from `export_mime_for`. For non-exportable
+/// natives (Forms, Drawings, Sites) returns Err — the walker filters
+/// these out so this path shouldn't fire in normal operation.
 pub async fn download_if_stale(account_id: &str, file: &DriveFile) -> Result<PathBuf> {
-    if file.mime_type.starts_with("application/vnd.google-apps.") {
+    let export_choice = export_mime_for(&file.mime_type);
+
+    if file.mime_type.starts_with("application/vnd.google-apps.") && export_choice.is_none() {
         return Err(AgentError::Config(format!(
-            "Google-native file {:?} ({}) needs export, not media download — \
+            "Google-native file {:?} ({}) has no export mapping — \
              walker should have filtered this",
             file.name, file.mime_type
         )));
@@ -190,9 +233,10 @@ pub async fn download_if_stale(account_id: &str, file: &DriveFile) -> Result<Pat
         return Ok(content_p);
     }
 
-    // If the file was renamed in Drive, the old content sits in the
+    // If the file was renamed (or its export extension changed —
+    // shouldn't happen but defensive), the old content sits in the
     // dir under its old name. Clean it up so the cache directory
-    // doesn't accumulate stale copies as users rename files.
+    // doesn't accumulate stale copies.
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let p = entry.path();
@@ -205,7 +249,12 @@ pub async fn download_if_stale(account_id: &str, file: &DriveFile) -> Result<Pat
         }
     }
 
-    let bytes = crate::gdrive_api::download_file_bytes(account_id, &file.id).await?;
+    let bytes = match export_choice {
+        Some((mime, _)) => {
+            crate::gdrive_api::download_export_bytes(account_id, &file.id, mime).await?
+        }
+        None => crate::gdrive_api::download_file_bytes(account_id, &file.id).await?,
+    };
     std::fs::write(&content_p, &bytes)
         .map_err(|e| AgentError::Config(format!("write cache file: {}", e)))?;
 
@@ -311,6 +360,61 @@ mod tests {
         );
         let stale = is_stale("test-account-fresh", &file).unwrap();
         assert!(stale);
+    }
+
+    #[test]
+    fn export_mime_maps_sheets_to_xlsx() {
+        let (mime, ext) =
+            export_mime_for("application/vnd.google-apps.spreadsheet").expect("sheets mapping");
+        assert_eq!(
+            mime,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(ext, "xlsx");
+    }
+
+    #[test]
+    fn export_mime_unmapped_for_other_natives_and_binaries() {
+        // Currently unsupported (Phase 3c-5+) native types — should
+        // return None so the walker buckets them into skipped_native.
+        assert!(export_mime_for("application/vnd.google-apps.document").is_none());
+        assert!(export_mime_for("application/vnd.google-apps.form").is_none());
+        // Real binary types have no /export pathway at all.
+        assert!(export_mime_for("text/csv").is_none());
+        assert!(export_mime_for("application/pdf").is_none());
+    }
+
+    #[test]
+    fn ensure_extension_appends_when_missing() {
+        assert_eq!(ensure_extension("Q3 Budget", "xlsx"), "Q3 Budget.xlsx");
+        // Drive item names rarely already have the export extension
+        // since they're native — but defend against the rename
+        // edge case where a Sheet was renamed to "Foo.xlsx".
+        assert_eq!(ensure_extension("Foo.xlsx", "xlsx"), "Foo.xlsx");
+        assert_eq!(ensure_extension("Foo.XLSX", "xlsx"), "Foo.XLSX");
+    }
+
+    #[test]
+    fn content_path_appends_xlsx_for_sheets() {
+        let sheet = DriveFile {
+            id: "sheet1".to_string(),
+            name: "Q3 Budget".to_string(),
+            mime_type: "application/vnd.google-apps.spreadsheet".to_string(),
+            size: None,
+            modified_time: "2026-05-01T10:00:00Z".to_string(),
+            parents: vec!["root".to_string()],
+        };
+        let p = content_path("acct", &sheet).unwrap();
+        let name = p.file_name().unwrap().to_string_lossy();
+        assert_eq!(name, "Q3 Budget.xlsx");
+    }
+
+    #[test]
+    fn content_path_unchanged_for_real_binary_files() {
+        let csv = fake_file("a", "data.csv", "2026-05-01T10:00:00Z");
+        let p = content_path("acct", &csv).unwrap();
+        let name = p.file_name().unwrap().to_string_lossy();
+        assert_eq!(name, "data.csv");
     }
 
     #[test]

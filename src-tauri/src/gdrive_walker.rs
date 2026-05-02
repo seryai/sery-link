@@ -32,6 +32,7 @@
 
 use crate::error::Result;
 use crate::gdrive_api::{self, DriveFile, FOLDER_MIME};
+use crate::gdrive_cache;
 use futures::future::BoxFuture;
 use std::collections::HashSet;
 
@@ -94,7 +95,18 @@ fn walk_recursive<'a>(
             if entry.is_folder() {
                 walk_recursive(account_id, &entry.id, result, visited).await?;
             } else if is_google_native(&entry.mime_type) {
-                result.skipped_native.push(entry);
+                // Google-native types we have an /export mapping for
+                // (Sheets in v0.6) flow through the regular cache
+                // path — `gdrive_cache::download_if_stale` dispatches
+                // on mime type. Native types without a mapping
+                // (Forms, Drawings, Sites) get bucketed into
+                // skipped_native so the UI can surface "X items
+                // skipped" copy.
+                if gdrive_cache::export_mime_for(&entry.mime_type).is_some() {
+                    result.files.push(entry);
+                } else {
+                    result.skipped_native.push(entry);
+                }
             } else {
                 result.files.push(entry);
             }
@@ -124,6 +136,17 @@ mod tests {
         assert!(is_google_native("application/vnd.google-apps.presentation"));
         assert!(is_google_native("application/vnd.google-apps.form"));
         assert!(is_google_native("application/vnd.google-apps.drawing"));
+    }
+
+    #[test]
+    fn sheets_have_export_mapping_so_walker_keeps_them() {
+        // Sheets are still vnd.google-apps.* but cache knows how to
+        // export them to .xlsx — so the walker MUST route them into
+        // `files`, not `skipped_native`. This test pins that
+        // contract; if export_mime_for ever loses the spreadsheet
+        // entry, the walker behavior would silently regress.
+        assert!(gdrive_cache::export_mime_for("application/vnd.google-apps.spreadsheet").is_some());
+        assert!(gdrive_cache::export_mime_for("application/vnd.google-apps.form").is_none());
     }
 
     #[test]
