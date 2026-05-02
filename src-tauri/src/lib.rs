@@ -14,6 +14,7 @@ mod gdrive_api;
 mod gdrive_cache;
 mod gdrive_creds;
 mod gdrive_oauth;
+mod gdrive_refresh;
 mod gdrive_walker;
 mod machines;
 mod history;
@@ -158,6 +159,12 @@ pub fn run() {
                     }
                 });
             }
+
+            // Hourly background refresh of every watched Drive folder.
+            // Skips silently when no folders are watched or when the
+            // user is disconnected; logs per-folder failures to stderr
+            // without bothering the user.
+            gdrive_refresh::start_refresh_loop(app.handle().clone());
 
             Ok(())
         })
