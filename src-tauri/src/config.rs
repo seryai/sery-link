@@ -34,6 +34,38 @@ pub struct Config {
     pub sync: SyncConfig,
     #[serde(default)]
     pub app: AppConfig,
+    /// Google Drive folders the user has chosen to watch. Distinct
+    /// from `watched_folders` because they need a Drive API walk
+    /// before the cache directory becomes scannable. The cache dir
+    /// itself (`~/.seryai/gdrive-cache/<account>/`) IS added to
+    /// `watched_folders` once at least one Drive folder is being
+    /// watched, so the existing scanner picks up the downloaded
+    /// files without any code in scanner.rs that knows about Drive.
+    #[serde(default)]
+    pub gdrive_watched_folders: Vec<GdriveWatchedFolder>,
+}
+
+/// One Drive folder the user has elected to watch. The `name` is
+/// shown in the UI; `folder_id` is the Drive id we re-walk on
+/// refresh; `account_id` is keyed for multi-account future support
+/// (always `"default"` in v0.6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GdriveWatchedFolder {
+    pub account_id: String,
+    pub folder_id: String,
+    pub name: String,
+    /// RFC 3339 timestamp of the last successful walk + download.
+    /// Used by the UI ("last refreshed 2 min ago") and the
+    /// background refresh job (slice 4) to space out re-walks.
+    #[serde(default)]
+    pub last_walk_at: Option<String>,
+    /// Drive file ids we've cached as part of this watch. Lets us
+    /// surgically uncache only this folder's files when the user
+    /// unwatches it without nuking files that another watch shares.
+    /// (Multi-watch + shared files is rare but possible — Drive
+    /// folders can overlap.)
+    #[serde(default)]
+    pub file_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +277,7 @@ impl Default for Config {
                 workspace_id: None,
             },
             watched_folders: Vec::new(),
+            gdrive_watched_folders: Vec::new(),
             cloud: CloudConfig {
                 api_url: default_api_url(),
                 websocket_url: default_websocket_url(),
@@ -331,6 +364,29 @@ impl Config {
 
     pub fn remove_watched_folder(&mut self, path: &str) {
         self.watched_folders.retain(|f| f.path != path);
+    }
+
+    /// Idempotent on (account_id, folder_id). Re-watching an existing
+    /// Drive folder updates the display name + replaces the file_ids
+    /// (so a folder that's had files added since last walk reflects
+    /// the new set), but keeps last_walk_at unset until the caller
+    /// stamps it after a successful walk.
+    pub fn add_gdrive_watched_folder(&mut self, entry: GdriveWatchedFolder) {
+        if let Some(existing) = self
+            .gdrive_watched_folders
+            .iter_mut()
+            .find(|f| f.account_id == entry.account_id && f.folder_id == entry.folder_id)
+        {
+            existing.name = entry.name;
+            existing.file_ids = entry.file_ids;
+            return;
+        }
+        self.gdrive_watched_folders.push(entry);
+    }
+
+    pub fn remove_gdrive_watched_folder(&mut self, account_id: &str, folder_id: &str) {
+        self.gdrive_watched_folders
+            .retain(|f| !(f.account_id == account_id && f.folder_id == folder_id));
     }
 
     pub fn update_folder_scan_stats(&mut self, path: &str, stats: ScanStats, when: String) {
