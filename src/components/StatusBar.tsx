@@ -12,8 +12,9 @@
 // the right side in both modes — they're populated regardless of
 // cloud state.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Cloud, CloudOff, Link as LinkIcon, LogOut } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import type { ConnectionStatus } from '../stores/agentStore';
@@ -58,7 +59,45 @@ export function StatusBar() {
     agentInfo,
     stats,
   } = useAgentStore();
+  const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
+  // Set when a `seryai://pair?key=...` deep link fires while the user
+  // is unauthenticated. Pre-fills ConnectModal so the user sees the
+  // key from the invite without copy-pasting. Cleared when the modal
+  // closes — never persisted (the modal is the only legitimate
+  // consumer of an invite key).
+  const [deepLinkKey, setDeepLinkKey] = useState<string | null>(null);
+
+  // Bridge the seryai://pair?key=… URL scheme into the existing
+  // workspace-key auth flow. The Rust side (deep_link.rs) already
+  // emits `deep-link-pair` with the raw key as the payload; here we
+  // open the right modal on receipt, or — when already authenticated
+  // — surface a toast explaining how to switch.
+  useEffect(() => {
+    const unlisten = listen<string>('deep-link-pair', (event) => {
+      const key = event.payload;
+      if (!key || !key.startsWith('sery_k_')) {
+        toast.error("Invite link's key didn't look right. Ask the sender to resend.");
+        return;
+      }
+      if (authenticated) {
+        toast.info(
+          "You're already connected to a workspace. Disconnect first if you want to switch.",
+        );
+        return;
+      }
+      setDeepLinkKey(key);
+      setShowConnect(true);
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [authenticated, toast]);
+
+  function closeConnect() {
+    setShowConnect(false);
+    setDeepLinkKey(null);
+  }
 
   // Two shells — local-only vs connected. Keeping the branch at the
   // top level makes each path obvious when reading the file.
@@ -92,7 +131,12 @@ export function StatusBar() {
           </div>
         </div>
 
-        {showConnect && <ConnectModal onClose={() => setShowConnect(false)} />}
+        {showConnect && (
+          <ConnectModal
+            onClose={closeConnect}
+            defaultKey={deepLinkKey ?? undefined}
+          />
+        )}
       </>
     );
   }
