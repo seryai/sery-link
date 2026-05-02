@@ -143,6 +143,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Embedded into the binary at compile time via Rust
+          # `option_env!()` in src-tauri/src/gdrive_oauth.rs. If unset
+          # (e.g. fork builds without the secret), the Drive panel
+          # surfaces a "not configured for this build" message
+          # instead of a connect button. See
+          # datalake/SETUP_GOOGLE_OAUTH.md.
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           # APPLE_* env vars are inherited from $GITHUB_ENV (set by
           # the conditional step above) — present only when an
           # Apple cert is configured.
