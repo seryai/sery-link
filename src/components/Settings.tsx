@@ -31,9 +31,10 @@ import {
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { McpPanel } from './settings/McpPanel';
+import { StoragePanel } from './settings/StoragePanel';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'about';
+type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'storage' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
@@ -230,6 +231,9 @@ export function Settings() {
           <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')}>
             MCP
           </TabButton>
+          <TabButton active={tab === 'storage'} onClick={() => setTab('storage')}>
+            Storage
+          </TabButton>
           <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
             About
           </TabButton>
@@ -242,6 +246,7 @@ export function Settings() {
         {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
         {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
         {tab === 'mcp' && <McpPanel draft={draft} setDraft={setDraft} />}
+        {tab === 'storage' && <StoragePanel />}
         {tab === 'about' && (
           <AboutPanel
             draft={draft}
