@@ -266,6 +266,9 @@ pub fn run() {
             commands::disconnect_gdrive,
             commands::gdrive_list_root_folders,
             commands::gdrive_list_folder,
+            commands::gdrive_watch_folder,
+            commands::gdrive_unwatch_folder,
+            commands::gdrive_list_watched_folders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -232,7 +232,20 @@ pub async fn gdrive_status() -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn disconnect_gdrive() -> Result<(), String> {
-    crate::gdrive_creds::delete("default").map_err(|e| e.to_string())?;
+    let account = "default";
+    crate::gdrive_creds::delete(account).map_err(|e| e.to_string())?;
+    // Wipe the local cache so "I disconnected Drive" matches the
+    // user's mental model — no Drive bytes left on disk after.
+    crate::gdrive_cache::forget_account(account).map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config
+        .gdrive_watched_folders
+        .retain(|f| f.account_id != account);
+    if let Ok(cache_dir) = crate::gdrive_cache::account_dir(account) {
+        config.remove_watched_folder(&cache_dir.to_string_lossy());
+    }
+    config.save().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -258,6 +271,157 @@ pub async fn gdrive_list_folder(
     crate::gdrive_api::list_folder("default", &folder_id, include_folders)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Watch a Drive folder: walk it, download every eligible file into
+/// the local cache, register the folder in config, and trigger a
+/// rescan so the indexer picks up the cached files. Emits
+/// `gdrive-watch-progress` events with `phase` ∈ {walking,
+/// downloading, scanning, done} so the UI can render a progress bar.
+#[tauri::command]
+pub async fn gdrive_watch_folder<R: Runtime>(
+    app: AppHandle<R>,
+    folder_id: String,
+    folder_name: String,
+) -> Result<Value, String> {
+    use tauri::Emitter;
+    let account = "default".to_string();
+
+    let _ = app.emit(
+        "gdrive-watch-progress",
+        serde_json::json!({"folder_id": folder_id, "phase": "walking"}),
+    );
+
+    let walked = crate::gdrive_walker::walk_folder(&account, &folder_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let total = walked.files.len();
+    let mut file_ids: Vec<String> = Vec::with_capacity(total);
+
+    for (i, file) in walked.files.iter().enumerate() {
+        let _ = app.emit(
+            "gdrive-watch-progress",
+            serde_json::json!({
+                "folder_id": folder_id,
+                "phase": "downloading",
+                "current": i + 1,
+                "total": total,
+                "file_name": file.name,
+            }),
+        );
+        crate::gdrive_cache::download_if_stale(&account, file)
+            .await
+            .map_err(|e| e.to_string())?;
+        file_ids.push(file.id.clone());
+    }
+
+    // Persist the watched-folder entry, plus add the cache root to
+    // watched_folders so the existing scanner picks up the files.
+    // Idempotent: re-watching the same folder updates its file_ids.
+    let cache_dir = crate::gdrive_cache::account_dir(&account)
+        .map_err(|e| e.to_string())?;
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let mut config = Config::load().map_err(|e| e.to_string())?;
+        config.add_gdrive_watched_folder(crate::config::GdriveWatchedFolder {
+            account_id: account.clone(),
+            folder_id: folder_id.clone(),
+            name: folder_name.clone(),
+            last_walk_at: Some(now.clone()),
+            file_ids,
+        });
+        config.add_watched_folder(cache_path_str.clone(), true);
+        config.save().map_err(|e| e.to_string())?;
+    }
+
+    // Hand off to the existing rescan flow — it owns tray state,
+    // schema diff, audit, and the standard scan event stream that
+    // FolderDetail already knows how to render. The Drive UI just
+    // additionally listens for our gdrive-watch-progress events.
+    let _ = app.emit(
+        "gdrive-watch-progress",
+        serde_json::json!({"folder_id": folder_id, "phase": "scanning"}),
+    );
+    let rescan_result = rescan_folder(app.clone(), cache_path_str).await?;
+
+    let _ = app.emit(
+        "gdrive-watch-progress",
+        serde_json::json!({
+            "folder_id": folder_id,
+            "phase": "done",
+            "total_files": total,
+            "skipped_native": walked.skipped_native.len(),
+        }),
+    );
+
+    Ok(serde_json::json!({
+        "folder_id": folder_id,
+        "files_cached": total,
+        "skipped_native": walked.skipped_native.len(),
+        "folders_walked": walked.folder_count,
+        "rescan": rescan_result,
+    }))
+}
+
+/// Stop watching a Drive folder. Removes its entry from config and
+/// purges any cached files that aren't shared with another active
+/// watch. Idempotent: unwatching a folder that's already gone is OK.
+#[tauri::command]
+pub async fn gdrive_unwatch_folder(folder_id: String) -> Result<(), String> {
+    let account = "default";
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    let entry = config
+        .gdrive_watched_folders
+        .iter()
+        .find(|f| f.account_id == account && f.folder_id == folder_id)
+        .cloned();
+
+    let entry = match entry {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+
+    // Files shared with another active watch (Drive folders can
+    // overlap, especially via shared folders) must NOT be deleted.
+    let shared: std::collections::HashSet<String> = config
+        .gdrive_watched_folders
+        .iter()
+        .filter(|f| !(f.account_id == account && f.folder_id == folder_id))
+        .flat_map(|f| f.file_ids.iter().cloned())
+        .collect();
+
+    for fid in &entry.file_ids {
+        if !shared.contains(fid) {
+            crate::gdrive_cache::forget_file(account, fid)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    config.remove_gdrive_watched_folder(account, &folder_id);
+
+    // No more Drive watches → drop the cache root from the local
+    // watched_folders list so the user doesn't see a phantom
+    // "Google Drive" entry pointing at an empty cache dir.
+    if config.gdrive_watched_folders.is_empty() {
+        if let Ok(cache_dir) = crate::gdrive_cache::account_dir(account) {
+            config.remove_watched_folder(&cache_dir.to_string_lossy());
+        }
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// List all Drive folders the user is currently watching, for the
+/// UI's "Google Drive" section.
+#[tauri::command]
+pub async fn gdrive_list_watched_folders(
+) -> Result<Vec<crate::config::GdriveWatchedFolder>, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    Ok(config.gdrive_watched_folders.clone())
 }
 
 #[tauri::command]
