@@ -265,24 +265,22 @@ export function GdriveBrowserPanel() {
     void loadFolder(newCrumbs[newCrumbs.length - 1].id);
   }
 
-  async function handleWatchCurrent() {
-    const current = crumbs[crumbs.length - 1];
-    if (!current || current.id === 'root') {
-      // We deliberately block watching all of My Drive — that could
-      // be hundreds of GB and the user almost certainly didn't mean
-      // to. Drilling into a folder picks scope intentionally.
-      toast.error('Drill into a folder first — Sery won\'t watch your entire Drive at once.');
+  async function handleWatch(folderId: string, folderName: string) {
+    if (folderId === 'root') {
+      // Watching all of My Drive could be hundreds of GB — almost
+      // certainly not what the user meant.
+      toast.error("Pick a specific folder — Sery won't watch your entire Drive at once.");
       return;
     }
-    if (watchedFolders.some((w) => w.folder_id === current.id)) {
-      toast.info(`Already watching "${current.name}"`);
+    if (watchedFolders.some((w) => w.folder_id === folderId)) {
+      toast.info(`Already watching "${folderName}"`);
       return;
     }
     try {
-      setWatching({ folder_id: current.id, phase: 'walking' });
+      setWatching({ folder_id: folderId, phase: 'walking' });
       await invoke('gdrive_watch_folder', {
-        folderId: current.id,
-        folderName: current.name,
+        folderId,
+        folderName,
       });
       // Final toast / cleanup happens in the gdrive-watch-progress
       // listener when the `done` event arrives — keeping the success
@@ -376,48 +374,34 @@ export function GdriveBrowserPanel() {
   }
 
   // state.kind === 'connected'
-  const currentCrumb = crumbs[crumbs.length - 1];
-  const isAtRoot = currentCrumb.id === 'root';
-  const alreadyWatching = watchedFolders.some(
-    (w) => w.folder_id === currentCrumb.id,
-  );
-
   return (
     <div>
-      {/* Breadcrumb + Watch button */}
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
-          {crumbs.map((c, i) => (
-            <span key={c.id} className="flex items-center gap-1">
-              <button
-                onClick={() => handleCrumb(i)}
-                disabled={i === crumbs.length - 1}
-                className="rounded px-1.5 py-0.5 hover:bg-slate-100 disabled:cursor-default disabled:font-semibold disabled:text-slate-900 disabled:hover:bg-transparent dark:hover:bg-slate-800 dark:disabled:text-slate-100"
-              >
-                {c.name}
-              </button>
-              {i < crumbs.length - 1 && (
-                <ChevronRight className="h-3 w-3 text-slate-300 dark:text-slate-600" />
-              )}
-            </span>
-          ))}
-        </div>
-        <button
-          onClick={handleWatchCurrent}
-          disabled={isAtRoot || alreadyWatching || watching !== null}
-          title={
-            isAtRoot
-              ? 'Drill into a folder first'
-              : alreadyWatching
-                ? 'Already watching this folder'
-                : `Watch "${currentCrumb.name}"`
-          }
-          className="inline-flex flex-shrink-0 items-center gap-1 rounded-md bg-purple-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Watch this folder
-        </button>
+      {/* Breadcrumb */}
+      <div className="mb-2 flex flex-wrap items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+        {crumbs.map((c, i) => (
+          <span key={c.id} className="flex items-center gap-1">
+            <button
+              onClick={() => handleCrumb(i)}
+              disabled={i === crumbs.length - 1}
+              className="rounded px-1.5 py-0.5 hover:bg-slate-100 disabled:cursor-default disabled:font-semibold disabled:text-slate-900 disabled:hover:bg-transparent dark:hover:bg-slate-800 dark:disabled:text-slate-100"
+            >
+              {c.name}
+            </button>
+            {i < crumbs.length - 1 && (
+              <ChevronRight className="h-3 w-3 text-slate-300 dark:text-slate-600" />
+            )}
+          </span>
+        ))}
       </div>
+
+      {/* Hint copy — clarifies the click affordance. The previous
+          UX hid all CTAs in a top-right button that was disabled at
+          root, leaving users confused about how to actually pick a
+          folder. Now: click row body to drill in, click Watch on
+          the right to add it as a Sery source. */}
+      <p className="mb-2 text-[11px] text-slate-500 dark:text-slate-400">
+        Click a folder name to open it. Click <strong>Watch</strong> to add it as a Sery source.
+      </p>
 
       {/* Folder list */}
       <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
@@ -434,24 +418,53 @@ export function GdriveBrowserPanel() {
           <ul className="divide-y divide-slate-200 dark:divide-slate-700">
             {folders.map((f) => {
               const isFolder = f.mime_type === FOLDER_MIME;
+              const isWatched = watchedFolders.some((w) => w.folder_id === f.id);
               return (
                 <li
                   key={f.id}
                   className={`flex items-center gap-2 px-3 py-2 text-sm ${
-                    isFolder
-                      ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/60'
-                      : 'text-slate-500 dark:text-slate-400'
+                    isFolder ? '' : 'text-slate-500 dark:text-slate-400'
                   }`}
-                  onClick={() => isFolder && handleEnterFolder(f)}
                 >
                   {isFolder ? (
                     <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
                   ) : (
                     <Folder className="h-4 w-4 flex-shrink-0 text-slate-400" />
                   )}
-                  <span className="truncate">{f.name}</span>
+                  <button
+                    onClick={() => isFolder && handleEnterFolder(f)}
+                    disabled={!isFolder}
+                    className={`min-w-0 flex-1 truncate text-left ${
+                      isFolder
+                        ? 'cursor-pointer hover:underline'
+                        : 'cursor-default'
+                    }`}
+                  >
+                    {f.name}
+                  </button>
+                  {isFolder &&
+                    (isWatched ? (
+                      <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                        Watching
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          // Prevent the row's drill-in click from
+                          // also firing — Watch should be a leaf
+                          // action, not navigation.
+                          e.stopPropagation();
+                          void handleWatch(f.id, f.name);
+                        }}
+                        disabled={watching !== null}
+                        className="inline-flex flex-shrink-0 items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Plus className="h-3 w-3" />
+                        Watch
+                      </button>
+                    ))}
                   {isFolder && (
-                    <ChevronRight className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
+                    <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
                   )}
                 </li>
               );
