@@ -149,7 +149,15 @@ jobs:
           # surfaces a "not configured for this build" message
           # instead of a connect button. See
           # datalake/SETUP_GOOGLE_OAUTH.md.
+          #
+          # Both the client_id AND client_secret are baked in. Despite
+          # the name, Google's docs are explicit that the "secret" for
+          # installed apps is not confidential (RFC 8252 §8.5).
+          # Google's /token endpoint nevertheless requires it for
+          # Desktop-app OAuth clients — even with PKCE — or rejects
+          # with `invalid_request: client_secret is missing`.
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
           # APPLE_* env vars are inherited from $GITHUB_ENV (set by
           # the conditional step above) — present only when an
           # Apple cert is configured.

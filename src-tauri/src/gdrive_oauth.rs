@@ -104,6 +104,21 @@ pub fn client_id() -> Option<&'static str> {
     option_env!("GOOGLE_OAUTH_CLIENT_ID")
 }
 
+/// Compile-time-embedded "client secret" for the Desktop-app OAuth
+/// client. Despite the name, this is NOT a secret — Google's OAuth
+/// docs explicitly note that the client_secret bundled with installed
+/// apps is not treated as confidential (RFC 6749 §2.1 calls them
+/// "public clients"). Google's `/token` endpoint nevertheless rejects
+/// requests for Desktop-app clients without it, returning
+/// `invalid_request: client_secret is missing`. Even with PKCE.
+///
+/// So we ship it embedded alongside the client_id; security relies on
+/// PKCE + the redirect_uri match, not on the secret being secret. See
+/// https://datatracker.ietf.org/doc/html/rfc8252#section-8.5.
+pub fn client_secret() -> Option<&'static str> {
+    option_env!("GOOGLE_OAUTH_CLIENT_SECRET")
+}
+
 // ── PKCE ───────────────────────────────────────────────────────────
 
 /// PKCE verifier + challenge per RFC 7636.
@@ -456,6 +471,7 @@ pub struct TokenResponse {
 /// through to here.
 pub async fn exchange_code(
     client_id: &str,
+    client_secret: &str,
     code: &str,
     verifier: &str,
     redirect_uri: &str,
@@ -463,6 +479,7 @@ pub async fn exchange_code(
     let client = reqwest::Client::new();
     let params = [
         ("client_id", client_id),
+        ("client_secret", client_secret),
         ("code", code),
         ("code_verifier", verifier),
         ("grant_type", "authorization_code"),
@@ -494,10 +511,15 @@ pub async fn exchange_code(
 /// token. Refresh tokens are long-lived but Google may rotate them
 /// — if the response contains a new `refresh_token`, replace the
 /// stored one.
-pub async fn refresh_token(client_id: &str, refresh_token: &str) -> Result<TokenResponse> {
+pub async fn refresh_token(
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse> {
     let client = reqwest::Client::new();
     let params = [
         ("client_id", client_id),
+        ("client_secret", client_secret),
         ("refresh_token", refresh_token),
         ("grant_type", "refresh_token"),
     ];
@@ -569,6 +591,14 @@ async fn handle_callback_inner(code: &str, state: &str, redirect_uri: &str) -> R
             "Google Drive integration not configured for this build.".to_string(),
         )
     })?;
+    let csecret = client_secret().ok_or_else(|| {
+        AgentError::Config(
+            "Google Drive integration is missing GOOGLE_OAUTH_CLIENT_SECRET. \
+             Rebuild Sery Link with both GOOGLE_OAUTH_CLIENT_ID and \
+             GOOGLE_OAUTH_CLIENT_SECRET set — see datalake/SETUP_GOOGLE_OAUTH.md."
+                .to_string(),
+        )
+    })?;
 
     // Pull the verifier out of the pending table. After this, state
     // is consumed — a replay of the same callback URL fails fast.
@@ -582,7 +612,7 @@ async fn handle_callback_inner(code: &str, state: &str, redirect_uri: &str) -> R
             ))?
     };
 
-    let tokens = exchange_code(cid, code, &verifier, redirect_uri).await?;
+    let tokens = exchange_code(cid, csecret, code, &verifier, redirect_uri).await?;
 
     // For v1 we use a single "default" account per Sery Link install.
     // Multi-account support (Phase 3c+) keys on the Google user's
