@@ -51,6 +51,18 @@ impl Provider {
     pub fn all() -> &'static [Provider] {
         &[Provider::Anthropic, Provider::OpenAi, Provider::Gemini]
     }
+
+    /// Compiled-in default model for the provider — used when the
+    /// user hasn't overridden via Config.app.byok_models. Surfaced
+    /// to the UI as the placeholder text for the model field so
+    /// users see what they'd get with no override.
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            Provider::Anthropic => anthropic::DEFAULT_MODEL,
+            Provider::OpenAi => openai::DEFAULT_MODEL,
+            Provider::Gemini => gemini::DEFAULT_MODEL,
+        }
+    }
 }
 
 /// Validate a key against the provider's API. Each provider's
@@ -74,26 +86,39 @@ pub async fn validate_key(provider: Provider, key: &str) -> Result<()> {
 /// `anthropic::AskResponse` for historical reasons but is
 /// provider-neutral — the OpenAI and Gemini clients map their
 /// native usage fields onto it.
+///
+/// `model` is the user's optional override; when None, each
+/// provider uses its compiled-in default. We thread an explicit
+/// max_tokens for Anthropic / OpenAI (Gemini doesn't expose one
+/// the same way) so future per-provider knobs can plug in here.
 pub async fn ask(
     provider: Provider,
     api_key: &str,
     prompt: &str,
+    model: Option<&str>,
 ) -> Result<anthropic::AskResponse> {
+    const DEFAULT_MAX_TOKENS: u32 = 1024;
     match provider {
         Provider::Anthropic => {
-            anthropic::AnthropicClient::new(api_key.to_string())
-                .ask(prompt)
-                .await
+            let client = anthropic::AnthropicClient::new(api_key.to_string());
+            match model {
+                Some(m) => client.ask_with_model(prompt, m, DEFAULT_MAX_TOKENS).await,
+                None => client.ask(prompt).await,
+            }
         }
         Provider::OpenAi => {
-            openai::OpenAiClient::new(api_key.to_string())
-                .ask(prompt)
-                .await
+            let client = openai::OpenAiClient::new(api_key.to_string());
+            match model {
+                Some(m) => client.ask_with_model(prompt, m, DEFAULT_MAX_TOKENS).await,
+                None => client.ask(prompt).await,
+            }
         }
         Provider::Gemini => {
-            gemini::GeminiClient::new(api_key.to_string())
-                .ask(prompt)
-                .await
+            let client = gemini::GeminiClient::new(api_key.to_string());
+            match model {
+                Some(m) => client.ask_with_model(prompt, m).await,
+                None => client.ask(prompt).await,
+            }
         }
     }
 }

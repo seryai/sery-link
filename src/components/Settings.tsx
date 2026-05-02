@@ -617,6 +617,9 @@ interface ProviderInfo {
   consoleLabel: string;
   /** Hostname the request goes to (shown in the privacy-promise copy). */
   host: string;
+  /** Hint shown under the model input — examples of valid model names
+   *  for this provider, plus a link to the provider's model docs. */
+  modelHint: React.ReactNode;
 }
 
 const PROVIDERS: ProviderInfo[] = [
@@ -627,14 +630,44 @@ const PROVIDERS: ProviderInfo[] = [
     consoleUrl: 'https://console.anthropic.com/settings/keys',
     consoleLabel: 'console.anthropic.com/settings/keys',
     host: 'api.anthropic.com',
+    modelHint: (
+      <>
+        e.g. <code>claude-haiku-4-5</code>, <code>claude-sonnet-4-6</code>,{' '}
+        <code>claude-opus-4-7</code>. Full list:{' '}
+        <a
+          href="https://docs.claude.com/en/docs/about-claude/models"
+          target="_blank"
+          rel="noreferrer"
+          className="text-purple-600 hover:underline dark:text-purple-300"
+        >
+          docs.claude.com
+        </a>
+        .
+      </>
+    ),
   },
   {
     id: 'openai',
-    label: 'OpenAI (GPT-4o)',
+    label: 'OpenAI (GPT)',
     placeholder: 'sk-…',
     consoleUrl: 'https://platform.openai.com/api-keys',
     consoleLabel: 'platform.openai.com/api-keys',
     host: 'api.openai.com',
+    modelHint: (
+      <>
+        e.g. <code>gpt-4o-mini</code>, <code>gpt-4o</code>, <code>o3</code>,{' '}
+        <code>o3-mini</code>. Full list:{' '}
+        <a
+          href="https://platform.openai.com/docs/models"
+          target="_blank"
+          rel="noreferrer"
+          className="text-purple-600 hover:underline dark:text-purple-300"
+        >
+          platform.openai.com/docs/models
+        </a>
+        .
+      </>
+    ),
   },
   {
     id: 'gemini',
@@ -643,6 +676,21 @@ const PROVIDERS: ProviderInfo[] = [
     consoleUrl: 'https://aistudio.google.com/apikey',
     consoleLabel: 'aistudio.google.com/apikey',
     host: 'generativelanguage.googleapis.com',
+    modelHint: (
+      <>
+        e.g. <code>gemini-2.0-flash</code>, <code>gemini-1.5-pro</code>,{' '}
+        <code>gemini-1.5-flash</code>. Full list:{' '}
+        <a
+          href="https://ai.google.dev/gemini-api/docs/models"
+          target="_blank"
+          rel="noreferrer"
+          className="text-purple-600 hover:underline dark:text-purple-300"
+        >
+          ai.google.dev
+        </a>
+        .
+      </>
+    ),
   },
 ];
 
@@ -650,10 +698,21 @@ function providerInfo(id: ProviderId): ProviderInfo {
   return PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 }
 
+interface ByokModels {
+  overrides: Record<string, string>;
+  defaults: Record<string, string>;
+}
+
 function AIProviderPanel() {
   const [status, setStatus] = useState<ByokStatus | null>(null);
+  const [models, setModels] = useState<ByokModels | null>(null);
   const [provider, setProvider] = useState<ProviderId>('anthropic');
   const [draft, setDraft] = useState('');
+  // Local edit buffer for the model field. Synced from
+  // `models.overrides` whenever the provider changes; saved on
+  // blur (or on Test & save) so users don't have to hit a button
+  // for the model alone.
+  const [modelDraft, setModelDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [validating, setValidating] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -661,13 +720,20 @@ function AIProviderPanel() {
 
   const refresh = async () => {
     try {
-      const next = await invoke<ByokStatus>('get_byok_status');
-      setStatus(next);
+      const [nextStatus, nextModels] = await Promise.all([
+        invoke<ByokStatus>('get_byok_status'),
+        invoke<ByokModels>('get_byok_models').catch(() => ({
+          overrides: {},
+          defaults: {},
+        })),
+      ]);
+      setStatus(nextStatus);
+      setModels(nextModels);
       // After refresh, default the form to the active provider so
       // returning to Settings doesn't reset the selector to
       // anthropic if the user is on OpenAI/Gemini.
-      if (next.provider) {
-        setProvider(next.provider as ProviderId);
+      if (nextStatus.provider) {
+        setProvider(nextStatus.provider as ProviderId);
       }
     } catch (err) {
       console.error('Failed to read BYOK status:', err);
@@ -679,9 +745,37 @@ function AIProviderPanel() {
     void refresh();
   }, []);
 
+  // Re-sync the model draft whenever the provider switches OR the
+  // models snapshot loads — both might happen during initial mount.
+  useEffect(() => {
+    if (!models) return;
+    setModelDraft(models.overrides[provider] ?? '');
+  }, [provider, models]);
+
   const info = providerInfo(provider);
   const isProviderConfigured = status?.configured_providers.includes(provider) ?? false;
   const isActiveProvider = status?.provider === provider;
+  const defaultModel = models?.defaults[provider] ?? '';
+  const savedModel = models?.overrides[provider] ?? '';
+
+  /** Persist the model override (or clear it if blank). Idempotent
+   *  — no-op when the draft matches what's already saved, so blur
+   *  events don't churn the keychain config file. */
+  const persistModel = async () => {
+    const trimmed = modelDraft.trim();
+    if (trimmed === savedModel) return;
+    try {
+      await invoke('save_byok_model', { provider, model: trimmed });
+      await refresh();
+      if (trimmed) {
+        toast.success(`Model set to ${trimmed}`);
+      } else {
+        toast.info(`Reset to default (${defaultModel})`);
+      }
+    } catch (err) {
+      toast.error(`Couldn't save model: ${err}`);
+    }
+  };
 
   const validateAndSave = async () => {
     const key = draft.trim();
@@ -698,6 +792,14 @@ function AIProviderPanel() {
       // limbo where the Ask UI breaks silently.
       await invoke('validate_byok_key', { provider, apiKey: key });
       await invoke('save_byok_key', { provider, apiKey: key });
+      // Persist any unsaved model edit in the same atomic action so
+      // a user who typed both gets both saved without a separate
+      // blur event. Compare against the snapshot rather than re-
+      // reading after key save.
+      const trimmedModel = modelDraft.trim();
+      if (trimmedModel !== savedModel) {
+        await invoke('save_byok_model', { provider, model: trimmedModel });
+      }
       setDraft('');
       await refresh();
       toast.success(`${info.label} connected`);
@@ -853,6 +955,30 @@ function AIProviderPanel() {
               {info.consoleLabel}
             </a>
             .
+          </p>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
+            Model
+            <span className="ml-1 font-normal text-slate-400 dark:text-slate-500">
+              (optional)
+            </span>
+          </label>
+          <input
+            type="text"
+            value={modelDraft}
+            onChange={(e) => setModelDraft(e.target.value)}
+            onBlur={() => void persistModel()}
+            placeholder={defaultModel || 'default'}
+            disabled={busy}
+            autoComplete="off"
+            spellCheck={false}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 placeholder:text-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          />
+          <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+            Leave empty to use the default ({defaultModel || '—'}).{' '}
+            {info.modelHint}
           </p>
         </div>
 

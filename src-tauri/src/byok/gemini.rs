@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 const GEMINI_API_HOST: &str = "https://generativelanguage.googleapis.com";
 /// gemini-2.0-flash is fast, cheap, and on Google's free tier as of
 /// the v0.6 ship date. Users can upgrade later via a model picker.
-const DEFAULT_MODEL: &str = "gemini-2.0-flash";
+pub(super) const DEFAULT_MODEL: &str = "gemini-2.0-flash";
 
 pub struct GeminiClient {
     api_key: String,

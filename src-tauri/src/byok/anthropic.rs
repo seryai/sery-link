@@ -10,7 +10,7 @@ use crate::error::{AgentError, Result};
 
 const ANTHROPIC_API_HOST: &str = "https://api.anthropic.com";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
-const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+pub(super) const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
 pub struct AnthropicClient {
