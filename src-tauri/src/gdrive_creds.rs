@@ -33,25 +33,27 @@ pub struct StoredTokens {
 
 impl StoredTokens {
     /// Build from Google's wire format. `refresh_token` may be missing
-    /// from the response on subsequent flows; callers must merge with
-    /// any previously-stored refresh_token before saving.
-    ///
-    /// Panics if `refresh_token` is None — call sites in
-    /// `gdrive_oauth::handle_callback_inner` only invoke this on the
-    /// initial code-exchange path where Google always returns one
-    /// (we set `prompt=consent` + `access_type=offline` to guarantee
-    /// it). For the refresh path, use `merge_refresh_response` below.
-    pub fn from_token_response(resp: &crate::gdrive_oauth::TokenResponse) -> Self {
-        let refresh = resp
-            .refresh_token
-            .clone()
-            .expect("initial token exchange must return a refresh_token (access_type=offline + prompt=consent)");
-        Self {
+    /// in some edge cases — Google sometimes omits it on re-consent if
+    /// the same Google account already has an active grant for this
+    /// OAuth client (despite our `prompt=consent`). Returns Err in that
+    /// case so the user gets an actionable message instead of a silent
+    /// panic in the spawned OAuth task.
+    pub fn from_token_response(
+        resp: &crate::gdrive_oauth::TokenResponse,
+    ) -> std::result::Result<Self, String> {
+        let refresh = resp.refresh_token.clone().ok_or_else(|| {
+            "Google didn't issue a refresh_token. This usually means the \
+             account already has an active grant for Sery Link. Visit \
+             https://myaccount.google.com/permissions, remove Sery Link's \
+             access, then try Connect Google Drive again."
+                .to_string()
+        })?;
+        Ok(Self {
             access_token: resp.access_token.clone(),
             refresh_token: refresh,
             access_expires_at: Utc::now() + Duration::seconds(resp.expires_in as i64),
             scope: resp.scope.clone(),
-        }
+        })
     }
 
     /// Apply a refresh-flow response to existing stored tokens.
@@ -135,17 +137,28 @@ mod tests {
     #[test]
     fn from_response_captures_expiry() {
         let resp = fake_response(Some("rt-1"));
-        let stored = StoredTokens::from_token_response(&resp);
+        let stored = StoredTokens::from_token_response(&resp).expect("ok");
         assert_eq!(stored.access_token, "ya29.fake");
         assert_eq!(stored.refresh_token, "rt-1");
-        // Expires_at should be ~3600 seconds in the future.
         let delta = (stored.access_expires_at - Utc::now()).num_seconds();
         assert!((3590..=3600).contains(&delta), "delta was {}", delta);
     }
 
     #[test]
+    fn from_response_errors_without_refresh_token() {
+        let resp = fake_response(None);
+        let err = StoredTokens::from_token_response(&resp).unwrap_err();
+        assert!(
+            err.contains("refresh_token") || err.contains("permissions"),
+            "error message should mention the underlying issue: {}",
+            err
+        );
+    }
+
+    #[test]
     fn merge_keeps_old_refresh_when_new_is_none() {
-        let mut stored = StoredTokens::from_token_response(&fake_response(Some("original-rt")));
+        let mut stored =
+            StoredTokens::from_token_response(&fake_response(Some("original-rt"))).expect("ok");
         let refresh_response = fake_response(None);
         stored.merge_refresh_response(&refresh_response);
         assert_eq!(stored.refresh_token, "original-rt");
@@ -153,7 +166,8 @@ mod tests {
 
     #[test]
     fn merge_replaces_refresh_when_present() {
-        let mut stored = StoredTokens::from_token_response(&fake_response(Some("original-rt")));
+        let mut stored =
+            StoredTokens::from_token_response(&fake_response(Some("original-rt"))).expect("ok");
         let refresh_response = fake_response(Some("rotated-rt"));
         stored.merge_refresh_response(&refresh_response);
         assert_eq!(stored.refresh_token, "rotated-rt");
@@ -161,13 +175,11 @@ mod tests {
 
     #[test]
     fn is_fresh_respects_buffer() {
-        let mut stored = StoredTokens::from_token_response(&fake_response(Some("rt")));
-        // Just-issued tokens should be fresh.
+        let mut stored =
+            StoredTokens::from_token_response(&fake_response(Some("rt"))).expect("ok");
         assert!(stored.is_fresh());
-        // An access token with 30s left is NOT fresh (60s buffer).
         stored.access_expires_at = Utc::now() + Duration::seconds(30);
         assert!(!stored.is_fresh());
-        // 120s left is fresh.
         stored.access_expires_at = Utc::now() + Duration::seconds(120);
         assert!(stored.is_fresh());
     }
