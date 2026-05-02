@@ -209,8 +209,10 @@ pub async fn add_remote_source(
 // "Connected as <email>" state.
 
 #[tauri::command]
-pub async fn start_gdrive_oauth() -> Result<(), String> {
-    let auth_url = crate::gdrive_oauth::start_flow().map_err(|e| e.to_string())?;
+pub async fn start_gdrive_oauth(app: tauri::AppHandle) -> Result<(), String> {
+    let auth_url = crate::gdrive_oauth::start_flow(app)
+        .await
+        .map_err(|e| e.to_string())?;
     // tauri-plugin-opener is used elsewhere via the `open` crate;
     // matching the pattern keeps platform handling consistent.
     open::that(&auth_url).map_err(|e| format!("could not open browser: {}", e))?;
