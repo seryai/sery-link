@@ -2664,9 +2664,64 @@ pub async fn ask_byok(prompt: String) -> Result<AskResponse, String> {
     })?;
     let api_key = keyring_store::get_byok_key(provider.as_str())
         .map_err(|e| format!("Saved {} key disappeared from keychain: {}", provider.as_str(), e))?;
-    byok::ask(provider, &api_key, &prompt)
+    // Optional per-provider model override from config. Trimmed +
+    // empty-string-as-None so an accidentally-blanked input falls
+    // back to the compiled-in default rather than sending "" to
+    // the provider's API.
+    let model = Config::load()
+        .ok()
+        .and_then(|c| c.app.byok_models.get(provider.as_str()).cloned())
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+    byok::ask(provider, &api_key, &prompt, model.as_deref())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Snapshot of the configured model for each BYOK provider. Returned
+/// to the Settings UI so it can pre-fill the model input with what's
+/// actually saved (vs. whatever was last typed in the form).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ByokModels {
+    /// Provider id → user-saved model string. Missing entries mean
+    /// "use the provider's default" (also returned in `defaults`).
+    pub overrides: std::collections::HashMap<String, String>,
+    /// Provider id → compiled-in default. Surfaced separately so the
+    /// UI can render a placeholder showing the default even when no
+    /// override is set.
+    pub defaults: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+pub async fn get_byok_models() -> Result<ByokModels, String> {
+    let cfg = Config::load().map_err(|e| e.to_string())?;
+    let defaults: std::collections::HashMap<String, String> = byok::Provider::all()
+        .iter()
+        .map(|p| (p.as_str().to_string(), p.default_model().to_string()))
+        .collect();
+    Ok(ByokModels {
+        overrides: cfg.app.byok_models.clone(),
+        defaults,
+    })
+}
+
+/// Save (or clear) the model override for a provider. Pass an empty
+/// string to clear — the provider's default kicks back in on the
+/// next ask. We don't validate the model name against the provider
+/// (lists change too often); a wrong name surfaces as the next
+/// ask's API error.
+#[tauri::command]
+pub async fn save_byok_model(provider: String, model: String) -> Result<(), String> {
+    let provider = byok::Provider::parse(&provider).map_err(|e| e.to_string())?;
+    let trimmed = model.trim().to_string();
+    let mut cfg = Config::load().map_err(|e| e.to_string())?;
+    if trimmed.is_empty() {
+        cfg.app.byok_models.remove(provider.as_str());
+    } else {
+        cfg.app.byok_models.insert(provider.as_str().to_string(), trimmed);
+    }
+    cfg.save().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]

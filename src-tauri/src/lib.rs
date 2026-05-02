@@ -266,6 +266,8 @@ pub fn run() {
             commands::clear_byok_key,
             commands::select_byok_provider,
             commands::validate_byok_key,
+            commands::get_byok_models,
+            commands::save_byok_model,
             commands::ask_byok,
             // Phase 3b — Google Drive OAuth (datalake/SETUP_GOOGLE_OAUTH.md).
             // Browser-based OAuth flow with PKCE; tokens land in OS

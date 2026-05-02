@@ -241,6 +241,16 @@ pub struct AppConfig {
     /// Settings → AI provider when multiple keys are stored.
     #[serde(default)]
     pub selected_byok_provider: Option<String>,
+    /// Per-provider model override. Keys are the canonical
+    /// `Provider::as_str()` form (`"anthropic"`, `"openai"`,
+    /// `"gemini"`); values are the model name passed verbatim to
+    /// the provider's API. Missing entries fall back to each
+    /// provider's compiled-in default. Lets users pick gpt-4o vs
+    /// gpt-4o-mini, claude-opus-4-7 vs claude-haiku-4-5, etc.
+    /// without us shipping a new release every time a provider
+    /// adds a model.
+    #[serde(default)]
+    pub byok_models: std::collections::HashMap<String, String>,
 }
 
 fn default_theme() -> String {
@@ -263,6 +273,7 @@ impl Default for AppConfig {
             selected_auth_mode: None,
             schema_change_toasts_enabled: true,
             selected_byok_provider: None,
+            byok_models: std::collections::HashMap::new(),
         }
     }
 }

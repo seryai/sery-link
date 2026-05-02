@@ -13,7 +13,7 @@ const OPENAI_API_HOST: &str = "https://api.openai.com";
 /// quality for the Ask page's "single-shot Q&A on local files" use
 /// case. Users can change models later via a model picker if we add
 /// one; for v0.6 the single default keeps the surface area small.
-const DEFAULT_MODEL: &str = "gpt-4o-mini";
+pub(super) const DEFAULT_MODEL: &str = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
 pub struct OpenAiClient {

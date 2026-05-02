@@ -262,6 +262,7 @@ mod tests {
                 selected_auth_mode: None,
                 schema_change_toasts_enabled: true,
                 selected_byok_provider: None,
+                byok_models: std::collections::HashMap::new(),
             },
         }
     }
