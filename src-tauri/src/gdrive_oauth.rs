@@ -541,8 +541,22 @@ pub async fn handle_callback<R: Runtime>(
 ) {
     let result = handle_callback_inner(code, state, redirect_uri).await;
     let payload = match &result {
-        Ok(account) => serde_json::json!({"ok": true, "account": account}),
-        Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+        Ok(account) => {
+            // Stdout visibility for `tauri dev` users — the browser
+            // tab already says "Connected", but the terminal is the
+            // ground truth when the frontend mysteriously doesn't
+            // update.
+            eprintln!("[gdrive-oauth] tokens persisted for account={}", account);
+            serde_json::json!({"ok": true, "account": account})
+        }
+        Err(e) => {
+            // Same logging philosophy: any failure after the browser
+            // redirect needs to be visible somewhere the developer can
+            // see it. Without this the spawned task fails silently and
+            // the only symptom is the modal still showing "Connect".
+            eprintln!("[gdrive-oauth] callback failed: {}", e);
+            serde_json::json!({"ok": false, "error": e.to_string()})
+        }
     };
     if let Err(emit_err) = app.emit("gdrive-oauth-complete", payload) {
         eprintln!("[gdrive-oauth] failed to emit event: {}", emit_err);
@@ -574,7 +588,8 @@ async fn handle_callback_inner(code: &str, state: &str, redirect_uri: &str) -> R
     // Multi-account support (Phase 3c+) keys on the Google user's
     // email, fetched via a `userinfo` call after token exchange.
     let account = "default".to_string();
-    let stored = crate::gdrive_creds::StoredTokens::from_token_response(&tokens);
+    let stored = crate::gdrive_creds::StoredTokens::from_token_response(&tokens)
+        .map_err(AgentError::Config)?;
     crate::gdrive_creds::save(&account, &stored)?;
 
     Ok(account)
