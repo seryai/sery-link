@@ -742,7 +742,42 @@ fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOu
     let tier = tier_for(ext, &settings.tier_overrides);
 
     match (tier, cache_key) {
-        (ScanTier::Shallow, _) => WalkOutcome::ShallowFinal(shallow),
+        (ScanTier::Shallow, Some(key)) => {
+            // BUG fix: Shallow-tier files (html, ipynb, unknown
+            // extensions) used to be returned to the caller but
+            // never written to scan_cache. Effect: any folder
+            // containing ONLY Shallow files would hadCache=false
+            // every visit and trigger a fresh rescan-on-mount,
+            // which the user saw as "files counting up from 0
+            // every time I open this folder."
+            //
+            // Persist the shallow record now using the same
+            // (mtime, size) key the cache-hit path checks against.
+            // Errors are eprintln'd rather than swallowed so a
+            // broken DB surfaces in the dev terminal.
+            if let Err(e) = crate::scan_cache::with_cache(|c| {
+                c.put(
+                    folder_path,
+                    &key.relative_path,
+                    key.mtime_secs,
+                    key.size_bytes,
+                    &shallow,
+                )
+            })
+            .transpose()
+            {
+                eprintln!(
+                    "[scanner] scan_cache put (shallow) failed for {:?}: {}",
+                    path, e
+                );
+            }
+            WalkOutcome::ShallowFinal(shallow)
+        }
+        (ScanTier::Shallow, None) => {
+            // No cache key (strip_prefix or mtime failed) — can't
+            // memoise. Same return as before this fix.
+            WalkOutcome::ShallowFinal(shallow)
+        }
         // No cache key (pathological — strip_prefix or mtime failed).
         // Without a key we can't write back to the cache; treat the
         // shallow record as final rather than running extraction we
@@ -806,7 +841,10 @@ fn extract_one(
 
     // Persist freshly-extracted metadata so the next scan for this
     // file short-circuits via the cache hit path in pass 1.
-    let _ = crate::scan_cache::with_cache(|c| {
+    // Surface put failures via eprintln rather than swallowing —
+    // a broken DB used to manifest as "every folder visit triggers
+    // a full rescan" with no diagnostic in the terminal.
+    if let Err(e) = crate::scan_cache::with_cache(|c| {
         c.put(
             folder_path,
             &cache_key.relative_path,
@@ -814,7 +852,14 @@ fn extract_one(
             cache_key.size_bytes,
             &metadata,
         )
-    });
+    })
+    .transpose()
+    {
+        eprintln!(
+            "[scanner] scan_cache put (extracted) failed for {:?}: {}",
+            path, e
+        );
+    }
 
     metadata
 }

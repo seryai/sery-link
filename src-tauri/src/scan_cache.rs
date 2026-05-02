@@ -49,7 +49,16 @@ where
         Err(poisoned) => poisoned.into_inner(),
     };
     if guard.is_none() {
-        *guard = ScanCache::new().ok();
+        match ScanCache::new() {
+            Ok(c) => *guard = Some(c),
+            Err(e) => {
+                // Without this log, a busted DB silently turns
+                // every put into a no-op — the caller can't tell
+                // their writes are being dropped, and the user
+                // sees a folder that re-scans on every visit.
+                eprintln!("[scan_cache] failed to open DB: {} (cache disabled this session)", e);
+            }
+        }
     }
     guard.as_ref().map(f)
 }
