@@ -1032,8 +1032,16 @@ fn scan_folder_blocking(
 }
 
 fn is_supported(path: &Path) -> bool {
+    is_supported_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
+}
+
+/// Public form of the supported-extension check, callable from
+/// modules that don't have a Path on hand (e.g. the Drive walker
+/// looking at a Drive `name` field). Single source of truth so the
+/// walker's filter and the scanner's filter never drift.
+pub fn is_supported_ext(ext: &str) -> bool {
     matches!(
-        path.extension().and_then(|s| s.to_str()).unwrap_or(""),
+        ext.to_ascii_lowercase().as_str(),
         "parquet" | "csv" | "xlsx" | "xls"
         | "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
     )

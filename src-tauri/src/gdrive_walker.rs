@@ -33,12 +33,14 @@
 use crate::error::Result;
 use crate::gdrive_api::{self, DriveFile, FOLDER_MIME};
 use crate::gdrive_cache;
+use crate::scanner;
 use futures::future::BoxFuture;
 use std::collections::HashSet;
+use std::path::Path;
 
 /// Output of a `walk_folder` call. The watch command consumes
-/// `files` directly; `skipped_native` and `folder_count` are
-/// surfaced to the user in the progress UI.
+/// `files` directly; `skipped_*` lists are surfaced to the user in
+/// the progress UI so they know what was excluded and why.
 #[derive(Debug, Default, Clone)]
 pub struct WalkResult {
     /// Leaf files eligible for caching + scanning. Order is
@@ -46,9 +48,17 @@ pub struct WalkResult {
     /// however it likes after.
     pub files: Vec<DriveFile>,
     /// Files we found but couldn't cache because Drive doesn't
-    /// expose their bytes via `alt=media` (Docs, Sheets, Forms,
-    /// Sites, Drawings, etc.). Surfaced for "X items skipped" copy.
+    /// expose their bytes via `alt=media` (Docs, Forms, Sites,
+    /// Drawings — Sheets are now in `files` via export). Surfaced
+    /// for "X items skipped" copy.
     pub skipped_native: Vec<DriveFile>,
+    /// Files whose extension isn't in the scanner's indexable set
+    /// (mp4, zip, exe, raw photos, …). The walker filters these
+    /// out so we don't waste disk + bandwidth downloading content
+    /// the scanner would never read. Surfaced as a count in the
+    /// progress UI; the names go into the per-watch skipped log
+    /// (planned slice — see Settings → Storage).
+    pub skipped_unsupported: Vec<DriveFile>,
     /// How many subfolders the walker entered (including the root).
     /// Used by progress UI to size the progress bar before walking
     /// can finish.
@@ -95,18 +105,23 @@ fn walk_recursive<'a>(
             if entry.is_folder() {
                 walk_recursive(account_id, &entry.id, result, visited).await?;
             } else if is_google_native(&entry.mime_type) {
-                // Google-native types we have an /export mapping for
-                // (Sheets in v0.6) flow through the regular cache
-                // path — `gdrive_cache::download_if_stale` dispatches
-                // on mime type. Native types without a mapping
-                // (Forms, Drawings, Sites) get bucketed into
-                // skipped_native so the UI can surface "X items
-                // skipped" copy.
+                // Google-native types with a /export mapping (Sheets
+                // in v0.6) flow through the regular cache path —
+                // `gdrive_cache::download_if_stale` dispatches on
+                // mime type. Without a mapping (Forms, Drawings,
+                // Sites) → skipped_native.
                 if gdrive_cache::export_mime_for(&entry.mime_type).is_some() {
                     result.files.push(entry);
                 } else {
                     result.skipped_native.push(entry);
                 }
+            } else if !is_indexable_filename(&entry.name) {
+                // Real binary files whose extension the scanner
+                // wouldn't index anyway (mp4, zip, raw photos, ...).
+                // Filtering here keeps users with media-heavy Drives
+                // from filling their disk with bytes that would
+                // never become a search hit.
+                result.skipped_unsupported.push(entry);
             } else {
                 result.files.push(entry);
             }
@@ -123,6 +138,19 @@ fn walk_recursive<'a>(
 /// rather than overlapping.
 pub fn is_google_native(mime_type: &str) -> bool {
     mime_type.starts_with("application/vnd.google-apps.") && mime_type != FOLDER_MIME
+}
+
+/// Does the Drive filename's extension match anything the scanner
+/// can index? Delegates to `scanner::is_supported_ext` so the
+/// walker and the scanner stay in lockstep — adding a new format
+/// to the scanner automatically opens it up to Drive ingestion
+/// with no walker changes.
+fn is_indexable_filename(name: &str) -> bool {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    scanner::is_supported_ext(ext)
 }
 
 #[cfg(test)]
@@ -175,6 +203,31 @@ mod tests {
         let r = WalkResult::default();
         assert!(r.files.is_empty());
         assert!(r.skipped_native.is_empty());
+        assert!(r.skipped_unsupported.is_empty());
         assert_eq!(r.folder_count, 0);
+    }
+
+    #[test]
+    fn indexable_filename_matches_scanner_extensions() {
+        assert!(is_indexable_filename("data.csv"));
+        assert!(is_indexable_filename("Q3 Budget.xlsx"));
+        assert!(is_indexable_filename("notes.docx"));
+        assert!(is_indexable_filename("paper.pdf"));
+        // Case-insensitivity matters — Drive doesn't normalise
+        // user filenames.
+        assert!(is_indexable_filename("REPORT.PDF"));
+    }
+
+    #[test]
+    fn indexable_filename_rejects_unsupported() {
+        // The scanner can't read these — caching them is wasted
+        // disk on the user's machine.
+        assert!(!is_indexable_filename("vacation.mp4"));
+        assert!(!is_indexable_filename("backup.zip"));
+        assert!(!is_indexable_filename("installer.dmg"));
+        assert!(!is_indexable_filename("photo.raw"));
+        // Files without an extension fall through to "no" too.
+        assert!(!is_indexable_filename("Makefile"));
+        assert!(!is_indexable_filename(""));
     }
 }
