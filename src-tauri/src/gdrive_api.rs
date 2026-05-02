@@ -121,7 +121,12 @@ where
                 "Google Drive integration not configured for this build.".to_string(),
             )
         })?;
-        let resp = gdrive_oauth::refresh_token(cid, &tokens.refresh_token).await?;
+        let csecret = gdrive_oauth::client_secret().ok_or_else(|| {
+            AgentError::Config(
+                "Google Drive integration is missing GOOGLE_OAUTH_CLIENT_SECRET.".to_string(),
+            )
+        })?;
+        let resp = gdrive_oauth::refresh_token(cid, csecret, &tokens.refresh_token).await?;
         tokens.merge_refresh_response(&resp);
         gdrive_creds::save(account_id, &tokens)?;
     }
