@@ -38,7 +38,7 @@ duckdb = { version = "1.1", features = ["bundled"] }
 notify = "6.1"
 axum = "0.7"
 keyring = "2.3"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", features = ["json", "stream"] }
 uuid = { version = "1.6", features = ["v4"] }
 # PKCE dependencies for the Google Drive OAuth flow (Phase 3b of the
 # cloud-connectors migration; see datalake/SETUP_GOOGLE_OAUTH.md).

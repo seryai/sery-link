@@ -41,6 +41,18 @@ use crate::gdrive_api::DriveFile;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Hard cap on a single file's bytes during download. Matches the
+/// local scanner's default `max_file_size_mb` (1 GiB) — any file
+/// the local scanner wouldn't index, the Drive cache shouldn't
+/// download in the first place. Files past the cap are skipped
+/// with a logged warning; the rest of the watch keeps going.
+///
+/// Hardcoded for v0.6 ship; if users complain we'll plumb a
+/// per-folder knob through Config later. The walker doesn't pre-
+/// filter on Drive's reported `size` because Sheets exports have no
+/// known size — we have to defend at the streaming layer.
+const MAX_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// What we persist alongside each cached file. The shape mirrors
 /// `DriveFile` minus the parents pointer (cache is keyed by id, not
 /// hierarchy — the walker rebuilds the tree from Drive each pass).
@@ -249,14 +261,42 @@ pub async fn download_if_stale(account_id: &str, file: &DriveFile) -> Result<Pat
         }
     }
 
-    let bytes = match export_choice {
-        Some((mime, _)) => {
-            crate::gdrive_api::download_export_bytes(account_id, &file.id, mime).await?
+    // Skip files Drive itself reports as too big — saves the round
+    // trip when we can. (Native exports don't report size in the
+    // listing; the streaming sink catches those by byte-counting
+    // chunks.) Returning an error here lets the walker's loop
+    // continue with the next file rather than aborting the whole
+    // watch on one oversized item.
+    if let Some(size) = file.size {
+        if size > MAX_DOWNLOAD_BYTES {
+            return Err(AgentError::Config(format!(
+                "Drive file {:?} ({} bytes) exceeds 1 GiB cap — skipped",
+                file.name, size
+            )));
         }
-        None => crate::gdrive_api::download_file_bytes(account_id, &file.id).await?,
+    }
+
+    match export_choice {
+        Some((mime, _)) => {
+            crate::gdrive_api::download_export_to(
+                account_id,
+                &file.id,
+                mime,
+                &content_p,
+                MAX_DOWNLOAD_BYTES,
+            )
+            .await?;
+        }
+        None => {
+            crate::gdrive_api::download_file_to(
+                account_id,
+                &file.id,
+                &content_p,
+                MAX_DOWNLOAD_BYTES,
+            )
+            .await?;
+        }
     };
-    std::fs::write(&content_p, &bytes)
-        .map_err(|e| AgentError::Config(format!("write cache file: {}", e)))?;
 
     let meta = CacheMeta::from_drive(file);
     let meta_json = serde_json::to_vec_pretty(&meta)

@@ -32,7 +32,10 @@
 use crate::error::{AgentError, Result};
 use crate::gdrive_creds;
 use crate::gdrive_oauth;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use tokio::io::AsyncWriteExt;
 
 const API_BASE: &str = "https://www.googleapis.com/drive/v3";
 
@@ -256,10 +259,27 @@ pub async fn get_file_metadata(account_id: &str, file_id: &str) -> Result<DriveF
     .await
 }
 
-/// Download a file's bytes by ID. Used by the query path (Phase 3c-4)
-/// to feed Drive content into DuckDB's in-memory readers. Streams in
-/// memory — caller is responsible for size limits at the scan layer.
-pub async fn download_file_bytes(account_id: &str, file_id: &str) -> Result<Vec<u8>> {
+/// Stream a Drive file's bytes directly to disk. Returns the number
+/// of bytes written.
+///
+/// The previous `download_file_bytes` returned a `Vec<u8>`, which
+/// meant the entire file lived in memory before being written —
+/// fine for a 100 KB CSV, fatal for a 5 GB video the user happens
+/// to have in their Drive (jetsam OOM-kills the desktop process,
+/// no Rust panic surfaces). This streams in 64 KiB chunks instead,
+/// keeping the memory footprint bounded regardless of file size.
+///
+/// `max_bytes` lets the caller cap the download — when the response
+/// streams past the cap we abort + delete the partial file and
+/// return a Network error the caller can show to the user. Pass
+/// `u64::MAX` to disable the cap.
+pub async fn download_file_to(
+    account_id: &str,
+    file_id: &str,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<u64> {
+    let dest = dest.to_path_buf();
     with_fresh_token(account_id, |access_token| async move {
         let client = reqwest::Client::new();
         let resp = client
@@ -279,29 +299,28 @@ pub async fn download_file_bytes(account_id: &str, file_id: &str) -> Result<Vec<
             )));
         }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| AgentError::Network(format!("drive download body: {}", e)))?;
-        Ok(bytes.to_vec())
+        stream_response_to_file(resp, &dest, max_bytes).await
     })
     .await
 }
 
-/// Download a Google-native file (Sheets, Docs, …) by exporting it
-/// to a parseable format. Drive rejects `alt=media` for native types
-/// and instead exposes `/export?mimeType=...` to convert them on the
-/// fly. The Sheets export to .xlsx preserves all tabs; the older
-/// CSV export was lossy (single sheet only) so we don't use it.
+/// Stream a Google-native file's exported bytes to disk. Drive
+/// rejects `alt=media` for native types and instead exposes
+/// `/export?mimeType=...` to convert them on the fly. Sheets export
+/// to .xlsx preserves all tabs; the older CSV export was lossy
+/// (single sheet only) so we don't use it.
 ///
 /// Picking which `export_mime` to request is the caller's job — see
 /// `gdrive_cache::export_mime_for` for the canonical mapping.
-pub async fn download_export_bytes(
+pub async fn download_export_to(
     account_id: &str,
     file_id: &str,
     export_mime: &str,
-) -> Result<Vec<u8>> {
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<u64> {
     let export_mime = export_mime.to_string();
+    let dest = dest.to_path_buf();
     with_fresh_token(account_id, |access_token| async move {
         let client = reqwest::Client::new();
         let resp = client
@@ -321,13 +340,50 @@ pub async fn download_export_bytes(
             )));
         }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| AgentError::Network(format!("drive export body: {}", e)))?;
-        Ok(bytes.to_vec())
+        stream_response_to_file(resp, &dest, max_bytes).await
     })
     .await
+}
+
+/// Shared streaming sink for `download_file_to` /
+/// `download_export_to`. Reads `resp` chunk-by-chunk and writes to
+/// `dest`. Aborts + removes the partial file when the byte count
+/// crosses `max_bytes`.
+async fn stream_response_to_file(
+    resp: reqwest::Response,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<u64> {
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| AgentError::Config(format!("create cache file: {}", e)))?;
+
+    let mut total: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| AgentError::Network(format!("drive chunk: {}", e)))?;
+        total = total.saturating_add(chunk.len() as u64);
+        if total > max_bytes {
+            // Best-effort cleanup so we don't leave a partial file
+            // behind. Closing first matters on Windows where the
+            // open handle would block delete.
+            drop(file);
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(AgentError::Network(format!(
+                "drive file exceeded {} byte cap (got {}+), skipped",
+                max_bytes, total
+            )));
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| AgentError::Config(format!("write chunk: {}", e)))?;
+    }
+
+    file.flush()
+        .await
+        .map_err(|e| AgentError::Config(format!("flush cache file: {}", e)))?;
+    Ok(total)
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────

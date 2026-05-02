@@ -515,6 +515,7 @@ function useGdriveWatchToasts() {
           phase: 'done';
           total_files: number;
           skipped_native: number;
+          skipped_too_large?: number;
         }
     >('gdrive-watch-progress', (event) => {
       const p = event.payload;
@@ -530,14 +531,17 @@ function useGdriveWatchToasts() {
             downloadStartShown = true;
           }
           break;
-        case 'done':
+        case 'done': {
+          const tooBig = p.skipped_too_large ?? 0;
+          const reasons: string[] = [];
+          if (p.skipped_native > 0) reasons.push(`${p.skipped_native} Docs/Forms`);
+          if (tooBig > 0) reasons.push(`${tooBig} over 1 GiB`);
+          const skippedLabel = reasons.length ? ` (skipped: ${reasons.join(', ')})` : '';
           toast.success(
-            `Google Drive indexed — ${p.total_files} file${p.total_files === 1 ? '' : 's'}` +
-              (p.skipped_native > 0
-                ? ` (${p.skipped_native} Docs/Forms skipped)`
-                : ''),
+            `Google Drive indexed — ${p.total_files} file${p.total_files === 1 ? '' : 's'}${skippedLabel}`,
           );
           break;
+        }
         // walking / scanning are short — no need to chatter.
       }
     });
