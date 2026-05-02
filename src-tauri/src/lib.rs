@@ -14,6 +14,7 @@ mod gdrive_api;
 mod gdrive_cache;
 mod gdrive_creds;
 mod gdrive_oauth;
+mod gdrive_walker;
 mod machines;
 mod history;
 mod hotkey;
