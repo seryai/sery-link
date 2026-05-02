@@ -264,6 +264,7 @@ pub fn run() {
             commands::get_byok_status,
             commands::save_byok_key,
             commands::clear_byok_key,
+            commands::select_byok_provider,
             commands::validate_byok_key,
             commands::ask_byok,
             // Phase 3b — Google Drive OAuth (datalake/SETUP_GOOGLE_OAUTH.md).

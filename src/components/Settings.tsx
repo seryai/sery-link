@@ -602,11 +602,57 @@ function NetworkModeToggle() {
 interface ByokStatus {
   configured: boolean;
   provider: string | null;
+  configured_providers: string[];
+}
+
+type ProviderId = 'anthropic' | 'openai' | 'gemini';
+
+interface ProviderInfo {
+  id: ProviderId;
+  label: string;
+  /** What the API key typically looks like — placeholder text. */
+  placeholder: string;
+  /** Where to get a key. */
+  consoleUrl: string;
+  consoleLabel: string;
+  /** Hostname the request goes to (shown in the privacy-promise copy). */
+  host: string;
+}
+
+const PROVIDERS: ProviderInfo[] = [
+  {
+    id: 'anthropic',
+    label: 'Anthropic (Claude)',
+    placeholder: 'sk-ant-…',
+    consoleUrl: 'https://console.anthropic.com/settings/keys',
+    consoleLabel: 'console.anthropic.com/settings/keys',
+    host: 'api.anthropic.com',
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI (GPT-4o)',
+    placeholder: 'sk-…',
+    consoleUrl: 'https://platform.openai.com/api-keys',
+    consoleLabel: 'platform.openai.com/api-keys',
+    host: 'api.openai.com',
+  },
+  {
+    id: 'gemini',
+    label: 'Google Gemini',
+    placeholder: 'AIza…',
+    consoleUrl: 'https://aistudio.google.com/apikey',
+    consoleLabel: 'aistudio.google.com/apikey',
+    host: 'generativelanguage.googleapis.com',
+  },
+];
+
+function providerInfo(id: ProviderId): ProviderInfo {
+  return PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 }
 
 function AIProviderPanel() {
   const [status, setStatus] = useState<ByokStatus | null>(null);
-  const [provider, setProvider] = useState<'anthropic'>('anthropic');
+  const [provider, setProvider] = useState<ProviderId>('anthropic');
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -617,15 +663,25 @@ function AIProviderPanel() {
     try {
       const next = await invoke<ByokStatus>('get_byok_status');
       setStatus(next);
+      // After refresh, default the form to the active provider so
+      // returning to Settings doesn't reset the selector to
+      // anthropic if the user is on OpenAI/Gemini.
+      if (next.provider) {
+        setProvider(next.provider as ProviderId);
+      }
     } catch (err) {
       console.error('Failed to read BYOK status:', err);
-      setStatus({ configured: false, provider: null });
+      setStatus({ configured: false, provider: null, configured_providers: [] });
     }
   };
 
   useEffect(() => {
     void refresh();
   }, []);
+
+  const info = providerInfo(provider);
+  const isProviderConfigured = status?.configured_providers.includes(provider) ?? false;
+  const isActiveProvider = status?.provider === provider;
 
   const validateAndSave = async () => {
     const key = draft.trim();
@@ -644,7 +700,7 @@ function AIProviderPanel() {
       await invoke('save_byok_key', { provider, apiKey: key });
       setDraft('');
       await refresh();
-      toast.success('AI provider connected');
+      toast.success(`${info.label} connected`);
     } catch (err) {
       const msg = typeof err === 'string' ? err : String(err);
       setErrMsg(msg);
@@ -655,15 +711,33 @@ function AIProviderPanel() {
   };
 
   const clear = async () => {
-    if (!window.confirm('Remove the saved AI provider key?')) return;
+    if (!window.confirm(`Remove the saved ${info.label} key?`)) return;
     setBusy(true);
     setErrMsg(null);
     try {
       await invoke('clear_byok_key', { provider });
       await refresh();
-      toast.info('AI provider key removed');
+      toast.info(`${info.label} key removed`);
     } catch (err) {
       toast.error(`Couldn't remove key: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Switch the active provider WITHOUT re-entering the key — relies
+  // on the saved key for the target provider already being in the
+  // keyring. The button only appears when there's a different
+  // configured provider to switch to.
+  const switchActive = async (target: ProviderId) => {
+    setBusy(true);
+    setErrMsg(null);
+    try {
+      await invoke('select_byok_provider', { provider: target });
+      await refresh();
+      toast.success(`Switched to ${providerInfo(target).label}`);
+    } catch (err) {
+      toast.error(`Couldn't switch: ${err}`);
     } finally {
       setBusy(false);
     }
@@ -705,9 +779,10 @@ function AIProviderPanel() {
             )}
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Use your own Anthropic API key for the Ask page. Your prompts go
-            directly from this app to Anthropic — never through sery.ai. Key
-            is stored in your OS keychain; we cannot read it.
+            Bring your own API key for the Ask page. Your prompts go
+            directly from this app to <span className="font-mono">{info.host}</span> —
+            never through sery.ai. Keys live in your OS keychain; we
+            cannot read them.
           </p>
         </div>
       </div>
@@ -719,15 +794,34 @@ function AIProviderPanel() {
           </label>
           <select
             value={provider}
-            onChange={(e) => setProvider(e.target.value as 'anthropic')}
+            onChange={(e) => {
+              setProvider(e.target.value as ProviderId);
+              setDraft('');
+              setErrMsg(null);
+            }}
             disabled={busy}
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           >
-            <option value="anthropic">Anthropic (Claude)</option>
+            {PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {status.configured_providers.includes(p.id) ? ' ✓' : ''}
+                {status.provider === p.id ? ' (active)' : ''}
+              </option>
+            ))}
           </select>
-          <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
-            OpenAI support arriving in v0.5.x.
-          </p>
+          {isProviderConfigured && !isActiveProvider && (
+            // The user has a saved key for this provider but it
+            // isn't the active one — offer a one-click switch
+            // instead of forcing them to re-enter the key.
+            <button
+              onClick={() => void switchActive(provider)}
+              disabled={busy}
+              className="mt-2 inline-flex items-center gap-1 rounded-md border border-purple-200 bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200 dark:hover:bg-purple-950/50"
+            >
+              Use this provider for Ask
+            </button>
+          )}
         </div>
 
         <div>
@@ -739,9 +833,9 @@ function AIProviderPanel() {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={
-              status.configured
+              isProviderConfigured
                 ? 'A key is already saved — paste a new one to replace it'
-                : 'sk-ant-…'
+                : info.placeholder
             }
             disabled={busy}
             autoComplete="off"
@@ -751,12 +845,12 @@ function AIProviderPanel() {
           <p className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
             Get a key at{' '}
             <a
-              href="https://console.anthropic.com/settings/keys"
+              href={info.consoleUrl}
               target="_blank"
               rel="noreferrer"
               className="text-purple-600 hover:underline dark:text-purple-300"
             >
-              console.anthropic.com/settings/keys
+              {info.consoleLabel}
             </a>
             .
           </p>
@@ -777,13 +871,13 @@ function AIProviderPanel() {
             <CheckCircle2 className="h-3.5 w-3.5" />
             {validating ? 'Validating…' : 'Test & save'}
           </button>
-          {status.configured && (
+          {isProviderConfigured && (
             <button
               onClick={() => void clear()}
               disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
             >
-              Remove key
+              Remove {info.label} key
             </button>
           )}
         </div>
