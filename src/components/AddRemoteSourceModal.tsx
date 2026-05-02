@@ -131,7 +131,7 @@ export function AddRemoteSourceModal({
           </TabButton>
         </div>
 
-        {tab === 'gdrive' && <GdriveBrowserPanel />}
+        {tab === 'gdrive' && <GdriveBrowserPanel onClose={onClose} />}
 
         {tab === 'url' && (
           <UrlPanel

@@ -27,7 +27,7 @@ import { useAgentStore, type AgentToken } from './stores/agentStore';
 import seryLogo from './assets/sery-logo.svg';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
-import { ToastProvider } from './components/Toast';
+import { ToastProvider, useToast } from './components/Toast';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
@@ -79,6 +79,10 @@ function AppInner() {
   useTheme();
   // Subscribe to every Tauri event we care about
   useAgentEvents();
+  // Surface Drive watch progress globally — the modal closes
+  // immediately after auto-watch starts, so any later progress /
+  // completion / error has to be visible from anywhere in the app.
+  useGdriveWatchToasts();
 
   // ROADMAP F9: the global Quick-Ask hotkey (registered in
   // src-tauri/src/hotkey.rs) emits a `quick-ask` event whenever it
@@ -484,5 +488,62 @@ function NotificationsNavLink() {
       )}
     </NavLink>
   );
+}
+
+/** Surface Drive watch progress as toasts at "milestone" events
+ *  (downloading start, scanning, done, error). Per-file progress
+ *  goes to the console — toasting on every file would drown out
+ *  every other notification in the app for users with big Drives. */
+function useGdriveWatchToasts() {
+  const toast = useToast();
+  useEffect(() => {
+    let lastFolderId: string | null = null;
+    let downloadStartShown = false;
+
+    const unlisten = listen<
+      | { folder_id: string; phase: 'walking' }
+      | {
+          folder_id: string;
+          phase: 'downloading';
+          current: number;
+          total: number;
+          file_name: string;
+        }
+      | { folder_id: string; phase: 'scanning' }
+      | {
+          folder_id: string;
+          phase: 'done';
+          total_files: number;
+          skipped_native: number;
+        }
+    >('gdrive-watch-progress', (event) => {
+      const p = event.payload;
+      // Reset per-folder state when the folder_id changes mid-stream.
+      if (p.folder_id !== lastFolderId) {
+        lastFolderId = p.folder_id;
+        downloadStartShown = false;
+      }
+      switch (p.phase) {
+        case 'downloading':
+          if (!downloadStartShown && p.total > 0) {
+            toast.info(`Downloading ${p.total} file${p.total === 1 ? '' : 's'} from Google Drive…`);
+            downloadStartShown = true;
+          }
+          break;
+        case 'done':
+          toast.success(
+            `Google Drive indexed — ${p.total_files} file${p.total_files === 1 ? '' : 's'}` +
+              (p.skipped_native > 0
+                ? ` (${p.skipped_native} Docs/Forms skipped)`
+                : ''),
+          );
+          break;
+        // walking / scanning are short — no need to chatter.
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [toast]);
 }
 
