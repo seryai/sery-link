@@ -93,6 +93,10 @@ export function GdriveBrowserPanel() {
     { id: 'root', name: 'My Drive' },
   ]);
   const [error, setError] = useState<string | null>(null);
+  // Folder ids the user has checked in the current view. Cleared
+  // whenever folders change (drill in/out, reconnect) — selection
+  // is per-listing, not persisted.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [watching, setWatching] = useState<WatchProgress | null>(null);
   const [watchedFolders, setWatchedFolders] = useState<GdriveWatchedFolder[]>([]);
 
@@ -184,6 +188,10 @@ export function GdriveBrowserPanel() {
   async function loadFolder(folderId: string) {
     setError(null);
     setState({ kind: 'connected', loadingFolders: true });
+    // Drilling in/out resets selection — keeping it would mean the
+    // user thinks they've selected items in folders that aren't
+    // currently visible, which is confusing.
+    setSelectedIds(new Set());
     try {
       const result = await invoke<DriveFile[]>('gdrive_list_folder', {
         folderId,
@@ -265,29 +273,75 @@ export function GdriveBrowserPanel() {
     void loadFolder(newCrumbs[newCrumbs.length - 1].id);
   }
 
-  async function handleWatch(folderId: string, folderName: string) {
-    if (folderId === 'root') {
-      // Watching all of My Drive could be hundreds of GB — almost
-      // certainly not what the user meant.
-      toast.error("Pick a specific folder — Sery won't watch your entire Drive at once.");
+  async function handleWatchSelected() {
+    // Resolve {id, name} pairs once before iterating — `folders`
+    // could in theory mutate via a refresh tick during the loop.
+    const targets = folders
+      .filter(
+        (f) =>
+          f.mime_type === FOLDER_MIME &&
+          selectedIds.has(f.id) &&
+          !watchedFolders.some((w) => w.folder_id === f.id),
+      )
+      .map((f) => ({ id: f.id, name: f.name }));
+
+    if (targets.length === 0) {
+      toast.info('Nothing to watch — selection is empty or already watched.');
       return;
     }
-    if (watchedFolders.some((w) => w.folder_id === folderId)) {
-      toast.info(`Already watching "${folderName}"`);
-      return;
+
+    // Sequential, not parallel: the walker is sequential under the
+    // hood, the user-visible progress UI tracks one folder at a
+    // time, and concurrent Drive walks would race on the same
+    // tokens. N=1 is the common case anyway.
+    for (const t of targets) {
+      try {
+        setWatching({ folder_id: t.id, phase: 'walking' });
+        await invoke('gdrive_watch_folder', {
+          folderId: t.id,
+          folderName: t.name,
+        });
+        // gdrive-watch-progress listener clears `watching` on
+        // `done`. Wait a tick so the success toast has time to
+        // fire before the next folder kicks off — otherwise a
+        // batch of 5 folders fires 5 toasts on top of each other
+        // and the user can't read any of them.
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        setWatching(null);
+        toast.error(`Couldn't watch "${t.name}": ${err}`);
+        // Keep going with the rest — partial success beats
+        // aborting on the first failure.
+      }
     }
-    try {
-      setWatching({ folder_id: folderId, phase: 'walking' });
-      await invoke('gdrive_watch_folder', {
-        folderId,
-        folderName,
-      });
-      // Final toast / cleanup happens in the gdrive-watch-progress
-      // listener when the `done` event arrives — keeping the success
-      // path single-sourced avoids "two toasts on success" flickers.
-    } catch (err) {
-      setWatching(null);
-      toast.error(`Couldn't watch folder: ${err}`);
+
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelected(folderId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const selectableIds = folders
+      .filter(
+        (f) =>
+          f.mime_type === FOLDER_MIME &&
+          !watchedFolders.some((w) => w.folder_id === f.id),
+      )
+      .map((f) => f.id);
+    const allSelected =
+      selectableIds.length > 0 &&
+      selectableIds.every((id) => selectedIds.has(id));
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(selectableIds));
     }
   }
 
@@ -394,83 +448,140 @@ export function GdriveBrowserPanel() {
         ))}
       </div>
 
-      {/* Hint copy — clarifies the click affordance. The previous
-          UX hid all CTAs in a top-right button that was disabled at
-          root, leaving users confused about how to actually pick a
-          folder. Now: click row body to drill in, click Watch on
-          the right to add it as a Sery source. */}
+      {/* Hint copy. Tick a folder's checkbox to queue it for
+          watching; click the folder name to drill in. */}
       <p className="mb-2 text-[11px] text-slate-500 dark:text-slate-400">
-        Click a folder name to open it. Click <strong>Watch</strong> to add it as a Sery source.
+        Tick folders to watch, then click <strong>Watch selected</strong> below. Click a folder name to open it.
       </p>
 
       {/* Folder list */}
-      <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
-        {state.loadingFolders ? (
-          <div className="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Loading folder…
-          </div>
-        ) : folders.length === 0 ? (
-          <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-            This folder is empty.
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-200 dark:divide-slate-700">
-            {folders.map((f) => {
-              const isFolder = f.mime_type === FOLDER_MIME;
-              const isWatched = watchedFolders.some((w) => w.folder_id === f.id);
-              return (
-                <li
-                  key={f.id}
-                  className={`flex items-center gap-2 px-3 py-2 text-sm ${
-                    isFolder ? '' : 'text-slate-500 dark:text-slate-400'
-                  }`}
-                >
-                  {isFolder ? (
-                    <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
-                  ) : (
-                    <Folder className="h-4 w-4 flex-shrink-0 text-slate-400" />
-                  )}
-                  <button
-                    onClick={() => isFolder && handleEnterFolder(f)}
-                    disabled={!isFolder}
-                    className={`min-w-0 flex-1 truncate text-left ${
-                      isFolder
-                        ? 'cursor-pointer hover:underline'
-                        : 'cursor-default'
-                    }`}
-                  >
-                    {f.name}
-                  </button>
-                  {isFolder &&
-                    (isWatched ? (
-                      <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                        Watching
-                      </span>
-                    ) : (
-                      <button
-                        onClick={(e) => {
-                          // Prevent the row's drill-in click from
-                          // also firing — Watch should be a leaf
-                          // action, not navigation.
-                          e.stopPropagation();
-                          void handleWatch(f.id, f.name);
-                        }}
-                        disabled={watching !== null}
-                        className="inline-flex flex-shrink-0 items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+      {(() => {
+        const selectableFolders = folders.filter(
+          (f) =>
+            f.mime_type === FOLDER_MIME &&
+            !watchedFolders.some((w) => w.folder_id === f.id),
+        );
+        const allSelectableChecked =
+          selectableFolders.length > 0 &&
+          selectableFolders.every((f) => selectedIds.has(f.id));
+        const someSelectableChecked =
+          selectableFolders.some((f) => selectedIds.has(f.id)) &&
+          !allSelectableChecked;
+
+        return (
+          <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+            {/* Select-all header — only when there's at least one
+                selectable folder. Hides cleanly for file-only views. */}
+            {selectableFolders.length > 0 && (
+              <label
+                className="flex cursor-pointer items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800/60"
+              >
+                <input
+                  type="checkbox"
+                  checked={allSelectableChecked}
+                  ref={(el) => {
+                    // Tri-state: indeterminate when SOME are
+                    // selected. The DOM property has no React
+                    // equivalent, so set it on the ref.
+                    if (el) el.indeterminate = someSelectableChecked;
+                  }}
+                  onChange={toggleSelectAll}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                />
+                <span>
+                  Select all ({selectableFolders.length})
+                </span>
+                {selectedIds.size > 0 && (
+                  <span className="ml-auto text-purple-600 dark:text-purple-400">
+                    {selectedIds.size} selected
+                  </span>
+                )}
+              </label>
+            )}
+
+            <div className="max-h-72 overflow-y-auto">
+              {state.loadingFolders ? (
+                <div className="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Loading folder…
+                </div>
+              ) : folders.length === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                  This folder is empty.
+                </div>
+              ) : (
+                <ul className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {folders.map((f) => {
+                    const isFolder = f.mime_type === FOLDER_MIME;
+                    const isWatched = watchedFolders.some(
+                      (w) => w.folder_id === f.id,
+                    );
+                    const isChecked = selectedIds.has(f.id);
+                    const checkboxAvailable = isFolder && !isWatched;
+                    return (
+                      <li
+                        key={f.id}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm ${
+                          isFolder ? '' : 'text-slate-500 dark:text-slate-400'
+                        }`}
                       >
-                        <Plus className="h-3 w-3" />
-                        Watch
-                      </button>
-                    ))}
-                  {isFolder && (
-                    <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                        {/* Checkbox column — fixed width so rows
+                            align even when some items have no
+                            checkbox (files, watched folders). */}
+                        <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+                          {checkboxAvailable && (
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleSelected(f.id)}
+                              className="h-3.5 w-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                            />
+                          )}
+                        </div>
+                        {isFolder ? (
+                          <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
+                        ) : (
+                          <Folder className="h-4 w-4 flex-shrink-0 text-slate-400" />
+                        )}
+                        <button
+                          onClick={() => isFolder && handleEnterFolder(f)}
+                          disabled={!isFolder}
+                          className={`min-w-0 flex-1 truncate text-left ${
+                            isFolder
+                              ? 'cursor-pointer hover:underline'
+                              : 'cursor-default'
+                          }`}
+                        >
+                          {f.name}
+                        </button>
+                        {isFolder && isWatched && (
+                          <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                            Watching
+                          </span>
+                        )}
+                        {isFolder && (
+                          <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Watch-selected action bar */}
+      <div className="mt-3 flex items-center justify-end">
+        <button
+          onClick={handleWatchSelected}
+          disabled={selectedIds.size === 0 || watching !== null}
+          className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Watch{selectedIds.size > 0 ? ` ${selectedIds.size}` : ''} selected
+        </button>
       </div>
 
       {error && (
