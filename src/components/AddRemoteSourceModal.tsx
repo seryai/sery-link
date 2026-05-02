@@ -236,9 +236,16 @@ function UrlPanel(props: {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && canSubmit) submit();
           }}
-          placeholder="https:// or s3:// URL"
+          placeholder="https:// CSV / Parquet URL, public Google Sheets share link, or s3:// URL"
           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
         />
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          Public Google Sheets URLs (
+          <span className="font-mono">docs.google.com/spreadsheets/d/…</span>)
+          are auto-converted to CSV — first tab only unless your link
+          includes <span className="font-mono">#gid=N</span>. For private
+          sheets, connect Google Drive instead.
+        </p>
 
         {insecure && trimmedUrl !== '' && (
           <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
