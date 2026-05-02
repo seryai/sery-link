@@ -350,57 +350,28 @@ export function FolderDetail() {
         </div>
 
         {scanState.kind !== 'idle' && (
-          <div className="mt-3 rounded-md border border-purple-200 bg-purple-50 p-3 text-xs text-purple-800 dark:border-purple-900 dark:bg-purple-950/40 dark:text-purple-200">
-            {scanState.kind === 'walking' && (
-              // Pass 1: file list is filling in. Total isn't known yet,
-              // so no percent bar — just the running count. Files in
-              // the list below are already searchable by name even
-              // while this indicator is up.
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Listing files
-                </span>
-                <span>
-                  {scanState.discovered === 0
-                    ? '…'
-                    : `${scanState.discovered} found`}
-                </span>
-              </div>
-            )}
-            {scanState.kind === 'extracting' && (
-              // Pass 2: schema/markdown extraction. Total here counts
-              // ONLY files that need extraction (cache misses on
-              // content/full tier) — cache hits and shallow files
-              // already finished in pass 1.
-              <>
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {scanState.total > 0
-                      ? `Indexing content ${scanState.current} of ${scanState.total}`
-                      : 'Indexing content…'}
-                  </span>
-                  {scanState.total > 0 && (
-                    <span>
-                      {Math.round(
-                        (scanState.current / scanState.total) * 100,
-                      )}
-                      %
-                    </span>
-                  )}
-                </div>
-                {scanState.total > 0 && (
-                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-purple-200 dark:bg-purple-900">
-                    <div
-                      className="h-full rounded-full bg-purple-600 transition-all duration-300"
-                      style={{
-                        width: `${Math.max(2, (scanState.current / scanState.total) * 100)}%`,
-                      }}
-                    />
-                  </div>
-                )}
-              </>
+          // Subtle inline indicator. The user already sees the file
+          // list streaming in row-by-row via the dataset_scanned
+          // events, so we don't need a big banner — a one-line
+          // status with running counts is enough to signal that
+          // background work is happening.
+          //
+          // Also reads less alarming, which matters because the
+          // file watcher routinely fires this on cache-empty visits
+          // even though there's nothing actually wrong.
+          <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {scanState.kind === 'walking' ? (
+              <span>
+                Indexing in background
+                {scanState.discovered > 0 && ` · ${scanState.discovered} files found so far`}
+              </span>
+            ) : (
+              <span>
+                {scanState.total > 0
+                  ? `Indexing in background · ${scanState.current} of ${scanState.total}`
+                  : 'Indexing in background'}
+              </span>
             )}
           </div>
         )}
