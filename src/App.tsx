@@ -515,6 +515,7 @@ function useGdriveWatchToasts() {
           phase: 'done';
           total_files: number;
           skipped_native: number;
+          skipped_unsupported?: number;
           skipped_too_large?: number;
         }
     >('gdrive-watch-progress', (event) => {
@@ -532,9 +533,11 @@ function useGdriveWatchToasts() {
           }
           break;
         case 'done': {
+          const unsupported = p.skipped_unsupported ?? 0;
           const tooBig = p.skipped_too_large ?? 0;
           const reasons: string[] = [];
           if (p.skipped_native > 0) reasons.push(`${p.skipped_native} Docs/Forms`);
+          if (unsupported > 0) reasons.push(`${unsupported} non-indexable types`);
           if (tooBig > 0) reasons.push(`${tooBig} over 1 GiB`);
           const skippedLabel = reasons.length ? ` (skipped: ${reasons.join(', ')})` : '';
           toast.success(

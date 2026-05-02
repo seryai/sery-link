@@ -388,6 +388,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
             "phase": "done",
             "total_files": cached_count,
             "skipped_native": walked.skipped_native.len(),
+            "skipped_unsupported": walked.skipped_unsupported.len(),
             "skipped_too_large": skipped_too_large,
         }),
     );
@@ -396,6 +397,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         "folder_id": folder_id,
         "files_cached": cached_count,
         "skipped_native": walked.skipped_native.len(),
+        "skipped_unsupported": walked.skipped_unsupported.len(),
         "skipped_too_large": skipped_too_large,
         "folders_walked": walked.folder_count,
         "rescan": rescan_result,
