@@ -306,6 +306,35 @@ pub async fn gdrive_watch_folder<R: Runtime>(
     // OOM-ing the process from two parallel walks.
     let _guard = gdrive_watch_lock().lock().await;
 
+    // Pre-flight free-disk check. Refuse to start a watch when the
+    // user is already low on disk — better than discovering it 30
+    // minutes into a download. The check looks at the volume
+    // holding the Sery data dir (~/.seryai), since that's where
+    // gdrive-cache lives.
+    if let Ok(data_dir) = Config::data_dir() {
+        match crate::disk_space::available_bytes(&data_dir) {
+            Ok(free) if free < crate::disk_space::MIN_FREE_BYTES_FOR_WATCH => {
+                let needed_gb =
+                    crate::disk_space::MIN_FREE_BYTES_FOR_WATCH / (1024 * 1024 * 1024);
+                let free_mb = free / (1024 * 1024);
+                return Err(format!(
+                    "Free disk too low to safely start a Drive watch. \
+                     Need at least {} GB free; only {} MB available on \
+                     the Sery data volume. Free up some space and try \
+                     again.",
+                    needed_gb, free_mb,
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                // Don't block the watch on a failed query — log and
+                // proceed. Better to attempt the watch than to lock
+                // the user out due to a syscall hiccup.
+                eprintln!("[gdrive-watch] free-space query failed: {}", e);
+            }
+        }
+    }
+
     let _ = app.emit(
         "gdrive-watch-progress",
         serde_json::json!({"folder_id": folder_id, "phase": "walking"}),
@@ -461,6 +490,105 @@ pub async fn gdrive_list_watched_folders(
 ) -> Result<Vec<crate::config::GdriveWatchedFolder>, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
     Ok(config.gdrive_watched_folders.clone())
+}
+
+/// Snapshot of disk usage for the Sery data dir + free space on
+/// the host volume, for the Settings → Storage page. All sizes
+/// are bytes; the UI is responsible for human formatting.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StorageInfo {
+    /// Total bytes Sery occupies under ~/.seryai (excluding stuff
+    /// that lives elsewhere — duckdb caches in
+    /// ~/Library/Application Support/sery on macOS — those add up
+    /// to a few MB at most so we report them separately if at all).
+    pub data_dir_bytes: u64,
+    /// Bytes consumed by ~/.seryai/gdrive-cache. Surfaced
+    /// separately because this is the dominant variable cost and
+    /// the user has a "Clear Drive cache" recovery action for it.
+    pub gdrive_cache_bytes: u64,
+    /// Bytes available on the volume holding ~/.seryai. Drives
+    /// the "X GB free" UI plus the pre-flight check that refuses
+    /// new watches when this drops too low.
+    pub free_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn get_storage_info() -> Result<StorageInfo, String> {
+    use crate::disk_space::available_bytes;
+
+    let data_dir = Config::data_dir().map_err(|e| e.to_string())?;
+    let gdrive_cache_dir = data_dir.join("gdrive-cache");
+
+    // Run the directory walks in spawn_blocking — for very-large
+    // caches (10s of GB across 100k files) the recursive stat can
+    // take a couple of seconds, which would otherwise block the
+    // Tauri runtime.
+    let dd = data_dir.clone();
+    let gd = gdrive_cache_dir.clone();
+    let (data_dir_bytes, gdrive_cache_bytes) = tokio::task::spawn_blocking(move || {
+        (recursive_size(&dd), recursive_size(&gd))
+    })
+    .await
+    .map_err(|e| format!("storage walk task: {}", e))?;
+
+    let free_bytes = available_bytes(&data_dir).map_err(|e| e.to_string())?;
+    Ok(StorageInfo {
+        data_dir_bytes,
+        gdrive_cache_bytes,
+        free_bytes,
+    })
+}
+
+/// Sum the byte size of every regular file under `root`. Returns 0
+/// if `root` doesn't exist (first-run state, or post-clear). Errors
+/// during the walk are swallowed silently — better to under-report
+/// than to surface a syscall failure as a UI-blocker.
+fn recursive_size(root: &std::path::Path) -> u64 {
+    if !root.exists() {
+        return 0;
+    }
+    let mut total: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if meta.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&p) {
+                for e in entries.flatten() {
+                    stack.push(e.path());
+                }
+            }
+        } else if meta.is_file() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
+}
+
+/// Wipe the entire Drive cache. Combines with disconnect_gdrive's
+/// existing per-account wipe, but exposed separately so the user
+/// can free disk WITHOUT losing their OAuth grant — useful when
+/// they want to re-watch a smaller subset later.
+#[tauri::command]
+pub async fn clear_gdrive_cache() -> Result<(), String> {
+    let data_dir = Config::data_dir().map_err(|e| e.to_string())?;
+    let cache_dir = data_dir.join("gdrive-cache");
+    if cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir)
+            .map_err(|e| format!("remove gdrive cache: {}", e))?;
+    }
+
+    // Also drop the gdrive_watched_folders entries + the cache dir
+    // from watched_folders so the next refresh / scan doesn't trip
+    // over a missing directory. Tokens stay in keychain; the user
+    // can re-watch without re-authenticating.
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.gdrive_watched_folders.clear();
+    config.remove_watched_folder(&cache_dir.to_string_lossy());
+    config.save().map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
