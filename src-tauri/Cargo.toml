@@ -47,6 +47,11 @@ sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+# `fs4` exposes filesystem-level free-space queries cross-platform
+# (statvfs on Unix, GetDiskFreeSpaceExW on Windows). Used by the
+# gdrive watch pre-flight to refuse a connect when the user is
+# already low on disk — see commands::gdrive_watch_folder.
+fs4 = "0.8"
 futures = "0.3"
 # scankit wraps walkdir + size-cap + exclude-glob filtering into one
 # Scanner type — see scanner.rs for the call site. The previous code

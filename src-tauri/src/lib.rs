@@ -10,6 +10,7 @@ mod error;
 mod events;
 mod excel;
 mod export_import;
+mod disk_space;
 mod gdrive_api;
 mod gdrive_cache;
 mod gdrive_creds;
@@ -276,6 +277,11 @@ pub fn run() {
             commands::gdrive_watch_folder,
             commands::gdrive_unwatch_folder,
             commands::gdrive_list_watched_folders,
+            // Storage observability + cache cleanup. Independent of
+            // OAuth state — clear_gdrive_cache leaves tokens intact
+            // so the user can free disk without losing their grant.
+            commands::get_storage_info,
+            commands::clear_gdrive_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
