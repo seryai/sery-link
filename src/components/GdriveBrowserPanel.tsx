@@ -1,61 +1,32 @@
-// Google Drive browser panel.
+// Google Drive panel. Lives inside AddRemoteSourceModal as the
+// "Google Drive" tab.
 //
-// Lives inside AddRemoteSourceModal as the "Google Drive" tab. View
-// states:
+// v0.6 redesign: Drive is treated as a single watched source —
+// connecting it auto-watches the entire My Drive root. The earlier
+// folder picker UX (browse/select-with-checkbox) was confusing and
+// added a step nobody really wanted; if a user has a huge Drive and
+// wants to be selective, that comes back in a settings page later.
 //
+// Flow:
 //   1. NOT_CONFIGURED — build was compiled without
-//      GOOGLE_OAUTH_CLIENT_ID; back-end command returns an error.
-//   2. NOT_CONNECTED — no tokens in keychain. Big "Connect Google
-//      Drive" button → fires start_gdrive_oauth → browser opens →
-//      user consents → loopback handler stores tokens → Tauri emits
+//      GOOGLE_OAUTH_CLIENT_ID / SECRET; surface a docs pointer.
+//   2. NOT_CONNECTED — no tokens. "Connect Google Drive" button
+//      kicks off OAuth.
+//   3. CONNECTING — browser is open; we're waiting for the
 //      gdrive-oauth-complete event.
-//   3. CONNECTED — tokens exist. Folder browser: drill in via
-//      breadcrumbs, "Watch this folder" downloads its contents into
-//      the local cache and registers the folder as a Sery source.
-//      A separate "Watching" section lists already-watched folders
-//      with an unwatch action.
+//   4. INDEXING — OAuth succeeded, the auto-watch is in flight.
+//      Modal closes on success and the rest of the watch progress
+//      flows through the existing scan-event UI in the main folder
+//      list (gdrive-watch-progress emits the standard scan events
+//      via the rescan_folder hand-off in the watch command).
+//   5. CONNECTED — already-set-up state shown when the user reopens
+//      the modal post-connect. Just shows status + Disconnect.
 
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import {
-  Check,
-  ChevronRight,
-  Cloud,
-  Folder,
-  FolderOpen,
-  Loader2,
-  LogIn,
-  LogOut,
-  Minus,
-  Plus,
-  X,
-} from 'lucide-react';
+import { Cloud, Loader2, LogIn, LogOut } from 'lucide-react';
 import { useToast } from './Toast';
-
-interface DriveFile {
-  id: string;
-  name: string;
-  // Drive's wire format uses `mimeType` and the Rust struct keeps
-  // that name via #[serde(rename)], so the JSON the frontend sees
-  // is camelCase — DON'T snake_case it here, that breaks every
-  // f.mimeType === FOLDER_MIME check downstream and the entire
-  // checkbox / drill-in flow goes silently dead.
-  mimeType: string;
-  size?: number;
-  modifiedTime: string;
-  parents: string[];
-}
-
-interface GdriveWatchedFolder {
-  account_id: string;
-  folder_id: string;
-  name: string;
-  last_walk_at?: string | null;
-  file_ids: string[];
-}
-
-const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 interface GdriveOAuthEvent {
   ok: boolean;
@@ -63,61 +34,34 @@ interface GdriveOAuthEvent {
   error?: string;
 }
 
-type WatchProgress =
-  | { folder_id: string; phase: 'walking' }
-  | {
-      folder_id: string;
-      phase: 'downloading';
-      current: number;
-      total: number;
-      file_name: string;
-    }
-  | { folder_id: string; phase: 'scanning' }
-  | {
-      folder_id: string;
-      phase: 'done';
-      total_files: number;
-      skipped_native: number;
-    };
-
 type ViewState =
   | { kind: 'loading' }
   | { kind: 'not-configured' }
   | { kind: 'not-connected' }
   | { kind: 'connecting' }
-  | { kind: 'connected'; loadingFolders: boolean };
+  | { kind: 'indexing' }
+  | { kind: 'connected' };
 
-interface BreadcrumbEntry {
-  id: string;
-  name: string;
+interface Props {
+  /** Lets us close the parent modal once the auto-watch fires —
+   *  matches the S3 / URL flow where submit closes the dialog and
+   *  progress shows in the main UI. */
+  onClose: () => void;
 }
 
-export function GdriveBrowserPanel() {
+const ROOT_NAME = 'My Drive';
+
+export function GdriveBrowserPanel({ onClose }: Props) {
   const toast = useToast();
   const [state, setState] = useState<ViewState>({ kind: 'loading' });
-  const [folders, setFolders] = useState<DriveFile[]>([]);
-  const [crumbs, setCrumbs] = useState<BreadcrumbEntry[]>([
-    { id: 'root', name: 'My Drive' },
-  ]);
   const [error, setError] = useState<string | null>(null);
-  // Folder ids the user has checked in the current view. Cleared
-  // whenever folders change (drill in/out, reconnect) — selection
-  // is per-listing, not persisted.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [watching, setWatching] = useState<WatchProgress | null>(null);
-  const [watchedFolders, setWatchedFolders] = useState<GdriveWatchedFolder[]>([]);
 
   // ── Initial state probe ─────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
         const connected = await invoke<boolean>('gdrive_status');
-        if (connected) {
-          setState({ kind: 'connected', loadingFolders: true });
-          await Promise.all([loadFolder('root'), loadWatchedFolders()]);
-        } else {
-          setState({ kind: 'not-connected' });
-        }
+        setState(connected ? { kind: 'connected' } : { kind: 'not-connected' });
       } catch (err) {
         console.warn('gdrive_status failed:', err);
         setState({ kind: 'not-connected' });
@@ -125,16 +69,11 @@ export function GdriveBrowserPanel() {
     })();
   }, []);
 
-  // ── OAuth completion listener ───────────────────────────────────
+  // ── OAuth completion → auto-watch root → close modal ───────────
   useEffect(() => {
     const unlisten = listen<GdriveOAuthEvent>('gdrive-oauth-complete', async (event) => {
       const payload = event.payload;
-      if (payload.ok) {
-        toast.success('Google Drive connected');
-        setState({ kind: 'connected', loadingFolders: true });
-        setCrumbs([{ id: 'root', name: 'My Drive' }]);
-        await Promise.all([loadFolder('root'), loadWatchedFolders()]);
-      } else {
+      if (!payload.ok) {
         const msg = payload.error || 'OAuth flow failed';
         if (/access_denied|user.?cancel/i.test(msg)) {
           toast.info('Google Drive connection cancelled');
@@ -142,96 +81,41 @@ export function GdriveBrowserPanel() {
           toast.error(`Google Drive: ${msg}`);
         }
         setState({ kind: 'not-connected' });
-      }
-    });
-    return () => {
-      unlisten.then((u) => u());
-    };
-  }, [toast]);
-
-  // ── Watch progress listener ─────────────────────────────────────
-  // Backend emits gdrive-watch-progress with `phase` + per-phase
-  // payload fields. We render this as a progress bar; on `done` we
-  // refresh the watched-folders list and clear the progress UI.
-  useEffect(() => {
-    const unlisten = listen<WatchProgress>('gdrive-watch-progress', (event) => {
-      setWatching(event.payload);
-      if (event.payload.phase === 'done') {
-        toast.success(
-          `Watching now scans ${event.payload.total_files} files` +
-            (event.payload.skipped_native > 0
-              ? ` (${event.payload.skipped_native} Google Docs skipped — export support coming)`
-              : ''),
-        );
-        void loadWatchedFolders();
-        // Clear after a short beat so users see "done" before it
-        // disappears. setTimeout is fine here — no race-y state.
-        setTimeout(() => setWatching(null), 1500);
-      }
-    });
-    return () => {
-      unlisten.then((u) => u());
-    };
-  }, [toast]);
-
-  // ── Background-refresh listener ─────────────────────────────────
-  // The hourly gdrive_refresh tick emits gdrive-refresh per folder.
-  // We just re-fetch the watched list so the "last refreshed N min
-  // ago" label and file count stay accurate without forcing the user
-  // to reopen the modal.
-  useEffect(() => {
-    const unlisten = listen<{
-      folder_id: string;
-      downloaded: number;
-      deleted: number;
-    }>('gdrive-refresh', () => {
-      void loadWatchedFolders();
-    });
-    return () => {
-      unlisten.then((u) => u());
-    };
-  }, []);
-
-  async function loadFolder(folderId: string) {
-    setError(null);
-    setState({ kind: 'connected', loadingFolders: true });
-    // Drilling in/out resets selection — keeping it would mean the
-    // user thinks they've selected items in folders that aren't
-    // currently visible, which is confusing.
-    setSelectedIds(new Set());
-    try {
-      const result = await invoke<DriveFile[]>('gdrive_list_folder', {
-        folderId,
-        includeFolders: true,
-      });
-      setFolders(result);
-      setState({ kind: 'connected', loadingFolders: false });
-    } catch (err) {
-      const msg = String(err);
-      if (/not configured for this build/i.test(msg)) {
-        setState({ kind: 'not-configured' });
         return;
       }
-      if (/no.+google drive account/i.test(msg) || /401|invalid_grant/i.test(msg)) {
-        setError('Authentication expired. Reconnect to Google Drive.');
-        setState({ kind: 'not-connected' });
-        return;
-      }
-      setError(msg);
-      setState({ kind: 'connected', loadingFolders: false });
-    }
-  }
 
-  async function loadWatchedFolders() {
-    try {
-      const list = await invoke<GdriveWatchedFolder[]>(
-        'gdrive_list_watched_folders',
-      );
-      setWatchedFolders(list);
-    } catch (err) {
-      console.warn('gdrive_list_watched_folders failed:', err);
-    }
-  }
+      // OAuth succeeded — kick off the auto-watch on root, then
+      // close the modal. We deliberately fire-and-forget the
+      // invoke: the watch command keeps emitting gdrive-watch-progress
+      // events that the main UI listens for, so the user sees
+      // progress in the folder list / status bar without staring
+      // at a modal.
+      toast.success('Google Drive connected — indexing your files…');
+      setState({ kind: 'indexing' });
+      try {
+        // Don't await — the watch can take minutes for large Drives.
+        // Errors surface via gdrive-watch-progress + toast in
+        // whichever component subscribes (main UI today, this
+        // component if reopened).
+        invoke('gdrive_watch_folder', {
+          folderId: 'root',
+          folderName: ROOT_NAME,
+        }).catch((err) => {
+          console.error('auto-watch failed:', err);
+          toast.error(`Couldn't start indexing: ${err}`);
+        });
+        // Close on next tick so the toast registers before the
+        // modal teardown unmounts the toast root.
+        setTimeout(onClose, 50);
+      } catch (err) {
+        toast.error(`Couldn't start indexing: ${err}`);
+        setState({ kind: 'connected' });
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [toast, onClose]);
 
   async function handleConnect() {
     setError(null);
@@ -261,111 +145,8 @@ export function GdriveBrowserPanel() {
       await invoke('disconnect_gdrive');
       toast.success('Google Drive disconnected');
       setState({ kind: 'not-connected' });
-      setFolders([]);
-      setWatchedFolders([]);
-      setCrumbs([{ id: 'root', name: 'My Drive' }]);
     } catch (err) {
       toast.error(`Disconnect failed: ${err}`);
-    }
-  }
-
-  function handleEnterFolder(folder: DriveFile) {
-    setCrumbs((prev) => [...prev, { id: folder.id, name: folder.name }]);
-    void loadFolder(folder.id);
-  }
-
-  function handleCrumb(index: number) {
-    const newCrumbs = crumbs.slice(0, index + 1);
-    setCrumbs(newCrumbs);
-    void loadFolder(newCrumbs[newCrumbs.length - 1].id);
-  }
-
-  async function handleWatchSelected() {
-    // Resolve {id, name} pairs once before iterating — `folders`
-    // could in theory mutate via a refresh tick during the loop.
-    const targets = folders
-      .filter(
-        (f) =>
-          f.mimeType === FOLDER_MIME &&
-          selectedIds.has(f.id) &&
-          !watchedFolders.some((w) => w.folder_id === f.id),
-      )
-      .map((f) => ({ id: f.id, name: f.name }));
-
-    if (targets.length === 0) {
-      toast.info('Nothing to watch — selection is empty or already watched.');
-      return;
-    }
-
-    // Sequential, not parallel: the walker is sequential under the
-    // hood, the user-visible progress UI tracks one folder at a
-    // time, and concurrent Drive walks would race on the same
-    // tokens. N=1 is the common case anyway.
-    for (const t of targets) {
-      try {
-        setWatching({ folder_id: t.id, phase: 'walking' });
-        await invoke('gdrive_watch_folder', {
-          folderId: t.id,
-          folderName: t.name,
-        });
-        // gdrive-watch-progress listener clears `watching` on
-        // `done`. Wait a tick so the success toast has time to
-        // fire before the next folder kicks off — otherwise a
-        // batch of 5 folders fires 5 toasts on top of each other
-        // and the user can't read any of them.
-        await new Promise((r) => setTimeout(r, 200));
-      } catch (err) {
-        setWatching(null);
-        toast.error(`Couldn't watch "${t.name}": ${err}`);
-        // Keep going with the rest — partial success beats
-        // aborting on the first failure.
-      }
-    }
-
-    setSelectedIds(new Set());
-  }
-
-  function toggleSelected(folderId: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderId)) next.delete(folderId);
-      else next.add(folderId);
-      return next;
-    });
-  }
-
-  function toggleSelectAll() {
-    const selectableIds = folders
-      .filter(
-        (f) =>
-          f.mimeType === FOLDER_MIME &&
-          !watchedFolders.some((w) => w.folder_id === f.id),
-      )
-      .map((f) => f.id);
-    const allSelected =
-      selectableIds.length > 0 &&
-      selectableIds.every((id) => selectedIds.has(id));
-    if (allSelected) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(selectableIds));
-    }
-  }
-
-  async function handleUnwatch(folder: GdriveWatchedFolder) {
-    if (
-      !confirm(
-        `Stop watching "${folder.name}"? Cached files for this folder will be removed.`,
-      )
-    ) {
-      return;
-    }
-    try {
-      await invoke('gdrive_unwatch_folder', { folderId: folder.folder_id });
-      toast.success(`Stopped watching "${folder.name}"`);
-      await loadWatchedFolders();
-    } catch (err) {
-      toast.error(`Unwatch failed: ${err}`);
     }
   }
 
@@ -398,346 +179,78 @@ export function GdriveBrowserPanel() {
     );
   }
 
-  if (state.kind === 'not-connected' || state.kind === 'connecting') {
-    const busy = state.kind === 'connecting';
+  if (state.kind === 'connected') {
     return (
-      <div className="flex flex-col items-center rounded-lg border border-purple-200 bg-purple-50/40 px-6 py-8 text-center dark:border-purple-900/60 dark:bg-purple-950/20">
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-sm dark:bg-slate-800">
-          <Cloud className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 text-sm dark:border-emerald-900/60 dark:bg-emerald-950/20">
+        <div className="mb-2 flex items-center gap-2 font-semibold text-emerald-900 dark:text-emerald-200">
+          <Cloud className="h-4 w-4" />
+          Google Drive connected
         </div>
-        <h3 className="mb-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-          Connect Google Drive
-        </h3>
-        <p className="mx-auto mb-5 max-w-sm text-xs leading-relaxed text-slate-600 dark:text-slate-400">
-          Sery Link will open your browser to Google&apos;s consent
-          screen. We request <strong>read-only</strong> access only
-          (drive.readonly + drive.metadata.readonly). Tokens are
-          stored in your OS keychain and never sent to Sery&apos;s
-          servers.
+        <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+          Sery is watching your Drive. New and changed files are
+          re-indexed automatically. Tokens live in your OS keychain
+          and never leave this machine.
         </p>
-        <button
-          onClick={handleConnect}
-          disabled={busy}
-          className="inline-flex items-center gap-2 rounded-md bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <LogIn className="h-4 w-4" />
-          )}
-          {busy ? 'Waiting for consent…' : 'Connect Google Drive'}
-        </button>
-        {error && (
-          <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">{error}</p>
-        )}
+        <div className="mt-3 flex justify-end">
+          <button
+            onClick={handleDisconnect}
+            className="inline-flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
+          >
+            <LogOut className="h-3 w-3" />
+            Disconnect Google Drive
+          </button>
+        </div>
       </div>
     );
   }
 
-  // state.kind === 'connected'
-  return (
-    <div>
-      {/* Breadcrumb */}
-      <div className="mb-2 flex flex-wrap items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
-        {crumbs.map((c, i) => (
-          <span key={c.id} className="flex items-center gap-1">
-            <button
-              onClick={() => handleCrumb(i)}
-              disabled={i === crumbs.length - 1}
-              className="rounded px-1.5 py-0.5 hover:bg-slate-100 disabled:cursor-default disabled:font-semibold disabled:text-slate-900 disabled:hover:bg-transparent dark:hover:bg-slate-800 dark:disabled:text-slate-100"
-            >
-              {c.name}
-            </button>
-            {i < crumbs.length - 1 && (
-              <ChevronRight className="h-3 w-3 text-slate-300 dark:text-slate-600" />
-            )}
-          </span>
-        ))}
+  if (state.kind === 'indexing') {
+    return (
+      <div className="flex flex-col items-center rounded-lg border border-purple-200 bg-purple-50/40 px-6 py-8 text-center dark:border-purple-900/60 dark:bg-purple-950/20">
+        <Loader2 className="mb-3 h-6 w-6 animate-spin text-purple-600 dark:text-purple-400" />
+        <h3 className="mb-1 text-base font-semibold text-slate-900 dark:text-slate-50">
+          Indexing your Drive…
+        </h3>
+        <p className="mx-auto max-w-sm text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+          You can close this window. Sery will keep working in the
+          background.
+        </p>
       </div>
+    );
+  }
 
-      {/* Hint copy. Tick a folder's checkbox to queue it for
-          watching; click the folder name to drill in. */}
-      <p className="mb-2 text-[11px] text-slate-500 dark:text-slate-400">
-        Tick folders to watch, then click <strong>Watch selected</strong> below. Click a folder name to open it.
+  // not-connected | connecting
+  const busy = state.kind === 'connecting';
+  return (
+    <div className="flex flex-col items-center rounded-lg border border-purple-200 bg-purple-50/40 px-6 py-8 text-center dark:border-purple-900/60 dark:bg-purple-950/20">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-sm dark:bg-slate-800">
+        <Cloud className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+      </div>
+      <h3 className="mb-1 text-base font-semibold text-slate-900 dark:text-slate-50">
+        Connect Google Drive
+      </h3>
+      <p className="mx-auto mb-5 max-w-sm text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+        Sery will index every file in your Drive (Sheets, CSVs, PDFs,
+        Office docs, …) so you can search and query it alongside
+        your local folders. <strong>Read-only</strong> OAuth scope —
+        Sery never modifies your Drive content. Tokens stay in your
+        OS keychain.
       </p>
-
-      {/* Folder list */}
-      {(() => {
-        const selectableFolders = folders.filter(
-          (f) =>
-            f.mimeType === FOLDER_MIME &&
-            !watchedFolders.some((w) => w.folder_id === f.id),
-        );
-        const allSelectableChecked =
-          selectableFolders.length > 0 &&
-          selectableFolders.every((f) => selectedIds.has(f.id));
-        const someSelectableChecked =
-          selectableFolders.some((f) => selectedIds.has(f.id)) &&
-          !allSelectableChecked;
-
-        return (
-          <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
-            {/* Select-all header — only when there's at least one
-                selectable folder. Hides cleanly for file-only views. */}
-            {selectableFolders.length > 0 && (
-              <div
-                onClick={toggleSelectAll}
-                className="flex cursor-pointer items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-200 dark:hover:bg-slate-800/60"
-              >
-                <CheckboxBox
-                  checked={allSelectableChecked}
-                  indeterminate={someSelectableChecked}
-                  onToggle={toggleSelectAll}
-                  ariaLabel="Select all folders"
-                />
-                <span>
-                  Select all ({selectableFolders.length})
-                </span>
-                {selectedIds.size > 0 && (
-                  <span className="ml-auto text-purple-600 dark:text-purple-400">
-                    {selectedIds.size} selected
-                  </span>
-                )}
-              </div>
-            )}
-
-            <div className="max-h-72 overflow-y-auto">
-              {state.loadingFolders ? (
-                <div className="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Loading folder…
-                </div>
-              ) : folders.length === 0 ? (
-                <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                  This folder is empty.
-                </div>
-              ) : (
-                <ul className="divide-y divide-slate-200 dark:divide-slate-700">
-                  {folders.map((f) => {
-                    const isFolder = f.mimeType === FOLDER_MIME;
-                    const isWatched = watchedFolders.some(
-                      (w) => w.folder_id === f.id,
-                    );
-                    const isChecked = selectedIds.has(f.id);
-                    const checkboxAvailable = isFolder && !isWatched;
-                    return (
-                      <li
-                        key={f.id}
-                        className={`flex items-center gap-2 px-3 py-2 text-sm ${
-                          isFolder ? '' : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      >
-                        {/* Checkbox column — fixed width so rows
-                            align even when some items have no
-                            checkbox (files, watched folders). */}
-                        <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
-                          {checkboxAvailable && (
-                            <CheckboxBox
-                              checked={isChecked}
-                              onToggle={() => toggleSelected(f.id)}
-                              ariaLabel={`Select ${f.name}`}
-                            />
-                          )}
-                        </div>
-                        {isFolder ? (
-                          <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
-                        ) : (
-                          <Folder className="h-4 w-4 flex-shrink-0 text-slate-400" />
-                        )}
-                        <button
-                          onClick={() => isFolder && handleEnterFolder(f)}
-                          disabled={!isFolder}
-                          className={`min-w-0 flex-1 truncate text-left ${
-                            isFolder
-                              ? 'cursor-pointer hover:underline'
-                              : 'cursor-default'
-                          }`}
-                        >
-                          {f.name}
-                        </button>
-                        {isFolder && isWatched && (
-                          <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                            Watching
-                          </span>
-                        )}
-                        {isFolder && (
-                          <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Watch-selected action bar */}
-      <div className="mt-3 flex items-center justify-end">
-        <button
-          onClick={handleWatchSelected}
-          disabled={selectedIds.size === 0 || watching !== null}
-          className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Watch{selectedIds.size > 0 ? ` ${selectedIds.size}` : ''} selected
-        </button>
-      </div>
-
-      {error && (
-        <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>
-      )}
-
-      {/* Watch progress — only shown while a watch is in flight */}
-      {watching && <WatchProgressBar progress={watching} />}
-
-      {/* Currently watched */}
-      {watchedFolders.length > 0 && (
-        <div className="mt-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Watching
-          </div>
-          <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
-            {watchedFolders.map((w) => (
-              <li
-                key={`${w.account_id}:${w.folder_id}`}
-                className="flex items-center gap-2 px-3 py-2 text-sm"
-              >
-                <FolderOpen className="h-4 w-4 flex-shrink-0 text-purple-500" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-slate-900 dark:text-slate-100">
-                    {w.name}
-                  </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {w.file_ids.length} file{w.file_ids.length === 1 ? '' : 's'}
-                    {w.last_walk_at &&
-                      ` · last refreshed ${formatRelativeTime(w.last_walk_at)}`}
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleUnwatch(w)}
-                  className="flex-shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800 dark:hover:text-rose-400"
-                  title="Stop watching"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="mt-4 flex items-center justify-end">
-        <button
-          onClick={handleDisconnect}
-          className="inline-flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
-        >
-          <LogOut className="h-3 w-3" />
-          Disconnect Google Drive
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Visible-everywhere checkbox. We don't pull in @tailwindcss/forms
- *  (would touch every other input in the app) and the native
- *  checkbox renders inconsistently across macOS Safari / WebView /
- *  dark mode — it ends up nearly invisible against light grey rows.
- *  This component is an accessible button (`role="checkbox"`) with
- *  a guaranteed visible filled / outlined / indeterminate state. */
-function CheckboxBox({
-  checked,
-  indeterminate,
-  onToggle,
-  ariaLabel,
-}: {
-  checked: boolean;
-  indeterminate?: boolean;
-  onToggle: () => void;
-  ariaLabel: string;
-}) {
-  const isChecked = checked || indeterminate;
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={indeterminate ? 'mixed' : checked}
-      aria-label={ariaLabel}
-      onClick={(e) => {
-        // Stop propagation so a click on the checkbox of a folder
-        // row doesn't ALSO fire the row's drill-in handler.
-        e.stopPropagation();
-        onToggle();
-      }}
-      className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition-colors ${
-        isChecked
-          ? 'border-purple-600 bg-purple-600 text-white hover:bg-purple-700 dark:border-purple-500 dark:bg-purple-500'
-          : 'border-slate-300 bg-white hover:border-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:hover:border-slate-500'
-      }`}
-    >
-      {indeterminate ? (
-        <Minus className="h-3 w-3" strokeWidth={3} />
-      ) : checked ? (
-        <Check className="h-3 w-3" strokeWidth={3} />
-      ) : null}
-    </button>
-  );
-}
-
-function WatchProgressBar({ progress }: { progress: WatchProgress }) {
-  const message = (() => {
-    switch (progress.phase) {
-      case 'walking':
-        return 'Scanning Drive folder…';
-      case 'downloading':
-        return `Downloading ${progress.current} of ${progress.total} — ${progress.file_name}`;
-      case 'scanning':
-        return 'Indexing files…';
-      case 'done':
-        return `Done — ${progress.total_files} files cached`;
-    }
-  })();
-
-  const percent =
-    progress.phase === 'downloading'
-      ? Math.min(100, (progress.current / Math.max(1, progress.total)) * 100)
-      : progress.phase === 'done'
-        ? 100
-        : null;
-
-  return (
-    <div className="mt-3 rounded-md border border-purple-200 bg-purple-50/60 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
-      <div className="mb-2 flex items-center gap-2">
-        {progress.phase !== 'done' && (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <button
+        onClick={handleConnect}
+        disabled={busy}
+        className="inline-flex items-center gap-2 rounded-md bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <LogIn className="h-4 w-4" />
         )}
-        <span className="truncate">{message}</span>
-      </div>
-      <div className="h-1 overflow-hidden rounded-full bg-purple-200/60 dark:bg-purple-900/40">
-        <div
-          className="h-full bg-purple-600 transition-all dark:bg-purple-400"
-          style={{ width: percent !== null ? `${percent}%` : '40%' }}
-        />
-      </div>
+        {busy ? 'Waiting for consent…' : 'Connect Google Drive'}
+      </button>
+      {error && (
+        <p className="mt-3 text-xs text-rose-700 dark:text-rose-300">{error}</p>
+      )}
     </div>
   );
-}
-
-/** Lightweight relative-time formatter. Big projects use Intl
- *  RelativeTimeFormat or date-fns; this UI just needs minutes/hours/
- *  days granularity for the "last refreshed" label. */
-function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return iso;
-  const seconds = Math.max(0, (Date.now() - then) / 1000);
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
-  const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? '' : 's'} ago`;
 }
