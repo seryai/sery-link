@@ -36,9 +36,14 @@ import { useToast } from './Toast';
 interface DriveFile {
   id: string;
   name: string;
-  mime_type: string;
+  // Drive's wire format uses `mimeType` and the Rust struct keeps
+  // that name via #[serde(rename)], so the JSON the frontend sees
+  // is camelCase — DON'T snake_case it here, that breaks every
+  // f.mimeType === FOLDER_MIME check downstream and the entire
+  // checkbox / drill-in flow goes silently dead.
+  mimeType: string;
   size?: number;
-  modified_time: string;
+  modifiedTime: string;
   parents: string[];
 }
 
@@ -281,7 +286,7 @@ export function GdriveBrowserPanel() {
     const targets = folders
       .filter(
         (f) =>
-          f.mime_type === FOLDER_MIME &&
+          f.mimeType === FOLDER_MIME &&
           selectedIds.has(f.id) &&
           !watchedFolders.some((w) => w.folder_id === f.id),
       )
@@ -333,7 +338,7 @@ export function GdriveBrowserPanel() {
     const selectableIds = folders
       .filter(
         (f) =>
-          f.mime_type === FOLDER_MIME &&
+          f.mimeType === FOLDER_MIME &&
           !watchedFolders.some((w) => w.folder_id === f.id),
       )
       .map((f) => f.id);
@@ -460,7 +465,7 @@ export function GdriveBrowserPanel() {
       {(() => {
         const selectableFolders = folders.filter(
           (f) =>
-            f.mime_type === FOLDER_MIME &&
+            f.mimeType === FOLDER_MIME &&
             !watchedFolders.some((w) => w.folder_id === f.id),
         );
         const allSelectableChecked =
@@ -509,7 +514,7 @@ export function GdriveBrowserPanel() {
               ) : (
                 <ul className="divide-y divide-slate-200 dark:divide-slate-700">
                   {folders.map((f) => {
-                    const isFolder = f.mime_type === FOLDER_MIME;
+                    const isFolder = f.mimeType === FOLDER_MIME;
                     const isWatched = watchedFolders.some(
                       (w) => w.folder_id === f.id,
                     );
