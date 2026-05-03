@@ -42,10 +42,17 @@ interface AskUsage {
   output_tokens: number;
 }
 
+interface UsedFile {
+  folder_path: string;
+  relative_path: string;
+  reason: string;
+}
+
 interface AskResponse {
   text: string;
   stop_reason: string | null;
   usage: AskUsage | null;
+  used_files: UsedFile[];
 }
 
 interface Turn {
@@ -55,6 +62,7 @@ interface Turn {
   provider: string;
   usage: AskUsage | null;
   asked_at: string;
+  used_files: UsedFile[];
 }
 
 export function Ask() {
@@ -107,6 +115,7 @@ export function Ask() {
         provider: status.provider ?? 'anthropic',
         usage: result.usage,
         asked_at: new Date().toISOString(),
+        used_files: result.used_files ?? [],
       });
       setPrompt('');
     } catch (err) {
@@ -159,7 +168,7 @@ export function Ask() {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask anything…"
+          placeholder="Ask anything — or ask about your local files, e.g. 'which file mentions invoice Q3'"
           rows={4}
           disabled={asking}
           className="w-full resize-none rounded-t-2xl bg-transparent px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none disabled:opacity-60 dark:text-slate-100"
@@ -241,6 +250,31 @@ function TurnCard({ turn }: { turn: Turn }) {
       <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700 dark:text-slate-300">
         {turn.answer}
       </div>
+
+      {turn.used_files.length > 0 && (
+        // Show which local files were sent to the LLM as grounding.
+        // Lets the user verify the answer's basis without scrolling
+        // back through the prompt — and notice when "based on 0
+        // files" means they got a generic answer instead of one
+        // grounded in their data.
+        <div className="mt-3 border-t border-slate-100 pt-2 dark:border-slate-800">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            Based on {turn.used_files.length} file{turn.used_files.length === 1 ? '' : 's'}
+          </div>
+          <ul className="flex flex-wrap gap-1">
+            {turn.used_files.map((f) => (
+              <li
+                key={`${f.folder_path}-${f.relative_path}`}
+                title={f.reason}
+                className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                {f.relative_path}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {turn.usage && (
         <footer className="mt-3 flex items-center gap-3 border-t border-slate-100 pt-2 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
           <span className="inline-flex items-center gap-1">

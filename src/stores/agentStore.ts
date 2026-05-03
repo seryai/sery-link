@@ -23,6 +23,12 @@ export type SchemaNotification = StoredSchemaNotification;
 // One Q&A turn on the Ask page. Lifted out of the component so the
 // conversation + draft input survive sidebar navigation away and
 // back. Mirror of the local interface in Ask.tsx.
+export interface AskUsedFile {
+  folder_path: string;
+  relative_path: string;
+  reason: string;
+}
+
 export interface AskTurn {
   id: number;
   question: string;
@@ -30,6 +36,7 @@ export interface AskTurn {
   provider: string;
   usage: { input_tokens: number; output_tokens: number } | null;
   asked_at: string;
+  used_files: AskUsedFile[];
 }
 
 const MAX_NOTIFICATIONS_KEEP = 200;

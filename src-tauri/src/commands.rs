@@ -2528,7 +2528,7 @@ pub async fn read_file(path: String) -> Result<String, String> {
 // proof that no sery.ai traffic is generated for the LLM round-trip.
 // ---------------------------------------------------------------------------
 
-use crate::byok::{self, anthropic::AskResponse};
+use crate::byok;
 
 #[derive(serde::Serialize, Debug)]
 pub struct ByokStatus {
@@ -2653,29 +2653,169 @@ pub async fn validate_byok_key(provider: String, api_key: String) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
-/// Ask the configured BYOK LLM a single question. Returns the full
-/// answer once the call completes (no streaming in v0.6). The HTTPS
-/// request goes from this process directly to the provider — no
-/// sery.ai involvement, regardless of which provider is active.
+/// Output of `ask_byok` — the LLM's answer plus the local context
+/// that was injected into the prompt. The frontend surfaces the
+/// used files as a "based on N files" footer so the user can see
+/// what grounding the answer came from (and notice when it came
+/// from nothing).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AskResponseGrounded {
+    /// The provider's raw answer text.
+    pub text: String,
+    /// Provider-reported finish reason, if any.
+    pub stop_reason: Option<String>,
+    /// Token usage in the existing AskResponse shape.
+    pub usage: Option<crate::byok::anthropic::Usage>,
+    /// Snapshot of which local files were included as context. Up
+    /// to `ASK_CONTEXT_LIMIT` entries; ordered by search relevance.
+    pub used_files: Vec<UsedFile>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UsedFile {
+    pub folder_path: String,
+    pub relative_path: String,
+    /// Brief reason snippet (column hit, content excerpt, …). UI
+    /// shows this as a hover title on the file chip.
+    pub reason: String,
+}
+
+/// How many search hits to forward into the LLM prompt as context.
+/// 8 fits comfortably in any provider's context window even with
+/// long content snippets, and matches roughly what a human would
+/// scan-read after hitting Cmd+F.
+const ASK_CONTEXT_LIMIT: usize = 8;
+
+/// Ask the configured BYOK LLM a single question, grounded in the
+/// user's local file index. We run search_all_folders FIRST with
+/// the prompt as the query, prepend the top matches as context,
+/// then dispatch to the provider. This is what makes Ask materially
+/// different from a generic ChatGPT pad — without it, the LLM
+/// can't answer questions like "which file contains X" because it
+/// has no idea what files exist.
+///
+/// Privacy: the prompt + the grounded file paths/snippets DO go to
+/// the configured BYOK provider. That's the same boundary as
+/// before; we're sending more bytes (the snippets) but to the
+/// same destination. The audit log records the augmented prompt
+/// length so users can see what crossed the wire.
 #[tauri::command]
-pub async fn ask_byok(prompt: String) -> Result<AskResponse, String> {
+pub async fn ask_byok(prompt: String) -> Result<AskResponseGrounded, String> {
     let provider = resolve_active_provider().ok_or_else(|| {
         "BYOK key not configured. Save an Anthropic, OpenAI, or Gemini key first.".to_string()
     })?;
     let api_key = keyring_store::get_byok_key(provider.as_str())
         .map_err(|e| format!("Saved {} key disappeared from keychain: {}", provider.as_str(), e))?;
-    // Optional per-provider model override from config. Trimmed +
-    // empty-string-as-None so an accidentally-blanked input falls
-    // back to the compiled-in default rather than sending "" to
-    // the provider's API.
     let model = Config::load()
         .ok()
         .and_then(|c| c.app.byok_models.get(provider.as_str()).cloned())
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
-    byok::ask(provider, &api_key, &prompt, model.as_deref())
+
+    // Step 1: search the local index for matches against the prompt.
+    // Best-effort — if search fails (no scan cache yet, etc.) we
+    // fall back to ungrounded ask rather than blocking the user.
+    let matches = search_all_folders(prompt.clone()).await.unwrap_or_default();
+    let used_files = matches
+        .iter()
+        .take(ASK_CONTEXT_LIMIT)
+        .map(|m| UsedFile {
+            folder_path: m.folder_path.clone(),
+            relative_path: m.relative_path.clone(),
+            reason: summarise_match_reasons(&m.match_reasons),
+        })
+        .collect::<Vec<_>>();
+
+    // Step 2: build the augmented prompt. We prepend the grounding
+    // BEFORE the user's question, separated by a clear instruction
+    // so the LLM treats the snippets as evidence rather than
+    // instructions to follow. No grounding when the search returned
+    // nothing — the LLM gets the bare prompt and falls back to
+    // generic-knowledge answering.
+    let augmented_prompt = if used_files.is_empty() {
+        prompt.clone()
+    } else {
+        build_grounded_prompt(&prompt, &matches[..matches.len().min(ASK_CONTEXT_LIMIT)])
+    };
+
+    // Step 3: dispatch to the provider as before.
+    let resp = byok::ask(provider, &api_key, &augmented_prompt, model.as_deref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok(AskResponseGrounded {
+        text: resp.text,
+        stop_reason: resp.stop_reason,
+        usage: resp.usage,
+        used_files,
+    })
+}
+
+/// Compose the prompt the LLM actually sees: grounding context first
+/// (with explicit "use these to answer" instruction), then the
+/// user's question verbatim. Snippets come from each match's
+/// content / column / filename reason — whichever is most useful.
+fn build_grounded_prompt(user_prompt: &str, matches: &[SearchMatch]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "You are answering a user's question about their local files. \
+         Below are the most relevant files Sery's local index found. \
+         Use them to answer; cite filenames in your response. \
+         If the files don't contain the answer, say so plainly rather \
+         than making something up.\n\n",
+    );
+    out.push_str("Relevant files:\n");
+    for (i, m) in matches.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {} (in {})\n",
+            i + 1,
+            m.relative_path,
+            m.folder_path,
+        ));
+        for r in &m.match_reasons {
+            match r {
+                SearchMatchReason::Content { snippet } => {
+                    out.push_str(&format!("   excerpt: \"{}\"\n", snippet));
+                }
+                SearchMatchReason::Column { name, col_type } => {
+                    out.push_str(&format!("   matched column: {} ({})\n", name, col_type));
+                }
+                SearchMatchReason::Filename => {
+                    // The filename hit is implicit in the line above
+                    // — no extra value listing it again.
+                }
+                SearchMatchReason::SkippedDrive { .. } => {
+                    out.push_str("   (filename-only match — content not indexed)\n");
+                }
+            }
+        }
+    }
+    out.push_str("\nUser question: ");
+    out.push_str(user_prompt);
+    out
+}
+
+/// Compact human-readable reason for the UsedFile chip's hover
+/// title. Picks the most informative reason out of the list.
+fn summarise_match_reasons(reasons: &[SearchMatchReason]) -> String {
+    for r in reasons {
+        match r {
+            SearchMatchReason::Content { snippet } => {
+                return format!("matched content: \"{}\"", snippet);
+            }
+            SearchMatchReason::Column { name, col_type } => {
+                return format!("matched column {} ({})", name, col_type);
+            }
+            _ => {}
+        }
+    }
+    if reasons
+        .iter()
+        .any(|r| matches!(r, SearchMatchReason::SkippedDrive { .. }))
+    {
+        return "filename-only — content not indexed".to_string();
+    }
+    "matched filename".to_string()
 }
 
 /// Snapshot of the configured model for each BYOK provider. Returned
