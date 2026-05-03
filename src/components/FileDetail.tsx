@@ -701,8 +701,8 @@ function DataPreview({
           {data.truncated && (
             <div className="border-t border-slate-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-slate-800 dark:bg-amber-950/30 dark:text-amber-200">
               File is larger than the preview limit. To analyse the
-              whole thing, ask a question on the cloud Ask page or
-              run a recipe over this folder.
+              whole thing, open this workspace in the dashboard and
+              ask in chat, or run a recipe over this folder.
             </div>
           )}
         </>
