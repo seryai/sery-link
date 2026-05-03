@@ -119,6 +119,15 @@ export function AddRemoteSourceModal({
           </button>
         </div>
 
+        {/* Protocol roadmap callout — closes I1 from
+            UI_AUDIT_2026_05.md. The marketing claims 10 protocols;
+            today's tabs only show 2 of the remote ones. The grid
+            below makes the broader claim visible without lying
+            about what works today. Tiles are informational only —
+            clicking is a no-op until F42 ships the unified protocol
+            picker. */}
+        <ProtocolRoadmapGrid />
+
         {/* Tabs */}
         <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-700">
           <TabButton active={tab === 'url'} onClick={() => setTab('url')}>
@@ -155,6 +164,78 @@ export function AddRemoteSourceModal({
             onClose={onClose}
           />
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ProtocolRoadmapGrid — informational tile grid above the modal
+ * tabs that surfaces all 10 protocols the website promises. The
+ * 4 currently-shipped ones are styled "Now"; the 7 v0.7+ ones are
+ * styled "Coming". Tiles aren't clickable yet — they ship for real
+ * via the F42 protocol-picker. The point is honest disclosure:
+ * the modal stops looking like "we have 2 cloud sources" and starts
+ * looking like "we have 4, with 7 more on the way."
+ *
+ * Note: Local Folder is included in the "Now" set and points users
+ * at the "Watch Folder" button on the FolderList — it isn't reached
+ * from this modal but is part of the 10-protocol claim. F42 will
+ * unify both paths under one Add Source button. */
+const PROTOCOL_TILES: Array<{
+  name: string;
+  short: string;
+  available: boolean;
+  hint?: string;
+}> = [
+  { name: 'Local folder', short: 'Local', available: true, hint: 'Use the Watch Folder button on the Folders page' },
+  { name: 'HTTPS URL', short: 'HTTPS', available: true },
+  { name: 'AWS S3', short: 'S3', available: true },
+  { name: 'Google Drive', short: 'Drive', available: true },
+  { name: 'SFTP', short: 'SFTP', available: false },
+  { name: 'WebDAV', short: 'WebDAV', available: false },
+  { name: 'Backblaze B2', short: 'B2', available: false },
+  { name: 'Azure Blob', short: 'Azure', available: false },
+  { name: 'Google Cloud Storage', short: 'GCS', available: false },
+  { name: 'Dropbox', short: 'Dropbox', available: false },
+  { name: 'OneDrive', short: 'OneDrive', available: false },
+];
+
+function ProtocolRoadmapGrid() {
+  return (
+    <div className="mb-4 rounded-md border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+      <div className="mb-2 flex items-center justify-between text-[11px]">
+        <span className="font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Storage protocols
+        </span>
+        <span className="text-slate-400 dark:text-slate-500">
+          4 now · 7 coming in v0.7+
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+        {PROTOCOL_TILES.map((p) => (
+          <div
+            key={p.short}
+            title={p.hint ?? (p.available ? 'Available — pick a tab below' : 'Coming in v0.7+')}
+            className={
+              p.available
+                ? 'flex items-center justify-between gap-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] dark:border-slate-700 dark:bg-slate-800'
+                : 'flex items-center justify-between gap-1 rounded border border-dashed border-slate-200 bg-white/40 px-2 py-1.5 text-[11px] text-slate-400 dark:border-slate-700/50 dark:bg-slate-800/30 dark:text-slate-500'
+            }
+          >
+            <span className={p.available ? 'font-medium text-slate-700 dark:text-slate-200' : ''}>
+              {p.short}
+            </span>
+            <span
+              className={
+                p.available
+                  ? 'rounded-sm bg-emerald-100 px-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                  : 'rounded-sm bg-slate-100 px-1 text-[9px] font-medium uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+              }
+            >
+              {p.available ? 'Now' : 'v0.7+'}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -329,7 +410,7 @@ function UrlPanel(props: {
 
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400">
           <strong className="text-slate-800 dark:text-slate-200">
-            What works:
+            URL formats:
           </strong>{' '}
           public HTTPS links to <code>.csv</code>/<code>.parquet</code>,
           individual S3 objects, and S3 bucket/prefix listings like{' '}
@@ -337,11 +418,6 @@ function UrlPanel(props: {
           <code>.csv</code>/<code>.tsv</code>/<code>.parquet</code> at
           any depth, capped at 10,000 objects) or explicit globs like{' '}
           <code>s3://bucket/**/*.parquet</code>.
-          <br />
-          <strong className="text-slate-800 dark:text-slate-200">
-            Not yet:
-          </strong>{' '}
-          GCS / Azure, Google Sheets, databases.
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-2">

@@ -113,6 +113,16 @@ export function FolderList() {
                 ? 'Add a folder to start analyzing your local data.'
                 : `${folders.length} folder${folders.length === 1 ? '' : 's'} · ${totalDatasets} dataset${totalDatasets === 1 ? '' : 's'} · ${formatBytes(totalBytes)}`}
             </p>
+            {/* MCP discoverability nudge — closes I4 from
+                UI_AUDIT_2026_05.md. Only shown once a folder exists,
+                so brand-new installs don't see noise; visible to users
+                who have the substrate MCP needs. */}
+            {folders.length > 0 && (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                💡 Expose any folder to Claude Desktop / Cursor / Continue
+                via Settings → MCP.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
