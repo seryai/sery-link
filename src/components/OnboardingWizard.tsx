@@ -187,6 +187,14 @@ export function OnboardingWizard() {
                 <Lock className="h-3.5 w-3.5" />
                 No sign-up. No account. 100% local until you say otherwise.
               </p>
+
+              {/* Closes I2 from UI_AUDIT_2026_05.md — surface
+                  Convert-to-Parquet during the onboarding so users
+                  with piles of CSVs know the feature exists. */}
+              <p className="mt-3 text-center text-[11px] text-slate-400 dark:text-slate-500">
+                💡 Tip: open any CSV / Excel file to convert it to
+                fast Parquet in place.
+              </p>
             </>
           )}
 

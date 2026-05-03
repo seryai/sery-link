@@ -28,6 +28,7 @@ import {
   Sparkles,
   SquareArrowOutUpRight,
   Type,
+  X,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
@@ -56,12 +57,37 @@ export function SearchPage() {
     config,
     scansInFlight,
     setConfig,
+    authenticated,
   } = useAgentStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequest = useRef(0);
   const navigate = useNavigate();
   const toast = useToast();
+
+  // Cloud-upsell card dismissal — closes I5 from UI_AUDIT_2026_05.md.
+  // Local-only users had no surface explaining the cloud workspace
+  // upgrade existed; conversion can't happen if the upsell is invisible.
+  // The card is one-time-dismissible via localStorage so it doesn't nag.
+  const [upsellDismissed, setUpsellDismissed] = useState(() => {
+    try {
+      return window.localStorage.getItem('sery.upsell.cloud.dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const dismissUpsell = () => {
+    setUpsellDismissed(true);
+    try {
+      window.localStorage.setItem('sery.upsell.cloud.dismissed', '1');
+    } catch {
+      // localStorage failure is fine; the card stays dismissed for the session.
+    }
+  };
+  const showUpsell =
+    !authenticated &&
+    !upsellDismissed &&
+    searchResults.length > 0;
 
   // Is any folder currently being scanned? Used to nudge the user
   // that zero-results might just mean "not indexed yet."
@@ -161,18 +187,23 @@ export function SearchPage() {
             indexing={indexingProgress !== null}
           />
         ) : (
-          <SearchResults
-            results={searchResults}
-            onOpen={(match) =>
-              // Navigate to the FILE detail (new drill-down level), not
-              // the containing folder. The file route encodes both the
-              // folder path and the relative file path so the file
-              // detail page can find its cached row without ambiguity.
-              navigate(
-                `/folders/${encodeURIComponent(match.folder_path)}/files/${encodeURIComponent(match.relative_path)}`,
-              )
-            }
-          />
+          <div className="flex h-full flex-col">
+            {showUpsell && <CloudUpsellCard onDismiss={dismissUpsell} />}
+            <div className="flex-1 overflow-hidden">
+              <SearchResults
+                results={searchResults}
+                onOpen={(match) =>
+                  // Navigate to the FILE detail (new drill-down level), not
+                  // the containing folder. The file route encodes both the
+                  // folder path and the relative file path so the file
+                  // detail page can find its cached row without ambiguity.
+                  navigate(
+                    `/folders/${encodeURIComponent(match.folder_path)}/files/${encodeURIComponent(match.relative_path)}`,
+                  )
+                }
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -580,6 +611,46 @@ function ReasonBadge({ reason }: { reason: SearchMatchReason }) {
       );
     }
   }
+}
+
+// ─── Cloud upsell ──────────────────────────────────────────────────────
+
+/* CloudUpsellCard — surfaces the Sery Cloud workspace ($19/mo)
+ * to local-only users who've successfully searched. The audit
+ * (UI_AUDIT_2026_05.md, item I5) flagged that the upsell never
+ * appeared in normal use; conversion can't happen if users don't
+ * know the path exists. One-time dismissible via localStorage,
+ * tracked by the parent component.
+ */
+function CloudUpsellCard({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div className="mx-6 mt-4 mb-2 flex items-start gap-3 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+      <Sparkles className="mt-0.5 h-4 w-4 flex-shrink-0 text-purple-600 dark:text-purple-300" />
+      <div className="flex-1 text-xs text-slate-700 dark:text-slate-300">
+        <span className="font-medium text-slate-900 dark:text-slate-100">
+          Want AI chat across your sources?
+        </span>{' '}
+        Connect to Sery Cloud — $19/mo unlocks AI chat at
+        app.sery.ai/chat plus cross-machine search across everything you index.{' '}
+        <a
+          href="https://app.sery.ai/settings/workspace-keys"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-purple-700 underline hover:text-purple-900 dark:text-purple-300 dark:hover:text-purple-100"
+        >
+          Get a workspace key →
+        </a>
+      </div>
+      <button
+        onClick={onDismiss}
+        className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-purple-100 hover:text-slate-600 dark:hover:bg-purple-900/40"
+        aria-label="Dismiss"
+        title="Dismiss"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
