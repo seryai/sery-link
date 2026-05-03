@@ -14,7 +14,6 @@ import {
   Lock,
   RefreshCw,
   Shield,
-  Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -96,27 +95,31 @@ export function Privacy() {
     }
   };
 
+  // Filter out legacy `byok_call` entries from any pre-v0.6 audit
+  // file. v0.6.0 removed the on-device BYOK path; surfacing those
+  // rows here would contradict the README/RUNBOOK claim that BYOK
+  // is gone. Old entries stay in the JSONL on disk (the user can
+  // see them via "Reveal audit file") but don't render in the UI.
+  const visibleAudit = useMemo(
+    () => audit.filter((e) => (e.kind ?? 'sync') !== 'byok_call'),
+    [audit],
+  );
+
   const totals = useMemo(() => {
     let datasets = 0;
     let columns = 0;
     let bytes = 0;
     let errors = 0;
     let syncs = 0;
-    let byokCalls = 0;
-    for (const e of audit) {
-      const kind = e.kind ?? 'sync';
-      if (kind === 'byok_call') {
-        byokCalls++;
-      } else {
-        syncs++;
-        datasets += e.dataset_count;
-        columns += e.column_count;
-        bytes += e.total_bytes;
-      }
+    for (const e of visibleAudit) {
+      syncs++;
+      datasets += e.dataset_count;
+      columns += e.column_count;
+      bytes += e.total_bytes;
       if (e.status === 'error') errors++;
     }
-    return { datasets, columns, bytes, errors, syncs, byokCalls };
-  }, [audit]);
+    return { datasets, columns, bytes, errors, syncs };
+  }, [visibleAudit]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -159,17 +162,23 @@ export function Privacy() {
         </div>
       )}
 
-      {/* Disclosure cards */}
+      {/* Disclosure cards. The "sent" card distinguishes between
+          catalog-sync (file metadata pushed when a connected machine
+          re-scans) and AI chat (questions / sample rows / answers
+          when the user uses cloud /chat). Local browse / preview /
+          profile / search NEVER leave the machine, so they don't
+          appear under "sent" — that was the v0.6 audit-blocker fix
+          (B2 in UI_AUDIT_2026_05.md). */}
       <div className="mb-6 grid gap-3 md:grid-cols-2">
         <DisclosureCard
           tone="sent"
           icon={<Cloud className="h-5 w-5" />}
           title={authenticated ? 'What goes to the cloud' : 'What would cross the network'}
           items={[
-            'File paths (relative to watched folders)',
-            'Schemas — column names and types',
-            'Row counts and file sizes',
-            'Results of queries you run',
+            'Catalog: file paths (relative), schemas, row counts, sizes',
+            'AI chat: your question + sample rows the agent needs',
+            'AI chat: result rows from queries the agent runs',
+            'Workspace events: machine online/offline, schema changes',
           ]}
         />
         <DisclosureCard
@@ -177,21 +186,17 @@ export function Privacy() {
           icon={<Lock className="h-5 w-5" />}
           title="What stays on this device"
           items={[
-            'Raw file contents',
-            'Files outside watched folders',
-            'Your OS credentials and environment',
-            'Files matching exclude patterns',
+            'Raw file contents (always — no upload, ever)',
+            'Local browse / preview / profile / search activity',
+            'OS credentials, S3 keys, OAuth tokens (in keychain)',
+            'Files outside watched folders + excluded files',
           ]}
         />
       </div>
 
       {/* Totals */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <TotalCard label="Syncs" value={totals.syncs.toLocaleString()} />
-        <TotalCard
-          label="BYOK calls"
-          value={totals.byokCalls.toLocaleString()}
-        />
         <TotalCard
           label="Columns shared"
           value={totals.columns.toLocaleString()}
@@ -255,7 +260,7 @@ export function Privacy() {
         Outbound activity
       </div>
 
-      {audit.length === 0 ? (
+      {visibleAudit.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 py-12 text-center dark:border-slate-700 dark:bg-slate-900">
           <Shield className="mx-auto mb-3 h-10 w-10 text-slate-300 dark:text-slate-600" />
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -267,11 +272,11 @@ export function Privacy() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          {audit.map((entry, idx) => (
+          {visibleAudit.map((entry, idx) => (
             <AuditRow
               key={`${entry.timestamp}-${idx}`}
               entry={entry}
-              isLast={idx === audit.length - 1}
+              isLast={idx === visibleAudit.length - 1}
             />
           ))}
         </div>
@@ -360,9 +365,10 @@ function AuditRow({
   entry: AuditEntry;
   isLast: boolean;
 }) {
+  // BYOK rows are filtered out upstream in `visibleAudit`; this
+  // component now only renders sync rows. Kept the entry.kind
+  // check defensively in case a future event kind appears.
   const ok = entry.status === 'success';
-  const kind = entry.kind ?? 'sync';
-  const isByok = kind === 'byok_call';
 
   return (
     <div
@@ -371,23 +377,14 @@ function AuditRow({
       }`}
     >
       <div className="mt-0.5 shrink-0">
-        {!ok ? (
-          <AlertCircle className="h-5 w-5 text-rose-500" />
-        ) : isByok ? (
-          // Lock icon for BYOK — the structural privacy proof. If a
-          // user wonders "did this call really skip Sery?" the row's
-          // host badge below answers it: api.anthropic.com, not sery.ai.
-          <Lock className="h-5 w-5 text-emerald-500" />
-        ) : (
+        {ok ? (
           <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+        ) : (
+          <AlertCircle className="h-5 w-5 text-rose-500" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        {isByok ? (
-          <ByokRowBody entry={entry} ok={ok} />
-        ) : (
-          <SyncRowBody entry={entry} ok={ok} />
-        )}
+        <SyncRowBody entry={entry} ok={ok} />
       </div>
     </div>
   );
@@ -416,55 +413,6 @@ function SyncRowBody({ entry, ok }: { entry: AuditEntry; ok: boolean }) {
             <span>{entry.column_count.toLocaleString()} columns</span>
             <span>·</span>
             <span>{formatBytes(entry.total_bytes)}</span>
-          </>
-        ) : (
-          <span className="text-rose-600 dark:text-rose-400">
-            {entry.error ?? 'Unknown error'}
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
-
-function ByokRowBody({ entry, ok }: { entry: AuditEntry; ok: boolean }) {
-  const provider = entry.provider ?? 'unknown';
-  const host = entry.host ?? 'unknown';
-  const promptChars = entry.prompt_chars ?? 0;
-  const responseChars = entry.response_chars ?? 0;
-  const durationMs = entry.duration_ms ?? 0;
-  return (
-    <>
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-        <span>BYOK call to</span>
-        {/* The host pill is the load-bearing privacy artifact. It's
-            emerald-toned to signal "this stayed off our servers,"
-            and the value is the literal host the request targeted —
-            if it ever reads `*.sery.ai` for a byok_call the privacy
-            guarantee is broken (and the unit test in
-            byok::anthropic would have failed first). */}
-        <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-          <Lock className="h-3 w-3" />
-          {host}
-        </span>
-        <span className="text-xs text-slate-500 dark:text-slate-400">
-          ({provider})
-        </span>
-      </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-        <span className="inline-flex items-center gap-1 rounded bg-purple-100 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-          <Sparkles className="h-2.5 w-2.5" />
-          byok
-        </span>
-        <span>{new Date(entry.timestamp).toLocaleString()}</span>
-        {ok ? (
-          <>
-            <span>·</span>
-            <span>{promptChars.toLocaleString()} chars in</span>
-            <span>·</span>
-            <span>{responseChars.toLocaleString()} chars out</span>
-            <span>·</span>
-            <span>{durationMs}ms</span>
           </>
         ) : (
           <span className="text-rose-600 dark:text-rose-400">
