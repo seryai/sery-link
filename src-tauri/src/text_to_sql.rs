@@ -349,7 +349,13 @@ fn execute_sql(sql: &str) -> SqlOutcome {
     // with the name in column 0. Cheap (no row scan, just schema
     // inference) and avoids fighting the Statement borrow checker
     // to read names from inside the row callback.
-    let describe_sql = format!("DESCRIBE ({})", sql);
+    //
+    // We strip trailing semicolons + whitespace first because LLMs
+    // habitually emit `… LIMIT 100;` and a semicolon can't appear
+    // inside the parens of `DESCRIBE (…)` — DuckDB rejects it as a
+    // parser error before even seeing the user's query.
+    let normalised_sql = sql.trim().trim_end_matches(';').trim_end();
+    let describe_sql = format!("DESCRIBE ({})", normalised_sql);
     let columns: Vec<String> = match conn.prepare(&describe_sql) {
         Ok(mut s) => match s.query_map([], |row| row.get::<_, String>(0)) {
             Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
@@ -367,7 +373,7 @@ fn execute_sql(sql: &str) -> SqlOutcome {
     };
     let column_count = columns.len();
 
-    let mut stmt = match conn.prepare(sql) {
+    let mut stmt = match conn.prepare(normalised_sql) {
         Ok(s) => s,
         Err(e) => {
             return SqlOutcome::Error {
@@ -747,6 +753,36 @@ mod tests {
         // The SQL string literal must be safe — single-quote
         // doubled per SQL escape rules.
         assert!(s.contains("read_csv_auto('/data/john''s notes.csv')"));
+    }
+
+    #[test]
+    fn execute_strips_trailing_semicolon_for_describe() {
+        // Regression: LLMs habitually emit `… LIMIT 100;` which used
+        // to break DESCRIBE because a semicolon can't appear inside
+        // its parens. With normalisation the query runs cleanly.
+        let outcome = execute_sql("SELECT 1 AS x LIMIT 100;");
+        match outcome {
+            SqlOutcome::Rows {
+                columns, total_rows, ..
+            } => {
+                assert_eq!(columns, vec!["x".to_string()]);
+                assert_eq!(total_rows, 1);
+            }
+            other => panic!("expected Rows, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_handles_no_trailing_semicolon() {
+        // Sanity: the strip is a no-op when the SQL is already clean.
+        let outcome = execute_sql("SELECT 42 AS answer");
+        match outcome {
+            SqlOutcome::Rows { columns, rows, .. } => {
+                assert_eq!(columns, vec!["answer".to_string()]);
+                assert_eq!(rows, vec![vec!["42".to_string()]]);
+            }
+            other => panic!("expected Rows, got {:?}", other),
+        }
     }
 
     #[test]
