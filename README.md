@@ -12,10 +12,11 @@ Sery Link works in three independent modes. Use any combination — they coexist
 
 | Mode | What it does | Sery account? |
 |---|---|---|
-| **Local** | Column-aware search + per-file column profiles + remote sources (HTTPS, S3) — runs fully offline | Not required |
-| **BYOK** | Paste your Anthropic key in Settings → ask questions in the in-app `/ask` tab. Requests go direct to `api.anthropic.com`; **zero bytes traverse Sery's servers**. | Not required |
+| **Local** | Column-aware search, per-file column profiles, inline tabular preview, CSV/Excel → Parquet conversion, remote sources (HTTPS, S3, Google Drive) — runs fully offline | Not required |
 | **MCP stdio** | `Settings → MCP` toggle exposes a folder to Claude Desktop / Cursor / Continue via local stdio. The external LLM uses its own key. | Not required |
-| **Cloud workspace** | Connect with a workspace key — multi-machine catalog sync, cross-machine search at app.sery.ai, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
+| **Cloud workspace** | Connect with a workspace key — multi-machine catalog sync, cross-machine search at app.sery.ai, AI chat with cross-machine query fan-out, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
+
+> **Where did BYOK go?** v0.5.3 shipped a paste-your-own-key `/ask` tab. v0.6.0 removed it — AI now lives in the cloud dashboard's `/chat` page, where the tool-use agent runs server-side and fans out queries across all your connected machines through the existing tunnel. See the [v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01) for the full rationale.
 
 ## Features
 
@@ -105,7 +106,7 @@ The marketing site says "raw files never leave your machines, the cloud holds th
 | Claim | Where it's enforced |
 |---|---|
 | Workspace catalog is metadata-only | [`src-tauri/src/scanner.rs`](./src-tauri/src/scanner.rs) — what gets read; [`src-tauri/src/sync.rs`](./src-tauri/src/sync.rs) — what gets uploaded |
-| BYOK queries don't traverse Sery | [`src-tauri/src/byok/anthropic.rs`](./src-tauri/src/byok/anthropic.rs) — unit-tested to only target `api.anthropic.com` |
+| Cloud AI queries fan out via the workspace tunnel, not by uploading data | [`src-tauri/src/websocket.rs`](./src-tauri/src/websocket.rs) — long-lived WebSocket; the cloud agent sends SQL, the desktop runs it on local DuckDB and streams rows back |
 | Local audit log is the source of truth | [`src-tauri/src/audit.rs`](./src-tauri/src/audit.rs) — schema + rotation; `~/.seryai/sync_audit.jsonl` on disk |
 | Document text is opt-in (off by default) | [`src-tauri/src/config.rs`](./src-tauri/src/config.rs) — `SyncConfig::include_document_text = false` |
 

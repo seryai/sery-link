@@ -2,15 +2,13 @@
 
 How Sery Link actually works end-to-end. Written so a confused
 user can pick it up cold and understand the difference between
-**BYOK**, **MCP**, and the **cloud workspace** — three independent
+**Local**, **MCP**, and the **cloud workspace** — three independent
 paths that share one app.
 
 > **Version note**: this runbook describes Sery Link as it ships in
-> `CHANGELOG.md` v0.5.0. The first public release is still pending;
-> the auto-update manifest at
-> [`serylink-releases`](https://github.com/seryai/serylink-releases)
-> is a `v0.0.0` placeholder until release artifacts are signed and
-> uploaded.
+> v0.6.0 (file-manager pivot — no on-device LLM keys, AI lives in
+> the cloud dashboard). For the v0.5.3-and-earlier BYOK / `/ask`
+> flow, check out the `v0.5.3` git tag.
 
 ---
 
@@ -21,13 +19,13 @@ you can use any one without the others.
 
 | Path | What it does | Account? | Cost? |
 |---|---|---|---|
-| **A. BYOK** | Paste your Anthropic API key into Sery Link → ask questions in the app's `/ask` tab. Question + answer go direct to Anthropic. | None | You pay Anthropic per token |
+| **A. Local** | Index folders. Column-aware search. Inline tabular preview. Convert CSV / TSV / Excel → Parquet. Document → markdown. Runs fully offline. | None | Free |
 | **B. MCP stdio** | Claude Desktop / Cursor / Continue spawns Sery Link as a local subprocess to read your folder. The *external* LLM client uses *its* key. | None | Whatever your LLM client costs |
-| **C. Cloud workspace** | Connect every machine you own with one workspace key. Cross-machine search + (Plus) cross-machine AI. | Sery account | Free + 50 hosted queries/mo, or Plus $19 |
+| **C. Cloud workspace** | Connect every machine you own with one workspace key. Cross-machine search + AI chat at app.sery.ai (server-side agent fans queries out across your machines via the existing tunnel). | Sery account | Free + 50 hosted queries/mo, or Plus $19 |
 
-If you remember nothing else: **BYOK = in-app questions with your
-key. MCP = external AI tools reading your folders. Cloud =
-multi-machine.**
+If you remember nothing else: **Local = file manager + indexer.
+MCP = external AI tools reading your folders. Cloud = multi-machine
+network with AI in the dashboard.**
 
 ---
 
@@ -41,21 +39,20 @@ multi-machine.**
         ┌─────────────────────────────┼─────────────────────────────┐
         │                             │                             │
         ▼                             ▼                             ▼
-   PATH A: BYOK              PATH B: MCP stdio          PATH C: Cloud workspace
-   ────────────              ─────────────────          ──────────────────────
-   Settings → Sync           Settings → MCP             StatusBar → Connect
-   paste Anthropic key       toggle folder, copy        paste workspace key
+   PATH A: Local             PATH B: MCP stdio          PATH C: Cloud workspace
+   ─────────────             ─────────────────          ──────────────────────
+   pick a folder             Settings → MCP             StatusBar → Connect
+   in the app                toggle folder, copy        paste workspace key
                              snippet → external client
         │                             │                             │
         ▼                             ▼                             ▼
-   /ask tab in app           Claude Desktop / Cursor    api.sery.ai (cloud)
-        │                    spawns sery-link via                   │
-        ▼                    --mcp-stdio                            ▼
-   api.anthropic.com                                       multi-machine fan-out
-                                  │                       (other Sery Link
-                                  ▼                        machines you own)
-                          local folder read
-                          (no network)
+   search · preview          Claude Desktop / Cursor    app.sery.ai (cloud)
+   convert · profile         spawns sery-link via         /chat → server-side
+   (no network)              --mcp-stdio                  agent fans SQL out
+                                  │                       over WebSocket to
+                                  ▼                       your local DuckDB
+                          local folder read               (rows stream back,
+                          (no network)                     never the file)
 ```
 
 ---
@@ -124,7 +121,7 @@ chmod +x Sery-Link_*.AppImage
 | `~/.seryai/scan_cache.db` | Local SQL index of file metadata (DuckDB-backed) |
 | `~/.seryai/sync_audit.jsonl` | One line per outbound network event — **the privacy proof on disk** |
 | `~/.seryai/query_history.jsonl` | Local query transcript |
-| OS keychain | Anthropic key (BYOK), workspace bearer token (Cloud). Never written to disk in plaintext |
+| OS keychain | Workspace bearer token (Cloud). Google Drive OAuth refresh token. Never written to disk in plaintext |
 
 ### Uninstall
 
@@ -136,58 +133,65 @@ Secret Service (Linux).
 
 ---
 
-## Path A — BYOK (paste an Anthropic key, ask questions in-app)
+## Path A — Local (file manager, no signup)
 
-This is the **Free-tier moat**. Your prompt + your data + the
-answer all go directly between your laptop and Anthropic. **Zero
-bytes traverse Sery's servers.**
+The free, offline path. Sery Link indexes a folder, gives you
+column-aware search across files, lets you preview any tabular
+file inline, converts CSV / TSV / Excel to Parquet, and reads
+documents (DOCX, PPTX, PDF, HTML) into markdown. **No network,
+no account.**
 
-### Setup (one time, ~30 seconds)
+### Setup (one click)
 
-1. Go to <https://console.anthropic.com/settings/keys> — create an
-   API key. Copy it.
-2. In Sery Link: **Settings → Sync → AI Provider**.
-3. Paste the key. Click **Test & Save**.
-4. Sery validates the key against `api.anthropic.com` before
-   storing. The key goes into your OS keychain — nowhere else.
+1. Open Sery Link → **+ Add folder** (or pick one in the welcome
+   wizard). Sery walks the folder, infers column types via tabkit,
+   and caches metadata in `~/.seryai/scan_cache.db`.
+2. Done. The Files view lists every file; click any to inspect.
 
-### Daily use
+### What you can do
 
-- Click **Ask** in the sidebar (or hit ⌘⇧S / Ctrl+Shift+S anywhere).
-- Type a question. Hit Enter.
-- Each message has a green badge: *"Direct to Anthropic"* — visible
-  proof the request didn't traverse Sery.
-- Tokens are billed to your Anthropic account.
+- **Column-aware search.** Top bar searches filenames, column
+  names, and extracted document text in one pass.
+- **Inline preview.** Open a CSV / Parquet / Excel file → see
+  schema, sample rows, and per-column profile (null %, unique
+  values, min/max/avg). Virtualized — handles wide tables fine.
+- **Convert to Parquet.** Tabular files get a Convert button that
+  writes a Parquet sibling next to the source. Useful for piping
+  ad-hoc CSVs into the cloud workspace catalog later.
+- **Folder filters.** Format (Parquet / CSV / Excel / Document),
+  recency (24h / 7d / 30d / All), and sort (Name / Newest /
+  Largest). Selections persist per-folder.
+- **Documents → markdown.** DOCX, PPTX, HTML, PDF (text layer +
+  Apple Vision / Windows.Media.Ocr fallback for scans), and
+  Jupyter notebooks all become indexable markdown via the
+  in-process `mdkit` Rust crate.
 
-### What gets logged?
+### What it does NOT do (in v0.6.0)
 
-Every BYOK call appends an entry to `~/.seryai/sync_audit.jsonl`:
+- **No on-device AI.** v0.5.x had a `/ask` tab where you pasted
+  an Anthropic / OpenAI / Gemini key and asked questions on local
+  DuckDB. That's gone — see [v0.6.0 changelog](./CHANGELOG.md#060--2026-05-01)
+  for the rationale. AI lives in cloud `/chat` (Path C) or in
+  your own LLM client via MCP (Path B).
+- **No network.** Path A is fully offline. The audit log
+  (`~/.seryai/sync_audit.jsonl`) will be empty until you connect
+  a workspace or add a remote source.
 
-```json
-{"ts":"2026-04-29T14:33:01Z","kind":"byok_call","provider":"anthropic",
- "host":"api.anthropic.com","prompt_chars":127,"response_chars":842,
- "duration_ms":2341,"status":"ok"}
-```
+### Remote sources (still local, just non-disk)
 
-**The prompt + response text are never logged.** Only metadata
-(host, character counts, latency). You can verify by opening the
-file (Settings → Privacy → "Reveal audit file") and watching it as
-you ask a question.
+The Folders sidebar accepts more than disk paths:
 
-### Privacy proof
+- **Public HTTPS URLs** — point at a CSV / Parquet hosted
+  publicly; Sery fetches and indexes it like a local file.
+- **S3 buckets** — credentials in the OS keychain, fetched
+  directly from your machine. Sery never sees them.
+- **Google Drive** — OAuth (PKCE + loopback redirect),
+  per-folder Watch, hourly background refresh. Files cache
+  locally under `~/.seryai/gdrive_cache/`. Storage tab shows
+  disk usage and a Clear-cache button.
 
-There's a unit test in the source —
-`byok::anthropic::tests::anthropic_request_url_targets_anthropic_only` —
-that fails if the BYOK code constructs any URL other than
-`api.anthropic.com`. Source is AGPL-3.0; you can verify yourself.
-
-### Limits today
-
-- Anthropic only (OpenAI BYOK is on the v0.6 roadmap).
-- Single-question, no streaming. Each `/ask` is one round trip.
-- No tool use / SQL generation against your catalog. The question
-  must stand on its own (use Path C — Cloud — when you want Sery to
-  reason over your indexed schemas).
+All remote-source bytes flow direct to your machine. The cloud
+never proxies.
 
 ---
 
@@ -288,20 +292,30 @@ of them.
 | File paths (relative to the watched folder) | Raw file contents |
 | Column names + inferred types | Anything outside watched folders |
 | Row counts, null %, byte size | OS credentials |
-| Dataset SHA / mtime (for change detection) | The Anthropic / OpenAI key (BYOK) |
+| Dataset SHA / mtime (for change detection) | OS credentials (S3 keys, Drive refresh tokens) |
 | Optional: sample rows (toggle in Settings → Sync) | |
 | Optional: extracted document text (toggle, OFF by default) | |
 
 The two optional toggles are **off by default**. Sample rows + doc
 text only sync if you opt in — that's the F2 privacy commitment.
 
-### What you can do once connected (today, v0.5.0)
+### What you can do once connected (v0.6.0)
 
-- **Cross-machine search**: at <https://app.sery.ai>, search column
-  names across every machine. Returns hits with a `machine`
-  column so you know where each file lives.
-- **Workspace recipes**: hand-authored prompts you save once and run
-  from any machine.
+- **Cross-machine search** at <https://app.sery.ai>: search column
+  names across every machine. Returns hits with a `machine` column
+  so you know where each file lives.
+- **AI chat** at <https://app.sery.ai/chat>: ask plain-English
+  questions about any tabular file in your workspace. The agent
+  runs **server-side**; when it needs to query a file, it sends
+  SQL down the WebSocket tunnel to the machine that owns it,
+  the desktop runs that SQL on local DuckDB, and only the result
+  rows stream back to the cloud. **Raw files never leave the
+  device.** Multi-machine questions fan out — each machine runs
+  its slice, and the dashboard shows a per-machine
+  rows / ms / share-% breakdown.
+- **Workspace recipes**: prompts saved once on any machine, runnable
+  from every other. Click Run in Sery Link's Recipes view → opens
+  the prompt in your browser.
 - **Schema-change notifications**: when a column changes shape on
   any machine, every other machine's tray gets a notification.
 - **MCP from cloud**: <https://mcp.sery.ai> exposes the same nine
@@ -309,11 +323,15 @@ text only sync if you opt in — that's the F2 privacy commitment.
   tunnel to whichever machine owns the file. See
   [mcp-server/RUNBOOK.md](https://github.com/seryai/mcp-server/blob/main/RUNBOOK.md).
 
-### Coming v0.6 (not shipped yet — don't expect it today)
+### Why does AI live in the cloud now (and not on the desktop)?
 
-- Cross-machine **AI queries** — ask one question on machine A and
-  Sery dispatches it to every other machine in parallel, then
-  merges results.
+v0.5.x shipped a paste-your-own-key `/ask` tab that translated
+questions into SQL on-device. It was unreliable across question
+shapes (meta-questions, content-search, multi-file) and adding a
+weaker parallel implementation on every desktop install hurt more
+than it helped. The cloud agent already handles fan-out across
+machines via the tunnel and ships once instead of N times. See
+[v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01).
 
 ### Free vs Plus on the cloud path
 
@@ -321,8 +339,7 @@ text only sync if you opt in — that's the F2 privacy commitment.
 |---|---|---|
 | Owned machines connected | Unlimited | Unlimited |
 | Invited machines (other people) | 0 | 5 on your bill |
-| Sery-hosted AI queries | 50 / month | Unlimited |
-| BYOK queries | Unlimited | Unlimited |
+| Sery-hosted AI queries (`/chat`) | 50 / month | Unlimited |
 | Catalog sync | Yes | Yes |
 | MCP endpoint at `mcp.sery.ai` | No (403) | Yes |
 
@@ -370,11 +387,13 @@ scan stats.
 
 ## Settings tour
 
-Five tabs:
-
 - **General** — display name for this device, platform, hostname
 - **Sync** — auto-sync on change, sync interval, document-text
-  toggle (default OFF), AI Provider panel (BYOK)
+  toggle (default OFF), sample-rows toggle
+- **Storage** — disk usage breakdown (scan cache, Drive cache,
+  audit log) + Clear-cache buttons
+- **Privacy** — outbound activity counters (Syncs, errors), reveal
+  audit file in Finder/Explorer
 - **App** — theme, launch at login, auto-update, notifications
 - **MCP** — per-folder toggle + copy-to-clipboard config snippets
 - **About** — versions, agent ID, workspace ID, export / import
@@ -406,11 +425,11 @@ Left-click toggles the main window — classic menubar-app pattern.
 
 | Shortcut | Action |
 |---|---|
-| ⌘⇧S (macOS) | **Quick-Ask** — bring window to front, jump to `/ask` (if BYOK is configured) or `/search` (if not), focus the input |
+| ⌘⇧S (macOS) | **Quick-Ask** — bring window to front, jump to `/search`, focus the input |
 | Ctrl+Shift+S (Windows / Linux) | Same |
 | ⌘K | In-window command palette |
 | ⌘/ | Show keyboard shortcuts overlay |
-| ⌘Enter | Submit current question (Ask / Search) |
+| ⌘Enter | Submit current search |
 
 ---
 
@@ -419,8 +438,11 @@ Left-click toggles the main window — classic menubar-app pattern.
 Sery's privacy guarantee is **enforced by code and verifiable on
 disk**:
 
-1. **Unit-tested provider isolation** — BYOK code can only target
-   `api.anthropic.com`; tests fail if anyone ever changes that.
+1. **Cloud AI fan-out runs on your machine.** When the cloud agent
+   needs data, it sends SQL down the WebSocket tunnel; your
+   desktop runs the SQL on local DuckDB and streams only the
+   result rows back. The raw file never leaves the device. See
+   [`src-tauri/src/websocket.rs`](./src-tauri/src/websocket.rs).
 2. **Local audit log** — `~/.seryai/sync_audit.jsonl` records every
    outbound network event with timestamp, kind, host, byte counts,
    and outcome. **Never the prompt or response text.**
@@ -440,12 +462,12 @@ watched folders.
 
 ## Troubleshooting
 
-### *"I pasted my Anthropic key but Ask says 'Not configured'"*
+### *"Where do I paste my Anthropic / OpenAI key?"*
 
-Settings → Sync → AI Provider — confirm the green checkmark is
-showing. If "Test & Save" failed, the key was rejected by Anthropic
-(check that you copied the whole `sk-ant-...` string and that your
-account has API access).
+You don't, in v0.6+. The desktop AI flow was removed — see
+[v0.6.0 changelog](./CHANGELOG.md#060--2026-05-01). Use cloud
+`/chat` (Path C) for AI, or wire your own LLM client to a folder
+via MCP (Path B).
 
 ### *"Claude Desktop doesn't see Sery's tools"*
 
@@ -496,13 +518,20 @@ pkill -9 sery-link
 
 | Feature | Where it lives |
 |---|---|
-| Cross-machine AI fan-out | v0.6 roadmap |
-| OpenAI BYOK | v0.6 roadmap |
 | Finder context menu ("Ask Sery") | Year 2 |
-| `seryai://pair` deep-link receiver UI | placeholder only in v0.5 |
+| `seryai://pair` deep-link receiver UI | placeholder only in v0.6 |
 | Full SOC 2 / HIPAA compliance posture | Not on near-term roadmap |
 | iOS / Android native apps | Not planned |
 | Team / Enterprise tier | After 5+ small firms ask for SSO unprompted |
+
+## What was removed in v0.6.0
+
+| Feature | Status |
+|---|---|
+| BYOK (paste Anthropic / OpenAI / Gemini key on the desktop) | Removed — use cloud `/chat` instead |
+| `/ask` tab + on-device text-to-SQL agent | Removed — placeholder route now redirects to dashboard |
+| AI Provider settings panel | Removed |
+| Quick-Ask hotkey routing to `/ask` | Now always routes to `/search` |
 
 ---
 
@@ -523,9 +552,10 @@ pkill -9 sery-link
 
 ## When in doubt
 
-- **Want to ask questions in Sery's own UI?** → Path A (BYOK).
+- **Want a free local file manager + indexer?** → Path A (Local).
 - **Want Claude Desktop / Cursor to see your files?** → Path B (MCP).
-- **Want to search across multiple machines you own?** → Path C
-  (Cloud).
+- **Want AI chat over your files, optionally across multiple
+  machines you own?** → Path C (Cloud) and ask in `/chat` at
+  app.sery.ai.
 
 You can use any combination. They don't fight.
