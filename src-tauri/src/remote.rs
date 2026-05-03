@@ -292,6 +292,68 @@ pub(crate) fn apply_s3_credentials(conn: &Connection, url: &str) -> Result<()> {
         .map_err(|e| AgentError::Database(format!("set s3 creds: {}", e)))
 }
 
+/// Pre-flight credential check used by `add_remote_source` before
+/// persisting anything. Opens a fresh in-memory DuckDB, applies the
+/// supplied creds (without going through the keyring), and runs a
+/// minimal probe against the URL. Surfaces auth / region / network
+/// failures synchronously so the user sees them on the modal instead
+/// of as a mysterious empty scan.
+///
+/// Empty results are NOT an error here — the bucket may legitimately
+/// be empty, and the post-scan silent-empty handler in scanner.rs
+/// covers that case with a more informative message. We only fail
+/// when DuckDB itself errors (auth rejection, region redirect, DNS,
+/// httpfs misconfig, etc.).
+pub fn test_s3_credentials_blocking(
+    url: &str,
+    creds: &crate::remote_creds::S3Credentials,
+) -> Result<()> {
+    let conn = Connection::open_in_memory()
+        .map_err(|e| AgentError::Database(format!("open DuckDB: {}", e)))?;
+    install_httpfs(&conn)?;
+
+    // Apply creds directly without touching the keyring — we don't
+    // want to write credentials we haven't verified yet.
+    let setters = crate::remote_creds::duckdb_setters(creds);
+    conn.execute_batch(&setters)
+        .map_err(|e| AgentError::Database(format!("set s3 creds: {}", e)))?;
+
+    if crate::url::is_s3_listing(url) {
+        let pattern = crate::url::expand_s3_listing_pattern(url);
+        let escaped = pattern.replace('\'', "''");
+        let probe = format!("SELECT file FROM glob('{}') LIMIT 1", escaped);
+        conn.execute_batch(&probe).map_err(|e| {
+            AgentError::Database(format!(
+                "S3 connection test failed: {}. Double-check the bucket name, region, and credentials.",
+                e
+            ))
+        })?;
+    } else {
+        // Single object — DESCRIBE reads only the Parquet footer or
+        // sniffs the first CSV rows, so it's the cheapest probe that
+        // actually requires the bytes (and therefore the auth path).
+        let ext = crate::url::extension_from_url(url);
+        let read_func = match ext.as_str() {
+            "parquet" => "read_parquet",
+            "csv" | "tsv" => "read_csv_auto",
+            // Other extensions aren't supported in Phase A anyway —
+            // skip the probe and let the scan path produce the
+            // canonical "unsupported remote file type" error.
+            _ => return Ok(()),
+        };
+        let escaped = url.replace('\'', "''");
+        let probe = format!("DESCRIBE SELECT * FROM {}('{}') LIMIT 0", read_func, escaped);
+        conn.execute_batch(&probe).map_err(|e| {
+            AgentError::Database(format!(
+                "S3 connection test failed: {}. Double-check the URL, region, and credentials.",
+                e
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
 /// Load DuckDB's httpfs extension. No-op if it's already installed in
 /// the user's DuckDB extension directory (the download only happens on
 /// first ever call, then it's cached in `~/.duckdb/extensions/`).
