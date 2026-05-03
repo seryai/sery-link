@@ -1458,6 +1458,252 @@ pub async fn get_cached_folder_metadata(folder_path: String) -> Result<Vec<Datas
     result
 }
 
+// ─── Inline data preview (FileDetail "Browse" section) ──────────────────────
+//
+// User-facing surface: open a tabular file in FileDetail, see its rows in a
+// virtualized table — not just the 5 sample rows the cache holds. This is
+// the file-manager differentiator that justifies the v0.5.3 → pivot story
+// ("a great file manager for data files").
+//
+// Data path: read via DuckDB the same way `profile_dataset` does — CSV /
+// XLSX go through the existing `csv_to_parquet` cache so a second read is
+// cheap, parquet reads directly. Cap at MAX_PREVIEW_ROWS to keep memory
+// + render bounded; the UI surfaces "showing N of M" so the user knows
+// when more rows exist.
+
+const MAX_PREVIEW_ROWS: usize = 5_000;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DatasetRows {
+    pub columns: Vec<String>,
+    /// Each row's cells stringified for stable JSON shape. The frontend
+    /// renders them as text; numeric / date typing comes from `columns`
+    /// metadata if needed downstream.
+    pub rows: Vec<Vec<String>>,
+    /// True row count when known (cheap COUNT(*) on parquet); -1 when
+    /// the count would require reading the whole file (CSV with no
+    /// stats). The UI shows "N+ rows" in that case.
+    pub total_rows: i64,
+    /// True if the read hit MAX_PREVIEW_ROWS. UI shows
+    /// "showing first {len} of {total} rows" + a hint to use the
+    /// cloud Ask page for full analysis.
+    pub truncated: bool,
+}
+
+#[tauri::command]
+pub async fn read_dataset_rows(
+    folder_path: String,
+    relative_path: String,
+) -> Result<DatasetRows, String> {
+    tokio::task::spawn_blocking(move || read_rows_blocking(&folder_path, &relative_path))
+        .await
+        .map_err(|e| format!("rows task failed: {}", e))?
+}
+
+fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetRows, String> {
+    use std::borrow::Cow;
+    use std::path::{Path, PathBuf};
+
+    if crate::url::is_remote_url(folder_path) {
+        return read_rows_remote(folder_path);
+    }
+
+    let full_path: PathBuf = Path::new(folder_path).join(relative_path);
+    if !full_path.starts_with(folder_path) {
+        return Err("invalid relative path".to_string());
+    }
+    if !full_path.exists() {
+        return Err(format!("file not found: {}", full_path.display()));
+    }
+
+    let ext = full_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    // Same cache path as profile_dataset — CSV / XLSX → Parquet so
+    // repeat reads on the same file are essentially free.
+    let (effective_path, effective_ext): (Cow<Path>, &str) = match ext.as_str() {
+        "xlsx" | "xls" => {
+            let csv = crate::excel::xlsx_to_csv(&full_path).map_err(|e| e.to_string())?;
+            let parquet = crate::csv::csv_to_parquet(&csv).map_err(|e| e.to_string())?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        "csv" => {
+            let parquet = crate::csv::csv_to_parquet(&full_path).map_err(|e| e.to_string())?;
+            (Cow::Owned(parquet), "parquet")
+        }
+        "parquet" => (Cow::Borrowed(full_path.as_path()), "parquet"),
+        other => {
+            return Err(format!(
+                "can't preview rows for {} files — only tabular formats supported",
+                other
+            ));
+        }
+    };
+
+    let read_func = match effective_ext {
+        "parquet" => "read_parquet",
+        _ => return Err(format!("unsupported format: {}", effective_ext)),
+    };
+
+    let path_str = effective_path.to_string_lossy().replace('\'', "''");
+
+    let read_func_owned = read_func.to_string();
+    let path_owned = path_str;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        run_read_rows(&read_func_owned, &path_owned)
+    }))
+    .unwrap_or_else(|_| {
+        Err(
+            "row read panicked inside DuckDB — file may be malformed. \
+             Try re-scanning the folder."
+                .to_string(),
+        )
+    })
+}
+
+fn read_rows_remote(url: &str) -> Result<DatasetRows, String> {
+    let ext = crate::url::extension_from_url(url);
+    let read_func = match ext.as_str() {
+        "parquet" => "read_parquet",
+        "csv" | "tsv" => "read_csv_auto",
+        other => {
+            return Err(format!(
+                "can't preview rows for {} URLs — only csv / parquet supported",
+                other
+            ));
+        }
+    };
+    let escaped = url.replace('\'', "''");
+    use duckdb::Connection;
+    let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
+        .map_err(|e| format!("load httpfs: {}", e))?;
+    if crate::url::is_s3_url(url) {
+        crate::remote::apply_s3_credentials(&conn, url).map_err(|e| e.to_string())?;
+    }
+    run_read_rows_with_conn(&conn, read_func, &escaped)
+}
+
+fn run_read_rows(read_func: &str, path_str: &str) -> Result<DatasetRows, String> {
+    use duckdb::Connection;
+    let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    run_read_rows_with_conn(&conn, read_func, path_str)
+}
+
+fn run_read_rows_with_conn(
+    conn: &duckdb::Connection,
+    read_func: &str,
+    path_str: &str,
+) -> Result<DatasetRows, String> {
+    // Total count first — separate query so the row read can use a
+    // simple LIMIT without us needing to count after-the-fact. Cheap
+    // on parquet (header metadata); for read_csv_auto over remote
+    // URLs it's a full scan, so we use try_to_compute_count which
+    // returns -1 instead of waiting forever.
+    let total_rows = compute_total_rows(conn, read_func, path_str).unwrap_or(-1);
+
+    // Same DESCRIBE-then-execute pattern text_to_sql uses to avoid
+    // duckdb-rs panicking when column metadata is read pre-execute.
+    let select_sql = format!(
+        "SELECT * FROM {}('{}') LIMIT {}",
+        read_func, path_str, MAX_PREVIEW_ROWS
+    );
+    let describe_sql = format!("DESCRIBE ({})", select_sql);
+    let columns: Vec<String> = match conn.prepare(&describe_sql) {
+        Ok(mut s) => match s.query_map([], |row| row.get::<_, String>(0)) {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(e) => return Err(format!("describe failed: {}", e)),
+        },
+        Err(e) => return Err(format!("describe prepare failed: {}", e)),
+    };
+    let column_count = columns.len();
+
+    let mut stmt = conn
+        .prepare(&select_sql)
+        .map_err(|e| format!("select prepare failed: {}", e))?;
+
+    let rows_iter = stmt
+        .query_map([], |row| {
+            let mut out: Vec<String> = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                let v: duckdb::types::Value = row
+                    .get::<_, duckdb::types::Value>(i)
+                    .unwrap_or(duckdb::types::Value::Null);
+                out.push(stringify_cell(&v));
+            }
+            Ok(out)
+        })
+        .map_err(|e| format!("select execute failed: {}", e))?;
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for r in rows_iter {
+        match r {
+            Ok(row) => rows.push(row),
+            Err(e) => return Err(format!("row read failed: {}", e)),
+        }
+        if rows.len() >= MAX_PREVIEW_ROWS {
+            break;
+        }
+    }
+
+    // Truncated = "we stopped at the limit AND there are more rows
+    // available." When total_rows is unknown (-1) we still flag
+    // truncated if we hit the cap, since we can't prove the file
+    // is shorter than that.
+    let truncated = rows.len() >= MAX_PREVIEW_ROWS
+        && (total_rows < 0 || total_rows > rows.len() as i64);
+
+    Ok(DatasetRows {
+        columns,
+        rows,
+        total_rows,
+        truncated,
+    })
+}
+
+fn compute_total_rows(
+    conn: &duckdb::Connection,
+    read_func: &str,
+    path_str: &str,
+) -> Option<i64> {
+    let sql = format!("SELECT COUNT(*) FROM {}('{}')", read_func, path_str);
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let row: i64 = stmt.query_row([], |r| r.get(0)).ok()?;
+    Some(row)
+}
+
+/// Stable string repr for one DuckDB cell. Strings come out unquoted
+/// (the UI cell renders them as-is); NULL becomes "NULL" so missing
+/// values are visible.
+fn stringify_cell(v: &duckdb::types::Value) -> String {
+    use duckdb::types::Value;
+    match v {
+        Value::Null => "NULL".to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::TinyInt(n) => n.to_string(),
+        Value::SmallInt(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::BigInt(n) => n.to_string(),
+        Value::HugeInt(n) => n.to_string(),
+        Value::UTinyInt(n) => n.to_string(),
+        Value::USmallInt(n) => n.to_string(),
+        Value::UInt(n) => n.to_string(),
+        Value::UBigInt(n) => n.to_string(),
+        Value::Float(n) => n.to_string(),
+        Value::Double(n) => n.to_string(),
+        Value::Decimal(d) => d.to_string(),
+        Value::Text(s) => s.clone(),
+        Value::Blob(b) => format!("<{} bytes>", b.len()),
+        Value::Date32(d) => d.to_string(),
+        Value::Time64(_, t) => t.to_string(),
+        Value::Timestamp(_, t) => t.to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
 /// Rescan a folder and sync its metadata to the cloud in one shot. Emits
 /// scan_progress / scan_complete events and records an audit entry so the
 /// Privacy tab can show what was uploaded.
