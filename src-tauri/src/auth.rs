@@ -273,13 +273,16 @@ pub fn get_auth_mode(config: &Config) -> AuthMode {
 
     // Auto-detect based on stored credentials
 
-    // 1. Check keyring for workspace token
-    if keyring_store::has_token() {
-        if let Ok(token) = keyring_store::get_token() {
-            return AuthMode::WorkspaceKey {
-                key: token,
-            };
-        }
+    // 1. Check keyring for workspace token. Single read — `has_token`
+    // used to be called first as a precheck, but it just calls
+    // `get_token` internally, so on ad-hoc-signed builds (every
+    // build, today) macOS prompted the user twice for the same item.
+    // The token cache in keyring_store collapses this to one prompt
+    // per launch even if other code paths still hit `has_token`.
+    if let Ok(token) = keyring_store::get_token() {
+        return AuthMode::WorkspaceKey {
+            key: token,
+        };
     }
 
     // 2. (Removed in v0.5.3 pivot.) The OS-keychain BYOK lookup

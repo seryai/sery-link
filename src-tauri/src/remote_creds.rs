@@ -19,9 +19,19 @@
 //!   * session_token     — optional, for temporary STS credentials
 
 use crate::error::{AgentError, Result};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 const SERVICE: &str = "sery-link-s3";
+
+// Process-wide cache: URL → creds. Same prompt-storm motivation as
+// keyring_store: scanning a folder with multiple S3 sources used to
+// trigger a keychain prompt per source per scan. Now one prompt per
+// URL per launch. Save/delete invalidate the relevant entry.
+static CRED_CACHE: Lazy<Mutex<HashMap<String, S3Credentials>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3Credentials {
@@ -56,6 +66,10 @@ pub fn save(url: &str, creds: &S3Credentials) -> Result<()> {
     entry
         .set_password(&json)
         .map_err(|e| AgentError::Config(format!("keyring write: {}", e)))?;
+    CRED_CACHE
+        .lock()
+        .expect("CRED_CACHE poisoned")
+        .insert(url.to_string(), creds.clone());
     Ok(())
 }
 
@@ -64,6 +78,13 @@ pub fn save(url: &str, creds: &S3Credentials) -> Result<()> {
 /// callers can decide between "prompt the user" and "error out" based
 /// on context.
 pub fn load(url: &str) -> Result<Option<S3Credentials>> {
+    if let Some(cached) = CRED_CACHE
+        .lock()
+        .expect("CRED_CACHE poisoned")
+        .get(url)
+    {
+        return Ok(Some(cached.clone()));
+    }
     let entry = match keyring::Entry::new(SERVICE, url) {
         Ok(e) => e,
         Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
@@ -73,6 +94,10 @@ pub fn load(url: &str) -> Result<Option<S3Credentials>> {
             let creds: S3Credentials = serde_json::from_str(&json).map_err(|e| {
                 AgentError::Serialization(format!("parse creds: {}", e))
             })?;
+            CRED_CACHE
+                .lock()
+                .expect("CRED_CACHE poisoned")
+                .insert(url.to_string(), creds.clone());
             Ok(Some(creds))
         }
         // The keyring crate returns NoEntry when no matching item exists;
@@ -91,11 +116,16 @@ pub fn delete(url: &str) -> Result<()> {
         Ok(e) => e,
         Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
     };
-    match entry.delete_password() {
+    let result = match entry.delete_password() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(AgentError::Config(format!("keyring delete: {}", e))),
-    }
+    };
+    CRED_CACHE
+        .lock()
+        .expect("CRED_CACHE poisoned")
+        .remove(url);
+    result
 }
 
 /// Produce the DuckDB statements that configure the current connection
