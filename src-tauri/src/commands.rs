@@ -180,6 +180,22 @@ pub async fn add_remote_source(
             "S3 sources need credentials — provide AWS access key, secret, and region"
                 .to_string()
         })?;
+
+        // Pre-flight: make sure the creds + URL actually authenticate
+        // and reach the right region before we persist anything.
+        // DuckDB's httpfs surfaces region redirects, signature
+        // mismatches, and DNS failures as proper errors here, so the
+        // user sees what's wrong on the modal rather than as a silent
+        // empty scan minutes later.
+        let url_for_test = normalised.clone();
+        let creds_for_test = creds.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::remote::test_s3_credentials_blocking(&url_for_test, &creds_for_test)
+        })
+        .await
+        .map_err(|e| format!("S3 test task failed: {}", e))?
+        .map_err(|e| e.to_string())?;
+
         crate::remote_creds::save(&normalised, &creds).map_err(|e| e.to_string())?;
     } else if credentials.is_some() {
         // Public HTTP(S) URLs don't take credentials in Phase B; if the
