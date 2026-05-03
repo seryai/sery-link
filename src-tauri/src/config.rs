@@ -232,23 +232,17 @@ pub struct AppConfig {
     // transient popup, which scan-heavy users can find noisy.
     #[serde(default = "default_true")]
     pub schema_change_toasts_enabled: bool,
-    /// Which BYOK provider the Ask page should dispatch through.
-    /// `None` means "no provider explicitly selected" — the
-    /// status command falls back to the first provider with a
-    /// saved keyring entry, which preserves the v0.5 single-
-    /// provider behaviour for users who haven't picked one yet.
-    /// Set automatically when the user saves a key, mutable from
-    /// Settings → AI provider when multiple keys are stored.
+    /// DEPRECATED in v0.5.3 → file-manager pivot. Held the active
+    /// BYOK provider name back when text-to-SQL ran on the desktop.
+    /// Kept on the struct so existing user configs deserialize
+    /// without losing their other fields; the value is no longer
+    /// read by anything. Will be removed in v0.7.0.
     #[serde(default)]
     pub selected_byok_provider: Option<String>,
-    /// Per-provider model override. Keys are the canonical
-    /// `Provider::as_str()` form (`"anthropic"`, `"openai"`,
-    /// `"gemini"`); values are the model name passed verbatim to
-    /// the provider's API. Missing entries fall back to each
-    /// provider's compiled-in default. Lets users pick gpt-4o vs
-    /// gpt-4o-mini, claude-opus-4-7 vs claude-haiku-4-5, etc.
-    /// without us shipping a new release every time a provider
-    /// adds a model.
+    /// DEPRECATED in v0.5.3 → file-manager pivot. Per-provider
+    /// model overrides for the now-removed local BYOK Ask page.
+    /// Same back-compat reason as `selected_byok_provider`. Will
+    /// be removed in v0.7.0.
     #[serde(default)]
     pub byok_models: std::collections::HashMap<String, String>,
 }

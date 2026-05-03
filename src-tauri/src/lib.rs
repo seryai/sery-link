@@ -1,6 +1,5 @@
 mod audit;
 mod auth;
-mod byok;
 mod commands;
 mod config;
 mod csv;
@@ -29,7 +28,6 @@ mod remote;
 mod remote_creds;
 mod scan_cache;
 mod scanner;
-mod text_to_sql;
 mod url;
 mod schema_diff;
 mod schema_notifications;
@@ -264,14 +262,10 @@ pub fn run() {
             commands::fetch_workspace_recipes,
             commands::open_recipe_in_browser,
             commands::mark_recipe_run,
-            commands::get_byok_status,
-            commands::save_byok_key,
-            commands::clear_byok_key,
-            commands::select_byok_provider,
-            commands::validate_byok_key,
-            commands::get_byok_models,
-            commands::save_byok_model,
-            commands::ask_byok,
+            // BYOK (Anthropic / OpenAI / Gemini) was removed in the
+            // v0.5.3 → file-manager pivot. AI now happens cloud-side
+            // via the dashboard / api server. See PR #62 (or git
+            // log near 2026-05-03) for the removal.
             // Phase 3b — Google Drive OAuth (datalake/SETUP_GOOGLE_OAUTH.md).
             // Browser-based OAuth flow with PKCE; tokens land in OS
             // keychain via gdrive_creds. UI for these commands ships
