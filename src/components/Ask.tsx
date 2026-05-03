@@ -42,17 +42,30 @@ interface AskUsage {
   output_tokens: number;
 }
 
-interface UsedFile {
-  folder_path: string;
-  relative_path: string;
-  reason: string;
+type SqlOutcome =
+  | {
+      kind: 'rows';
+      columns: string[];
+      rows: string[][];
+      total_rows: number;
+      truncated: boolean;
+    }
+  | { kind: 'empty' }
+  | { kind: 'insufficient_data'; reason: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'no_sql_generated' };
+
+interface SqlAttempt {
+  sql: string;
+  outcome: SqlOutcome;
 }
 
 interface AskResponse {
   text: string;
   stop_reason: string | null;
   usage: AskUsage | null;
-  used_files: UsedFile[];
+  sql_attempt: SqlAttempt | null;
+  considered_table_count: number;
 }
 
 interface Turn {
@@ -62,7 +75,8 @@ interface Turn {
   provider: string;
   usage: AskUsage | null;
   asked_at: string;
-  used_files: UsedFile[];
+  sql_attempt: SqlAttempt | null;
+  considered_table_count: number;
 }
 
 export function Ask() {
@@ -115,7 +129,8 @@ export function Ask() {
         provider: status.provider ?? 'anthropic',
         usage: result.usage,
         asked_at: new Date().toISOString(),
-        used_files: result.used_files ?? [],
+        sql_attempt: result.sql_attempt ?? null,
+        considered_table_count: result.considered_table_count ?? 0,
       });
       setPrompt('');
     } catch (err) {
@@ -251,27 +266,11 @@ function TurnCard({ turn }: { turn: Turn }) {
         {turn.answer}
       </div>
 
-      {turn.used_files.length > 0 && (
-        // Show which local files were sent to the LLM as grounding.
-        // Lets the user verify the answer's basis without scrolling
-        // back through the prompt — and notice when "based on 0
-        // files" means they got a generic answer instead of one
-        // grounded in their data.
-        <div className="mt-3 border-t border-slate-100 pt-2 dark:border-slate-800">
-          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
-            Based on {turn.used_files.length} file{turn.used_files.length === 1 ? '' : 's'}
-          </div>
-          <ul className="flex flex-wrap gap-1">
-            {turn.used_files.map((f) => (
-              <li
-                key={`${f.folder_path}-${f.relative_path}`}
-                title={f.reason}
-                className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-              >
-                {f.relative_path}
-              </li>
-            ))}
-          </ul>
+      {turn.sql_attempt && <SqlAttemptPanel attempt={turn.sql_attempt} />}
+      {turn.considered_table_count > 0 && (
+        <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+          Considered {turn.considered_table_count} table
+          {turn.considered_table_count === 1 ? '' : 's'} when answering.
         </div>
       )}
 
@@ -285,6 +284,119 @@ function TurnCard({ turn }: { turn: Turn }) {
         </footer>
       )}
     </article>
+  );
+}
+
+/** SQL trail + result table for one Ask turn. Renders inline in
+ *  the TurnCard. The SQL block is collapsible so casual users see
+ *  the answer + table; SQL-curious users open the disclosure. */
+function SqlAttemptPanel({ attempt }: { attempt: SqlAttempt }) {
+  const [showSql, setShowSql] = useState(false);
+  const { outcome } = attempt;
+
+  // No SQL attempted — nothing to show. The answer text already
+  // explains what happened ("I don't have access to a table that
+  // can answer this", etc).
+  if (outcome.kind === 'no_sql_generated') return null;
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+      {/* Collapsible SQL — hidden by default, opens on click. */}
+      {attempt.sql && (
+        <div className="mb-2">
+          <button
+            type="button"
+            onClick={() => setShowSql((v) => !v)}
+            className="text-[11px] font-medium uppercase tracking-wide text-purple-600 hover:underline dark:text-purple-300"
+          >
+            {showSql ? '▾ Hide SQL' : '▸ Show SQL'}
+          </button>
+          {showSql && (
+            <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-slate-50 p-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:bg-slate-950 dark:text-slate-300">
+              {attempt.sql}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {outcome.kind === 'rows' && (
+        <ResultTable
+          columns={outcome.columns}
+          rows={outcome.rows}
+          totalRows={outcome.total_rows}
+          truncated={outcome.truncated}
+        />
+      )}
+      {outcome.kind === 'empty' && (
+        <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
+          (query returned no rows)
+        </p>
+      )}
+      {outcome.kind === 'error' && (
+        <p className="text-[11px] text-rose-600 dark:text-rose-300">
+          SQL error: {outcome.message}
+        </p>
+      )}
+      {outcome.kind === 'insufficient_data' && (
+        <p className="text-[11px] italic text-slate-500 dark:text-slate-400">
+          Insufficient data: {outcome.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Compact table render for the SQL result. Header row + striped
+ *  body. Caps cell width via CSS so a wide column doesn't blow
+ *  the layout. */
+function ResultTable({
+  columns,
+  rows,
+  totalRows,
+  truncated,
+}: {
+  columns: string[];
+  rows: string[][];
+  totalRows: number;
+  truncated: boolean;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
+      <table className="w-full text-[11px]">
+        <thead className="bg-slate-50 dark:bg-slate-800/60">
+          <tr>
+            {columns.map((c) => (
+              <th
+                key={c}
+                className="border-b border-slate-200 px-2 py-1 text-left font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className="even:bg-slate-50/40 dark:even:bg-slate-900/40">
+              {row.map((cell, j) => (
+                <td
+                  key={j}
+                  className="max-w-xs truncate px-2 py-1 font-mono text-slate-600 dark:text-slate-300"
+                  title={cell}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="border-t border-slate-200 bg-slate-50 px-2 py-1 text-[10px] text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400">
+        {truncated
+          ? `Showing ${rows.length} of ${totalRows.toLocaleString()} rows`
+          : `${totalRows.toLocaleString()} row${totalRows === 1 ? '' : 's'}`}
+      </div>
+    </div>
   );
 }
 
