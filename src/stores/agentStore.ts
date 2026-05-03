@@ -57,6 +57,12 @@ export type FolderFormatFilter =
  *  applied against each dataset's last_modified timestamp. */
 export type FolderRecencyFilter = 'any' | '24h' | '7d' | '30d';
 
+/** Sort options for the FolderDetail file list. `name` is the
+ *  default — alphabetical by relative_path. The other two are
+ *  the obvious "what changed recently" / "what's biggest" pivots
+ *  data analysts reach for. */
+export type FolderSort = 'name' | 'modified-desc' | 'size-desc';
+
 export interface AskTurn {
   id: number;
   question: string;
@@ -172,6 +178,9 @@ interface AgentState {
   // Per-folder recency filter (any / 24h / 7d / 30d).
   folderRecency: Record<string, FolderRecencyFilter>;
   setFolderRecency: (folderPath: string, value: FolderRecencyFilter) => void;
+  // Per-folder sort order. Defaults to alphabetical when missing.
+  folderSort: Record<string, FolderSort>;
+  setFolderSort: (folderPath: string, value: FolderSort) => void;
   // Results page (History) filter chips + search. The 'error'
   // value matches the existing local type in History.tsx — keeping
   // the string identical so the lift is a drop-in.
@@ -204,6 +213,7 @@ const initial = {
   folderSearch: {} as Record<string, string>,
   folderFormat: {} as Record<string, FolderFormatFilter>,
   folderRecency: {} as Record<string, FolderRecencyFilter>,
+  folderSort: {} as Record<string, FolderSort>,
   historyFilter: 'all' as 'all' | 'success' | 'error',
   historySearch: '',
   isLoading: false,
@@ -263,6 +273,10 @@ export const useAgentStore = create<AgentState>((set) => ({
   setFolderRecency: (folderPath, value) =>
     set((state) => ({
       folderRecency: { ...state.folderRecency, [folderPath]: value },
+    })),
+  setFolderSort: (folderPath, value) =>
+    set((state) => ({
+      folderSort: { ...state.folderSort, [folderPath]: value },
     })),
   setHistoryFilter: (f) => set({ historyFilter: f }),
   setHistorySearch: (s) => set({ historySearch: s }),

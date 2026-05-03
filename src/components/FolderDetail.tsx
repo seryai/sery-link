@@ -31,6 +31,7 @@ import { useAgentStore } from '../stores/agentStore';
 import type {
   FolderFormatFilter,
   FolderRecencyFilter,
+  FolderSort,
 } from '../stores/agentStore';
 import { useToast } from './Toast';
 import {
@@ -75,6 +76,8 @@ export function FolderDetail() {
   const setFolderFormat = useAgentStore((s) => s.setFolderFormat);
   const folderRecencyMap = useAgentStore((s) => s.folderRecency);
   const setFolderRecency = useAgentStore((s) => s.setFolderRecency);
+  const folderSortMap = useAgentStore((s) => s.folderSort);
+  const setFolderSort = useAgentStore((s) => s.setFolderSort);
 
   const folderPath = folderId ? decodeURIComponent(folderId) : '';
   const folder = config?.watched_folders.find((f) => f.path === folderPath);
@@ -85,6 +88,8 @@ export function FolderDetail() {
   const setFormatFilter = (v: FolderFormatFilter) => setFolderFormat(folderPath, v);
   const recencyFilter = folderRecencyMap[folderPath] ?? 'any';
   const setRecencyFilter = (v: FolderRecencyFilter) => setFolderRecency(folderPath, v);
+  const sort = folderSortMap[folderPath] ?? 'name';
+  const setSort = (v: FolderSort) => setFolderSort(folderPath, v);
 
   // Map<relative_path, DatasetMetadata> — keeps incremental updates O(1)
   // by upserting on each dataset_scanned event. Converted to an array
@@ -244,7 +249,7 @@ export function FolderDetail() {
           return null;
       }
     })();
-    return datasets.filter((d) => {
+    const matched = datasets.filter((d) => {
       if (q && !d.relative_path.toLowerCase().includes(q)) return false;
       if (formatFilter !== 'all' && !matchesFormat(formatFilter, d.file_format)) {
         return false;
@@ -255,7 +260,25 @@ export function FolderDetail() {
       }
       return true;
     });
-  }, [datasets, search, formatFilter, recencyFilter]);
+    // Sort applied after filter so the user only pays the comparison
+    // cost on the visible subset. .slice() avoids mutating the
+    // datasets array (which datasetMap referrers expect to keep its
+    // identity for memoization further down the tree).
+    const sorted = matched.slice();
+    switch (sort) {
+      case 'modified-desc':
+        sorted.sort((a, b) => Date.parse(b.last_modified) - Date.parse(a.last_modified));
+        break;
+      case 'size-desc':
+        sorted.sort((a, b) => b.size_bytes - a.size_bytes);
+        break;
+      case 'name':
+      default:
+        sorted.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+        break;
+    }
+    return sorted;
+  }, [datasets, search, formatFilter, recencyFilter, sort]);
 
   const totals = useMemo(() => {
     if (datasets.length === 0) return null;
@@ -429,6 +452,24 @@ export function FolderDetail() {
               key={value}
               active={recencyFilter === value}
               onClick={() => setRecencyFilter(value)}
+            >
+              {label}
+            </FilterChip>
+          ))}
+          <span className="ml-3 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            Sort
+          </span>
+          {(
+            [
+              ['name', 'Name'],
+              ['modified-desc', 'Newest'],
+              ['size-desc', 'Largest'],
+            ] as Array<[FolderSort, string]>
+          ).map(([value, label]) => (
+            <FilterChip
+              key={value}
+              active={sort === value}
+              onClick={() => setSort(value)}
             >
               {label}
             </FilterChip>
