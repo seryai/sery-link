@@ -118,13 +118,35 @@ struct TablePrompt {
     sample_first_row: Option<String>,
 }
 
-/// Walk every watched folder and pull cached metadata. Documents
-/// are skipped — they're not SQL-queryable anyway. Used files
-/// (gdrive cache, local) flow through identically since the cache
-/// keys are absolute paths.
-fn enumerate_tables() -> Result<Vec<TablePrompt>> {
+/// Snapshot of one document file (PDF, DOCX, PPTX, HTML, IPYNB).
+/// SQL can't query these, but they're indexed and the LLM should
+/// know they exist — otherwise questions like "do I have an
+/// itinerary" get answered "no" because the only doc named
+/// itinerary.pdf was invisible to the prompt.
+struct DocumentPrompt {
+    abs_path: String,
+    relative_path: String,
+    /// Up to PREVIEW_CHARS of extracted markdown so the LLM can
+    /// answer simple "what's in this doc" questions. Documents
+    /// without extracted markdown (Shallow tier) ship empty.
+    content_preview: Option<String>,
+}
+
+/// Document content excerpt cap. 500 chars per doc keeps a 100-doc
+/// listing under 50 KB even with previews — comfortable in any
+/// provider's context window. Longer docs get truncated with an
+/// ellipsis so the LLM knows there's more.
+const DOC_PREVIEW_CHARS: usize = 500;
+
+/// Walk every watched folder and split cached metadata into the
+/// SQL-queryable bucket (tables) and the not-queryable-but-still-
+/// referencable bucket (documents). Used files (gdrive cache,
+/// local) flow through identically since the cache keys are
+/// absolute paths.
+fn enumerate_indexed_files() -> Result<(Vec<TablePrompt>, Vec<DocumentPrompt>)> {
     let cfg = Config::load()?;
-    let mut out: Vec<TablePrompt> = Vec::new();
+    let mut tables: Vec<TablePrompt> = Vec::new();
+    let mut documents: Vec<DocumentPrompt> = Vec::new();
     for folder in &cfg.watched_folders {
         let datasets: Vec<DatasetMetadata> = scan_cache::with_cache(|c| {
             c.get_all_for_folder(&folder.path)
@@ -133,55 +155,68 @@ fn enumerate_tables() -> Result<Vec<TablePrompt>> {
         .unwrap_or_default();
 
         for d in datasets {
-            // Only tabular formats — DuckDB can't read docs as
-            // tables. The scanner's `is_supported_ext` is the
-            // canonical filter.
-            if !is_tabular(&d.file_format) {
-                continue;
-            }
             let abs_path = format!(
                 "{}/{}",
                 folder.path.trim_end_matches('/'),
                 d.relative_path
             );
-            out.push(TablePrompt {
-                abs_path,
-                relative_path: d.relative_path.clone(),
-                file_format: d.file_format.clone(),
-                schema: d
-                    .schema
-                    .iter()
-                    .map(|c| (c.name.clone(), c.col_type.clone()))
-                    .collect(),
-                sample_first_row: d
-                    .sample_rows
-                    .as_ref()
-                    .and_then(|rows| rows.first())
-                    .map(|r| {
-                        let mut parts: Vec<String> = Vec::new();
-                        for (k, v) in r {
-                            // serde_json::Value::to_string is
-                            // verbose for strings ("foo" with
-                            // quotes); for prompt brevity we
-                            // prefer the unwrapped form.
-                            let v_str = match v {
-                                serde_json::Value::String(s) => s.clone(),
-                                other => other.to_string(),
-                            };
-                            parts.push(format!("{}={}", k, v_str));
-                        }
-                        parts.join(", ")
-                    }),
-            });
+            if is_tabular(&d.file_format) {
+                tables.push(TablePrompt {
+                    abs_path,
+                    relative_path: d.relative_path.clone(),
+                    file_format: d.file_format.clone(),
+                    schema: d
+                        .schema
+                        .iter()
+                        .map(|c| (c.name.clone(), c.col_type.clone()))
+                        .collect(),
+                    sample_first_row: d.sample_rows.as_ref().and_then(|rows| rows.first()).map(
+                        |r| {
+                            let mut parts: Vec<String> = Vec::new();
+                            for (k, v) in r {
+                                let v_str = match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                parts.push(format!("{}={}", k, v_str));
+                            }
+                            parts.join(", ")
+                        },
+                    ),
+                });
+            } else if is_document(&d.file_format) {
+                let preview = d.document_markdown.as_ref().map(|m| {
+                    let cleaned = m.trim();
+                    if cleaned.chars().count() > DOC_PREVIEW_CHARS {
+                        let truncated: String =
+                            cleaned.chars().take(DOC_PREVIEW_CHARS).collect();
+                        format!("{}…", truncated)
+                    } else {
+                        cleaned.to_string()
+                    }
+                });
+                documents.push(DocumentPrompt {
+                    abs_path,
+                    relative_path: d.relative_path.clone(),
+                    content_preview: preview,
+                });
+            }
         }
     }
-    Ok(out)
+    Ok((tables, documents))
 }
 
 fn is_tabular(file_format: &str) -> bool {
     matches!(
         file_format.to_ascii_lowercase().as_str(),
         "parquet" | "csv" | "tsv" | "xlsx" | "xls"
+    )
+}
+
+fn is_document(file_format: &str) -> bool {
+    matches!(
+        file_format.to_ascii_lowercase().as_str(),
+        "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
     )
 }
 
@@ -201,22 +236,32 @@ fn read_function(file_format: &str) -> Option<&'static str> {
     }
 }
 
-/// Compose the system prompt that advertises tables. Truncates if
-/// the schema dump grows past MAX_PROMPT_SCHEMA_CHARS.
-fn build_sql_system_prompt(tables: &[TablePrompt]) -> String {
+/// Compose the system prompt that advertises tables AND documents.
+/// Truncates each section independently if either grows past
+/// MAX_PROMPT_SCHEMA_CHARS so a doc-heavy folder doesn't crowd
+/// out the table schemas (or vice versa).
+fn build_sql_system_prompt(
+    tables: &[TablePrompt],
+    documents: &[DocumentPrompt],
+) -> String {
     let mut s = String::from(
         "You are a data analyst answering questions about local files \
-         on the user's computer. The files are queryable as DuckDB tables.\n\n",
+         on the user's computer. Tabular files (CSV, Parquet, XLSX) are \
+         queryable via DuckDB. Document files (PDF, DOCX, etc.) are \
+         indexed by name + extracted text but cannot be queried with SQL \
+         — reference them directly when the user asks.\n\n",
     );
 
-    if tables.is_empty() {
+    if tables.is_empty() && documents.is_empty() {
         s.push_str(
-            "(No tabular files indexed yet. If the question requires \
-             data, ask the user to add a folder containing CSV or \
-             Parquet files.)\n\n",
+            "(No files indexed yet. Ask the user to add a folder \
+             containing data or documents.)\n\n",
         );
-    } else {
-        s.push_str("Available tables:\n\n");
+    }
+
+    if !tables.is_empty() {
+        s.push_str("Available tables (SQL-queryable):\n\n");
+        let start_len = s.len();
         for t in tables {
             let read_fn = match read_function(&t.file_format) {
                 Some(f) => f,
@@ -237,9 +282,30 @@ fn build_sql_system_prompt(tables: &[TablePrompt]) -> String {
             }
             s.push('\n');
 
-            if s.len() > MAX_PROMPT_SCHEMA_CHARS {
+            if s.len() - start_len > MAX_PROMPT_SCHEMA_CHARS {
                 s.push_str(
                     "(further tables omitted — too many to fit in the prompt; \
+                     ask a more specific question to narrow scope)\n\n",
+                );
+                break;
+            }
+        }
+    }
+
+    if !documents.is_empty() {
+        s.push_str("Available documents (filename + content; not SQL-queryable):\n\n");
+        let start_len = s.len();
+        for d in documents {
+            s.push_str(&format!("Document: {} ({})\n", d.relative_path, d.abs_path));
+            if let Some(preview) = &d.content_preview {
+                if !preview.is_empty() {
+                    s.push_str(&format!("  excerpt: {}\n", preview));
+                }
+            }
+            s.push('\n');
+            if s.len() - start_len > MAX_PROMPT_SCHEMA_CHARS {
+                s.push_str(
+                    "(further documents omitted — too many to fit in the prompt; \
                      ask a more specific question to narrow scope)\n\n",
                 );
                 break;
@@ -532,15 +598,18 @@ pub async fn ask(
     user_question: &str,
     model: Option<&str>,
 ) -> Result<AgentAnswer> {
-    // ── Step 1: enumerate schemas ──
-    let tables = enumerate_tables().unwrap_or_else(|e| {
-        eprintln!("[text-to-sql] enumerate_tables failed: {}", e);
-        Vec::new()
+    // ── Step 1: enumerate schemas + documents ──
+    let (tables, documents) = enumerate_indexed_files().unwrap_or_else(|e| {
+        eprintln!("[text-to-sql] enumerate_indexed_files failed: {}", e);
+        (Vec::new(), Vec::new())
     });
-    let considered_table_count = tables.len();
+    // The "considered" count surfaces in the UI footer. Including
+    // documents lets the user see "considered 23 files" rather
+    // than "considered 8 tables" when most of their stuff is PDFs.
+    let considered_table_count = tables.len() + documents.len();
 
     // ── Step 2: ask LLM for SQL ──
-    let system_prompt = build_sql_system_prompt(&tables);
+    let system_prompt = build_sql_system_prompt(&tables, &documents);
     let gen_prompt = format!("{}\n\nUser question: {}", system_prompt, user_question);
     let gen_response = byok::ask(provider, api_key, &gen_prompt, model).await?;
 
@@ -723,8 +792,8 @@ mod tests {
 
     #[test]
     fn build_prompt_handles_empty_tables() {
-        let s = build_sql_system_prompt(&[]);
-        assert!(s.contains("No tabular files indexed yet"));
+        let s = build_sql_system_prompt(&[], &[]);
+        assert!(s.contains("No files indexed yet"));
         // Instructions still ship even with no tables — the LLM
         // should know what shape its response should take.
         assert!(s.contains("INSUFFICIENT_DATA:"));
@@ -742,10 +811,42 @@ mod tests {
             ],
             sample_first_row: Some("id=1, amount=100.0".to_string()),
         }];
-        let s = build_sql_system_prompt(&tables);
+        let s = build_sql_system_prompt(&tables, &[]);
         assert!(s.contains("read_csv_auto('/data/orders.csv')"));
         assert!(s.contains("- id: BIGINT"));
         assert!(s.contains("sample row: id=1"));
+    }
+
+    #[test]
+    fn build_prompt_lists_documents_with_excerpt() {
+        let docs = vec![DocumentPrompt {
+            abs_path: "/Users/me/itinerary.pdf".to_string(),
+            relative_path: "itinerary.pdf".to_string(),
+            content_preview: Some("Flight UA123 SFO→JFK on 2024-06-20".to_string()),
+        }];
+        let s = build_sql_system_prompt(&[], &docs);
+        // The doc filename + path are visible to the LLM so it
+        // can answer "do I have an itinerary?" without firing
+        // the sentinel.
+        assert!(s.contains("itinerary.pdf"));
+        assert!(s.contains("/Users/me/itinerary.pdf"));
+        assert!(s.contains("Flight UA123"));
+        assert!(s.contains("not SQL-queryable"));
+    }
+
+    #[test]
+    fn build_prompt_truncates_long_document_excerpts() {
+        let long = "x".repeat(2000);
+        let docs = vec![DocumentPrompt {
+            abs_path: "/p/big.pdf".to_string(),
+            relative_path: "big.pdf".to_string(),
+            content_preview: Some(format!("{}…", &long[..DOC_PREVIEW_CHARS])),
+        }];
+        let s = build_sql_system_prompt(&[], &docs);
+        // Excerpt size guard — caller (enumerate_indexed_files)
+        // truncates at DOC_PREVIEW_CHARS; the prompt builder
+        // shouldn't blow that budget further.
+        assert!(s.len() < 5000, "prompt unexpectedly large: {}", s.len());
     }
 
     #[test]
@@ -757,7 +858,7 @@ mod tests {
             schema: vec![],
             sample_first_row: None,
         }];
-        let s = build_sql_system_prompt(&tables);
+        let s = build_sql_system_prompt(&tables, &[]);
         // The SQL string literal must be safe — single-quote
         // doubled per SQL escape rules.
         assert!(s.contains("read_csv_auto('/data/john''s notes.csv')"));
