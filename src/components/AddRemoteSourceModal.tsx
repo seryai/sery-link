@@ -333,8 +333,10 @@ function UrlPanel(props: {
           </strong>{' '}
           public HTTPS links to <code>.csv</code>/<code>.parquet</code>,
           individual S3 objects, and S3 bucket/prefix listings like{' '}
-          <code>s3://bucket/prefix/</code> (one level deep) or explicit
-          globs like <code>s3://bucket/**/*.parquet</code>.
+          <code>s3://bucket/prefix/</code> (recursive — matches{' '}
+          <code>.csv</code>/<code>.tsv</code>/<code>.parquet</code> at
+          any depth, capped at 10,000 objects) or explicit globs like{' '}
+          <code>s3://bucket/**/*.parquet</code>.
           <br />
           <strong className="text-slate-800 dark:text-slate-200">
             Not yet:

@@ -50,15 +50,20 @@ pub fn is_s3_listing(url: &str) -> bool {
 /// Expand a bucket-prefix listing URL to the glob pattern we'll hand
 /// to DuckDB. Only callers should be the scanner's listing path.
 ///
-///   * `s3://bucket/`              → `s3://bucket/*.{csv,parquet}`
-///   * `s3://bucket/prefix/`       → `s3://bucket/prefix/*.{csv,parquet}`
+///   * `s3://bucket/`              → `s3://bucket/**/*`
+///   * `s3://bucket/prefix/`       → `s3://bucket/prefix/**/*`
 ///   * `s3://bucket/**/*.parquet`  → unchanged (already a glob)
 ///   * `s3://bucket/prefix/*.csv`  → unchanged
 ///
-/// We deliberately default to one-level-deep listing. Users who want
-/// recursive can paste `**/` explicitly — matches DuckDB's glob
-/// semantics and avoids surprise bills on buckets with millions of
-/// nested objects.
+/// Recursive by default — most user buckets are partitioned
+/// (`year=2024/month=01/...`) and a one-level-deep listing missed
+/// every dataset, producing the "added with nothing" UX.
+///
+/// Extension filtering happens Rust-side in `list_s3_blocking`
+/// rather than via a glob brace pattern (`*.{csv,parquet}`).
+/// DuckDB-httpfs brace expansion against S3 listings was observed
+/// returning empty even when matching files existed, so the filter
+/// runs against the raw object URLs after the listing comes back.
 pub fn expand_s3_listing_pattern(url: &str) -> String {
     if url.contains('*') {
         return url.to_string();
@@ -68,7 +73,7 @@ pub fn expand_s3_listing_pattern(url: &str) -> String {
     } else {
         format!("{}/", url)
     };
-    format!("{}*.{{csv,parquet}}", base)
+    format!("{}**/*", base)
 }
 
 /// Result of sanitising a user-pasted URL.
@@ -448,14 +453,14 @@ mod tests {
     }
 
     #[test]
-    fn expand_s3_listing_pattern_defaults_one_level_deep() {
+    fn expand_s3_listing_pattern_defaults_to_recursive_all() {
         assert_eq!(
             expand_s3_listing_pattern("s3://bucket/"),
-            "s3://bucket/*.{csv,parquet}"
+            "s3://bucket/**/*"
         );
         assert_eq!(
             expand_s3_listing_pattern("s3://bucket/prefix/"),
-            "s3://bucket/prefix/*.{csv,parquet}"
+            "s3://bucket/prefix/**/*"
         );
         // Already a glob — left alone.
         assert_eq!(
@@ -465,7 +470,7 @@ mod tests {
         // Bare prefix with no trailing slash — append one.
         assert_eq!(
             expand_s3_listing_pattern("s3://bucket/prefix"),
-            "s3://bucket/prefix/*.{csv,parquet}"
+            "s3://bucket/prefix/**/*"
         );
     }
 

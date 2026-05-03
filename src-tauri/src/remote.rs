@@ -102,6 +102,11 @@ pub struct ListedObject {
 /// (scanner) is responsible for loading creds + httpfs before the
 /// glob query — same as for single-object scans.
 pub fn list_s3_blocking(listing_url: &str) -> Result<Vec<ListedObject>> {
+    // Cap the per-listing object count so a bucket with millions of
+    // keys doesn't blow up memory or burn through S3 LIST budget. If
+    // we hit this, the user can narrow with an explicit glob.
+    const MAX_LISTED_OBJECTS: usize = 10_000;
+
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("open DuckDB: {}", e)))?;
     install_httpfs(&conn)?;
@@ -110,11 +115,13 @@ pub fn list_s3_blocking(listing_url: &str) -> Result<Vec<ListedObject>> {
     let pattern = crate::url::expand_s3_listing_pattern(listing_url);
     let escaped = pattern.replace('\'', "''");
 
-    // `glob(pattern)` returns a table with `file` (URL). DuckDB ≥ 1.1
-    // also exposes size/modified via `parquet_file_metadata` / custom
-    // table functions but those aren't portable across file types —
-    // so we return just the URL list and let per-file scans fill in
-    // the rest from DuckDB's read_csv_auto / read_parquet.
+    // `glob(pattern)` returns a table with `file` (URL). The default
+    // `expand_s3_listing_pattern` produces `<prefix>/**/*` — recursive
+    // and no extension filter at the SQL layer. Filtering by extension
+    // happens Rust-side below: DuckDB-httpfs brace expansion against
+    // S3 listings was unreliable (matching files but returning empty
+    // results in some setups), so we ask for everything and discard
+    // non-tabular keys ourselves.
     let sql = format!("SELECT file FROM glob('{}')", escaped);
     eprintln!("[remote-list] ▶ {}", pattern);
     let _ = std::io::Write::flush(&mut std::io::stderr());
@@ -126,17 +133,44 @@ pub fn list_s3_blocking(listing_url: &str) -> Result<Vec<ListedObject>> {
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| AgentError::Database(format!("execute glob: {}", e)))?;
 
+    // Allowed extensions match what scan_remote_blocking_with_creds
+    // can actually read. Keep this in sync with that match arm.
+    let allowed = ["csv", "tsv", "parquet"];
+    let user_explicit_glob = listing_url.contains('*');
+
+    let mut total_seen = 0usize;
+    let mut skipped_unsupported = 0usize;
     let mut out = Vec::new();
     for row in rows {
-        if let Ok(url) = row {
-            out.push(ListedObject {
-                url,
-                size_bytes: None,
-                last_modified_secs: None,
-            });
+        let Ok(url) = row else { continue };
+        total_seen += 1;
+        let ext = crate::url::extension_from_url(&url);
+        // If the user typed an explicit glob (`s3://bucket/**/*.json`)
+        // they get exactly what they asked for; don't second-guess.
+        // Otherwise filter to the formats we can actually scan.
+        if !user_explicit_glob && !allowed.contains(&ext.as_str()) {
+            skipped_unsupported += 1;
+            continue;
+        }
+        out.push(ListedObject {
+            url,
+            size_bytes: None,
+            last_modified_secs: None,
+        });
+        if out.len() >= MAX_LISTED_OBJECTS {
+            eprintln!(
+                "[remote-list] ⚠ hit MAX_LISTED_OBJECTS ({}). Narrow with an explicit glob to see the rest.",
+                MAX_LISTED_OBJECTS
+            );
+            break;
         }
     }
-    eprintln!("[remote-list] ✓ {} object(s) found", out.len());
+    eprintln!(
+        "[remote-list] ✓ {} object(s) kept ({} total seen, {} skipped as non-tabular)",
+        out.len(),
+        total_seen,
+        skipped_unsupported
+    );
     Ok(out)
 }
 
