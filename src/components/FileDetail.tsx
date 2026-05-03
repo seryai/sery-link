@@ -10,15 +10,17 @@
 // deep-linked to a never-scanned path — we fall back to an empty state
 // with a Rescan suggestion rather than erroring.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowLeft,
   Database,
   FileText,
   Folder as FolderIcon,
   Loader2,
+  Search,
   SquareArrowOutUpRight,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -296,21 +298,15 @@ export function FileDetail() {
               />
             )}
 
-            {/* Sample rows */}
-            {dataset.sample_rows && dataset.sample_rows.length > 0 && (
-              <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-                <header className="flex items-center justify-between border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  <span>Sample rows</span>
-                  {dataset.samples_redacted && (
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-normal normal-case text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
-                      PII redacted
-                    </span>
-                  )}
-                </header>
-                <pre className="overflow-x-auto p-3 font-mono text-xs text-slate-700 dark:text-slate-300">
-                  {JSON.stringify(dataset.sample_rows, null, 2)}
-                </pre>
-              </section>
+            {/* Inline data preview — replaces the old JSON sample
+                dump for tabular files. Calls read_dataset_rows on
+                mount and renders up to MAX_PREVIEW_ROWS in a
+                virtualized table with a client-side filter. */}
+            {!isDocumentFormat(dataset.file_format) && (
+              <DataPreview
+                folderPath={folderPath}
+                relativePath={relativePath}
+              />
             )}
 
             {/* Document markdown */}
@@ -327,8 +323,7 @@ export function FileDetail() {
 
             {/* Nothing extracted (Shallow tier) */}
             {dataset.schema.length === 0 &&
-              !dataset.document_markdown &&
-              !dataset.sample_rows && (
+              !dataset.document_markdown && (
                 <section className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
                   <p className="text-sm text-slate-600 dark:text-slate-400">
                     No schema or extracted text for this file.
@@ -494,6 +489,203 @@ function truncate(s: string | null, max: number): string {
   if (s === null || s === undefined) return '—';
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
+}
+
+// ─── Data preview ──────────────────────────────────────────────────────
+//
+// Inline browser for tabular files. Calls read_dataset_rows on mount,
+// renders the result in a virtualized table with a client-side filter
+// (matches any cell substring across all loaded rows).
+//
+// Replaces the "Sample rows" JSON dump that used to live here. Doc
+// formats keep their existing extracted-text panel since they have
+// no row structure.
+
+interface DatasetRowsPayload {
+  columns: string[];
+  rows: string[][];
+  total_rows: number;
+  truncated: boolean;
+}
+
+function DataPreview({
+  folderPath,
+  relativePath,
+}: {
+  folderPath: string;
+  relativePath: string;
+}) {
+  const [data, setData] = useState<DatasetRowsPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+
+  useEffect(() => {
+    if (!folderPath || !relativePath) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    invoke<DatasetRowsPayload>('read_dataset_rows', { folderPath, relativePath })
+      .then((result) => {
+        if (cancelled) return;
+        setData(result);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(typeof err === 'string' ? err : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folderPath, relativePath]);
+
+  // Client-side filter — case-insensitive substring across every cell.
+  // Cheap because rows are bounded by MAX_PREVIEW_ROWS (5000); no need
+  // to round-trip a query for re-filter on every keystroke.
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    const q = filter.trim().toLowerCase();
+    if (!q) return data.rows;
+    return data.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(q)));
+  }, [data, filter]);
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+        <span>Data preview</span>
+        {data && (
+          <span className="font-normal normal-case text-slate-400 dark:text-slate-500">
+            {filter ? `${filteredRows.length} of ` : ''}
+            {data.rows.length.toLocaleString()}
+            {data.truncated && data.total_rows > 0
+              ? ` of ${data.total_rows.toLocaleString()} rows (showing first ${data.rows.length.toLocaleString()})`
+              : data.truncated
+                ? ` rows (more available)`
+                : ` rows`}
+          </span>
+        )}
+      </header>
+
+      {loading && (
+        <div className="flex items-center justify-center gap-2 p-8 text-sm text-slate-500 dark:text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading rows…
+        </div>
+      )}
+
+      {error && !loading && (
+        <div className="m-3 rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && data && data.rows.length === 0 && (
+        <div className="p-8 text-center text-sm text-slate-500 dark:text-slate-400">
+          File has no rows.
+        </div>
+      )}
+
+      {!loading && !error && data && data.rows.length > 0 && (
+        <>
+          <div className="border-b border-slate-200 p-2 dark:border-slate-800">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder={`Filter rows (across ${data.columns.length} column${data.columns.length === 1 ? '' : 's'})…`}
+                className="w-full rounded-md border border-slate-200 bg-white py-1.5 pl-7 pr-2 text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500/30 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+              />
+            </div>
+          </div>
+          <PreviewTable columns={data.columns} rows={filteredRows} />
+          {data.truncated && (
+            <div className="border-t border-slate-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-slate-800 dark:bg-amber-950/30 dark:text-amber-200">
+              File is larger than the preview limit. To analyse the
+              whole thing, ask a question on the cloud Ask page or
+              run a recipe over this folder.
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+const ROW_HEIGHT = 28;
+
+function PreviewTable({
+  columns,
+  rows,
+}: {
+  columns: string[];
+  rows: string[][];
+}) {
+  // Virtualize the row list so a 5000-row preview stays smooth.
+  // Tanstack-virtual handles overscan + position math; we just
+  // give it the row count + a stable size estimator.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 12,
+  });
+  const items = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
+
+  return (
+    <div ref={scrollRef} className="max-h-[520px] overflow-auto">
+      <table className="min-w-full text-xs">
+        <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800/80">
+          <tr>
+            {columns.map((c) => (
+              <th
+                key={c}
+                className="border-b border-slate-200 px-2 py-1.5 text-left font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200"
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody style={{ position: 'relative', height: `${totalSize}px` }}>
+          {items.map((vRow) => {
+            const row = rows[vRow.index];
+            if (!row) return null;
+            return (
+              <tr
+                key={vRow.key}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: `${vRow.size}px`,
+                  transform: `translateY(${vRow.start}px)`,
+                }}
+                className="even:bg-slate-50/40 dark:even:bg-slate-900/40"
+              >
+                {row.map((cell, j) => (
+                  <td
+                    key={j}
+                    title={cell}
+                    className="max-w-xs truncate border-b border-slate-100 px-2 py-1 font-mono text-slate-600 dark:border-slate-800 dark:text-slate-300"
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────

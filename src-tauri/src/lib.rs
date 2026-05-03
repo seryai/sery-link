@@ -213,6 +213,7 @@ pub fn run() {
             commands::scan_folder,
             commands::search_all_folders,
             commands::profile_dataset,
+            commands::read_dataset_rows,
             commands::get_cached_folder_metadata,
             commands::rescan_folder,
             commands::sync_metadata,
