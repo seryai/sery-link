@@ -733,6 +733,16 @@ function PreviewTable({
   const items = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();
 
+  // Top/bottom spacer rows replace the absolute-positioned approach.
+  // <tbody> is `display: table-row-group`, which doesn't behave as a
+  // positioning context in every browser, so absolutely-positioned
+  // rows there were escaping to a higher ancestor and rendering in
+  // the top-left of the page. Spacer rows are layout-clean and keep
+  // column widths in sync with <thead> for free.
+  const paddingTop = items.length > 0 ? items[0].start : 0;
+  const paddingBottom =
+    items.length > 0 ? totalSize - items[items.length - 1].end : 0;
+
   return (
     <div ref={scrollRef} className="max-h-[520px] overflow-auto">
       <table className="min-w-full text-xs">
@@ -748,21 +758,19 @@ function PreviewTable({
             ))}
           </tr>
         </thead>
-        <tbody style={{ position: 'relative', height: `${totalSize}px` }}>
+        <tbody>
+          {paddingTop > 0 && (
+            <tr style={{ height: `${paddingTop}px` }} aria-hidden="true">
+              <td colSpan={columns.length} />
+            </tr>
+          )}
           {items.map((vRow) => {
             const row = rows[vRow.index];
             if (!row) return null;
             return (
               <tr
                 key={vRow.key}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${vRow.size}px`,
-                  transform: `translateY(${vRow.start}px)`,
-                }}
+                style={{ height: `${vRow.size}px` }}
                 className="even:bg-slate-50/40 dark:even:bg-slate-900/40"
               >
                 {row.map((cell, j) => (
@@ -777,6 +785,11 @@ function PreviewTable({
               </tr>
             );
           })}
+          {paddingBottom > 0 && (
+            <tr style={{ height: `${paddingBottom}px` }} aria-hidden="true">
+              <td colSpan={columns.length} />
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
