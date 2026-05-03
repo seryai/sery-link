@@ -1458,6 +1458,180 @@ pub async fn get_cached_folder_metadata(folder_path: String) -> Result<Vec<Datas
     result
 }
 
+// ─── Format conversion (FileDetail action) ──────────────────────────────────
+//
+// User clicks "Convert to Parquet" on a CSV / XLSX file → we write the
+// parquet next to the source so it lands in the same watched folder + the
+// existing file watcher picks it up on the next scan tick.
+//
+// Why surface this: parquet is 5-50x smaller AND queries 10-100x faster than
+// equivalent CSVs. Users with raw CSV exports benefit a lot, and the
+// conversion is one-line for someone with DuckDB CLI but invisible
+// otherwise. Sery already has the engine wired in; exposing it as a button
+// turns latent capability into product surface.
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConvertResult {
+    /// Absolute path to the new parquet file. Sits next to the source
+    /// in the same folder, so the existing file watcher will pick it
+    /// up on its next debounced sync.
+    pub output_path: String,
+    /// Relative path within the watched folder — what the UI will
+    /// navigate to after the convert succeeds.
+    pub relative_path: String,
+    /// Bytes written. Useful for the "shrunk from N to M" copy.
+    pub size_bytes: u64,
+    /// Source size for the same comparison.
+    pub source_size_bytes: u64,
+}
+
+/// Convert a CSV / XLSX dataset to Parquet, writing the result next
+/// to the source. Returns the new file's path so the UI can navigate
+/// to it. If a `<basename>.parquet` already exists at the destination,
+/// we append `-converted-1`, `-2`, etc. until we find a free slot —
+/// won't clobber the user's existing files.
+#[tauri::command]
+pub async fn convert_to_parquet(
+    folder_path: String,
+    relative_path: String,
+) -> Result<ConvertResult, String> {
+    tokio::task::spawn_blocking(move || convert_to_parquet_blocking(&folder_path, &relative_path))
+        .await
+        .map_err(|e| format!("convert task failed: {}", e))?
+}
+
+fn convert_to_parquet_blocking(
+    folder_path: &str,
+    relative_path: &str,
+) -> Result<ConvertResult, String> {
+    use duckdb::Connection;
+    use std::path::{Path, PathBuf};
+
+    if crate::url::is_remote_url(folder_path) {
+        return Err(
+            "Conversion is local-only — fetch the file first or use a local watched \
+             folder.".to_string(),
+        );
+    }
+
+    let full_path: PathBuf = Path::new(folder_path).join(relative_path);
+    if !full_path.starts_with(folder_path) {
+        return Err("invalid relative path".to_string());
+    }
+    if !full_path.exists() {
+        return Err(format!("file not found: {}", full_path.display()));
+    }
+
+    let ext = full_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if ext == "parquet" {
+        return Err("File is already Parquet.".to_string());
+    }
+    if !matches!(ext.as_str(), "csv" | "tsv" | "xlsx" | "xls") {
+        return Err(format!(
+            "Convert only supports csv / tsv / xlsx / xls right now (got: {}).",
+            ext
+        ));
+    }
+
+    let source_size_bytes = std::fs::metadata(&full_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    // Excel: lean on the existing xlsx_to_csv pipeline to get a
+    // CSV intermediate, then read that into parquet. xlsx_to_csv
+    // writes to a temp dir; we don't pollute the user's folder.
+    let csv_for_read = if matches!(ext.as_str(), "xlsx" | "xls") {
+        Some(crate::excel::xlsx_to_csv(&full_path).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let read_path = csv_for_read.as_deref().unwrap_or(full_path.as_path());
+    let escaped_read = read_path.to_string_lossy().replace('\'', "''");
+
+    // Pick a non-colliding destination next to the source.
+    let dest = pick_convert_destination(&full_path)?;
+    let escaped_dest = dest.to_string_lossy().replace('\'', "''");
+
+    let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+    // Same fallback ladder csv.rs uses internally — header on, then
+    // permissive, then no-header, then all_varchar. We want this to
+    // succeed on weird CSVs the user might have.
+    let attempts = [
+        "read_csv_auto('{p}', header=true)",
+        "read_csv_auto('{p}', header=true, ignore_errors=true, null_padding=true)",
+        "read_csv_auto('{p}', header=false, ignore_errors=true, null_padding=true)",
+        "read_csv_auto('{p}', header=true, ignore_errors=true, null_padding=true, all_varchar=true)",
+    ];
+    let mut last_err: Option<String> = None;
+    for tmpl in attempts {
+        let reader = tmpl.replace("{p}", &escaped_read);
+        let sql = format!(
+            "COPY (SELECT * FROM {reader}) TO '{escaped_dest}' (FORMAT PARQUET, COMPRESSION 'zstd')"
+        );
+        match conn.execute(&sql, []) {
+            Ok(_) => {
+                let size_bytes = std::fs::metadata(&dest)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let new_relative = dest
+                    .strip_prefix(folder_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| dest.file_name().map_or_else(
+                        || dest.to_string_lossy().to_string(),
+                        |s| s.to_string_lossy().to_string(),
+                    ));
+                return Ok(ConvertResult {
+                    output_path: dest.to_string_lossy().to_string(),
+                    relative_path: new_relative,
+                    size_bytes,
+                    source_size_bytes,
+                });
+            }
+            Err(e) => {
+                // Clean up partial file before the next attempt — DuckDB
+                // refuses to overwrite by default and the next COPY
+                // would fail for the wrong reason.
+                let _ = std::fs::remove_file(&dest);
+                last_err = Some(e.to_string());
+            }
+        }
+    }
+    Err(format!(
+        "DuckDB couldn't convert {}: {}",
+        full_path.display(),
+        last_err.unwrap_or_else(|| "unknown error".to_string())
+    ))
+}
+
+/// Build a non-colliding destination path next to the source. First
+/// preference is `<basename>.parquet`; if that exists we walk
+/// `-converted-1.parquet`, `-converted-2.parquet`, … until we find a
+/// free slot. Caps at -999 so a runaway loop can't churn forever
+/// (very unlikely but cheap insurance).
+fn pick_convert_destination(source: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let parent = source.parent().ok_or_else(|| "no parent dir".to_string())?;
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "no file stem".to_string())?;
+    let first = parent.join(format!("{}.parquet", stem));
+    if !first.exists() {
+        return Ok(first);
+    }
+    for i in 1..1000 {
+        let candidate = parent.join(format!("{}-converted-{}.parquet", stem, i));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("Couldn't find a free destination filename — clean up old conversions first.".to_string())
+}
+
 // ─── Inline data preview (FileDetail "Browse" section) ──────────────────────
 //
 // User-facing surface: open a tabular file in FileDetail, see its rows in a

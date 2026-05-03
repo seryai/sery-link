@@ -196,6 +196,26 @@ export function FileDetail() {
               <ArrowLeft className="h-3.5 w-3.5" />
               Folder
             </button>
+            {/* Convert to Parquet — only for local CSV / TSV / Excel.
+                Hidden for remote URLs (no source file to read) and
+                for files already in Parquet. */}
+            {!isRemoteUrl(folderPath) &&
+              dataset &&
+              isConvertibleFormat(dataset.file_format) && (
+                <ConvertToParquetButton
+                  folderPath={folderPath}
+                  relativePath={relativePath}
+                  onConverted={(result) => {
+                    // Auto-navigate to the new file so the user
+                    // sees their conversion succeed in the most
+                    // direct way: the parquet's stats + row preview
+                    // open in front of them.
+                    navigate(
+                      `/folders/${encodeURIComponent(folderPath)}/files/${encodeURIComponent(result.relative_path)}`,
+                    );
+                  }}
+                />
+              )}
             {!isRemoteUrl(folderPath) && (
               <button
                 onClick={reveal}
@@ -489,6 +509,81 @@ function truncate(s: string | null, max: number): string {
   if (s === null || s === undefined) return '—';
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';
+}
+
+// ─── Format conversion ─────────────────────────────────────────────────
+//
+// CSV / TSV / XLSX / XLS → Parquet via a backend Tauri command.
+// Parquet's footprint is typically 5-50x smaller than CSV and queries
+// 10-100x faster, which matters when the same file gets opened
+// repeatedly. The conversion writes next to the source so the file
+// watcher picks it up on its next sync — no extra "where did my file
+// go" UX.
+
+interface ConvertResult {
+  output_path: string;
+  relative_path: string;
+  size_bytes: number;
+  source_size_bytes: number;
+}
+
+const CONVERTIBLE_FORMATS = new Set(['csv', 'tsv', 'xlsx', 'xls']);
+
+function isConvertibleFormat(fmt: string): boolean {
+  return CONVERTIBLE_FORMATS.has(fmt.toLowerCase());
+}
+
+function ConvertToParquetButton({
+  folderPath,
+  relativePath,
+  onConverted,
+}: {
+  folderPath: string;
+  relativePath: string;
+  onConverted: (result: ConvertResult) => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const handle = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await invoke<ConvertResult>('convert_to_parquet', {
+        folderPath,
+        relativePath,
+      });
+      const ratio =
+        result.source_size_bytes > 0
+          ? result.source_size_bytes / Math.max(1, result.size_bytes)
+          : 0;
+      const ratioLabel = ratio >= 1.5 ? ` (${ratio.toFixed(1)}× smaller)` : '';
+      toast.success(
+        `Converted to ${result.relative_path}${ratioLabel}`,
+      );
+      onConverted(result);
+    } catch (err) {
+      toast.error(`Convert failed: ${typeof err === 'string' ? err : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handle}
+      disabled={busy}
+      title="Save a Parquet copy next to this file. Faster + smaller for repeat queries."
+      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+    >
+      {busy ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Database className="h-3.5 w-3.5" />
+      )}
+      {busy ? 'Converting…' : 'Convert to Parquet'}
+    </button>
+  );
 }
 
 // ─── Data preview ──────────────────────────────────────────────────────

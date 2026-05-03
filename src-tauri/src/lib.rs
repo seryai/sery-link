@@ -214,6 +214,7 @@ pub fn run() {
             commands::search_all_folders,
             commands::profile_dataset,
             commands::read_dataset_rows,
+            commands::convert_to_parquet,
             commands::get_cached_folder_metadata,
             commands::rescan_folder,
             commands::sync_metadata,
