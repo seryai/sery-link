@@ -423,9 +423,13 @@ impl WebSocketClient {
             .as_str()
             .ok_or_else(|| AgentError::WebSocket("Missing sql".to_string()))?;
 
-        let file_path = message["file_path"]
+        // The cloud sends this field as `database_path` (see api/.../tunnel.py
+        // ConnectionManager.send_query). Locally the value is just an absolute
+        // file path on disk, so we keep the Rust binding named `file_path`.
+        let file_path = message["database_path"]
             .as_str()
-            .ok_or_else(|| AgentError::WebSocket("Missing file_path".to_string()))?;
+            .or_else(|| message["file_path"].as_str())
+            .ok_or_else(|| AgentError::WebSocket("Missing database_path".to_string()))?;
 
         eprintln!("Executing query {}: {}", query_id, sql);
 
