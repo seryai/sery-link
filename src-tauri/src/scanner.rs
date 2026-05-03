@@ -304,7 +304,25 @@ async fn scan_s3_listing(
 
     let total = objects.len();
     if total == 0 {
-        return Ok(Vec::new());
+        // The listing matched and filtered to zero tabular files.
+        // With the recursive default (`<prefix>/**/*` + Rust-side
+        // csv/tsv/parquet filter), this means the prefix really had
+        // no .csv/.tsv/.parquet, OR auth silently failed. Surface
+        // both possibilities so the user isn't left guessing.
+        let pattern = crate::url::expand_s3_listing_pattern(listing_url);
+        return Err(AgentError::FileSystem(format!(
+            "scanned `{}` and found no .csv / .tsv / .parquet files. \
+             If you expected files there, check the bucket region and \
+             credentials (a region mismatch can return an empty listing \
+             instead of an error), or pass an explicit glob with the \
+             extension you want, e.g. `{}**/*.json`.",
+            pattern,
+            if listing_url.ends_with('/') {
+                listing_url.to_string()
+            } else {
+                format!("{}/", listing_url)
+            },
+        )));
     }
 
     // Step 2: scan each object sequentially. Parallel fan-out via
