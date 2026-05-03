@@ -41,6 +41,22 @@ export interface AskSqlAttempt {
   outcome: AskSqlOutcome;
 }
 
+/** Format-filter chip values for FolderDetail. `'all'` is the
+ *  no-filter default; the rest each map to a set of file_format
+ *  strings handled in the consumer (groups e.g. xlsx + xls into
+ *  the "excel" chip). */
+export type FolderFormatFilter =
+  | 'all'
+  | 'csv'
+  | 'parquet'
+  | 'excel'
+  | 'documents'
+  | 'other';
+
+/** Recency-filter chip values. Maps to a wall-clock cutoff
+ *  applied against each dataset's last_modified timestamp. */
+export type FolderRecencyFilter = 'any' | '24h' | '7d' | '30d';
+
 export interface AskTurn {
   id: number;
   question: string;
@@ -148,6 +164,14 @@ interface AgentState {
   // folders use cases without ballooning the store object.
   folderSearch: Record<string, string>;
   setFolderSearch: (folderPath: string, query: string) => void;
+  // Per-folder format filter ('all' or one of the format chips). Same
+  // keying as folderSearch — survives tab switches but doesn't bleed
+  // between folders.
+  folderFormat: Record<string, FolderFormatFilter>;
+  setFolderFormat: (folderPath: string, value: FolderFormatFilter) => void;
+  // Per-folder recency filter (any / 24h / 7d / 30d).
+  folderRecency: Record<string, FolderRecencyFilter>;
+  setFolderRecency: (folderPath: string, value: FolderRecencyFilter) => void;
   // Results page (History) filter chips + search. The 'error'
   // value matches the existing local type in History.tsx — keeping
   // the string identical so the lift is a drop-in.
@@ -178,6 +202,8 @@ const initial = {
   askDraft: '',
   askTurns: [] as AskTurn[],
   folderSearch: {} as Record<string, string>,
+  folderFormat: {} as Record<string, FolderFormatFilter>,
+  folderRecency: {} as Record<string, FolderRecencyFilter>,
   historyFilter: 'all' as 'all' | 'success' | 'error',
   historySearch: '',
   isLoading: false,
@@ -229,6 +255,14 @@ export const useAgentStore = create<AgentState>((set) => ({
   setFolderSearch: (folderPath, query) =>
     set((state) => ({
       folderSearch: { ...state.folderSearch, [folderPath]: query },
+    })),
+  setFolderFormat: (folderPath, value) =>
+    set((state) => ({
+      folderFormat: { ...state.folderFormat, [folderPath]: value },
+    })),
+  setFolderRecency: (folderPath, value) =>
+    set((state) => ({
+      folderRecency: { ...state.folderRecency, [folderPath]: value },
     })),
   setHistoryFilter: (f) => set({ historyFilter: f }),
   setHistorySearch: (s) => set({ historySearch: s }),

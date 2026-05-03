@@ -28,6 +28,10 @@ import {
   SquareArrowOutUpRight,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
+import type {
+  FolderFormatFilter,
+  FolderRecencyFilter,
+} from '../stores/agentStore';
 import { useToast } from './Toast';
 import {
   classifySource,
@@ -67,11 +71,20 @@ export function FolderDetail() {
   // folders' filters don't clobber each other.
   const folderSearchMap = useAgentStore((s) => s.folderSearch);
   const setFolderSearch = useAgentStore((s) => s.setFolderSearch);
+  const folderFormatMap = useAgentStore((s) => s.folderFormat);
+  const setFolderFormat = useAgentStore((s) => s.setFolderFormat);
+  const folderRecencyMap = useAgentStore((s) => s.folderRecency);
+  const setFolderRecency = useAgentStore((s) => s.setFolderRecency);
 
   const folderPath = folderId ? decodeURIComponent(folderId) : '';
   const folder = config?.watched_folders.find((f) => f.path === folderPath);
   const search = folderSearchMap[folderPath] ?? '';
   const setSearch = (q: string) => setFolderSearch(folderPath, q);
+  // Format chip selection. Default 'all' = no format filter.
+  const formatFilter = folderFormatMap[folderPath] ?? 'all';
+  const setFormatFilter = (v: FolderFormatFilter) => setFolderFormat(folderPath, v);
+  const recencyFilter = folderRecencyMap[folderPath] ?? 'any';
+  const setRecencyFilter = (v: FolderRecencyFilter) => setFolderRecency(folderPath, v);
 
   // Map<relative_path, DatasetMetadata> — keeps incremental updates O(1)
   // by upserting on each dataset_scanned event. Converted to an array
@@ -216,9 +229,33 @@ export function FolderDetail() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return datasets;
-    return datasets.filter((d) => d.relative_path.toLowerCase().includes(q));
-  }, [datasets, search]);
+    // Recency cutoff is computed once per render rather than per
+    // dataset — relative-time math is cheap but we still avoid the
+    // per-row work when `any` is selected.
+    const cutoffMs = (() => {
+      switch (recencyFilter) {
+        case '24h':
+          return Date.now() - 24 * 60 * 60 * 1000;
+        case '7d':
+          return Date.now() - 7 * 24 * 60 * 60 * 1000;
+        case '30d':
+          return Date.now() - 30 * 24 * 60 * 60 * 1000;
+        default:
+          return null;
+      }
+    })();
+    return datasets.filter((d) => {
+      if (q && !d.relative_path.toLowerCase().includes(q)) return false;
+      if (formatFilter !== 'all' && !matchesFormat(formatFilter, d.file_format)) {
+        return false;
+      }
+      if (cutoffMs !== null) {
+        const t = Date.parse(d.last_modified);
+        if (Number.isNaN(t) || t < cutoffMs) return false;
+      }
+      return true;
+    });
+  }, [datasets, search, formatFilter, recencyFilter]);
 
   const totals = useMemo(() => {
     if (datasets.length === 0) return null;
@@ -336,8 +373,9 @@ export function FolderDetail() {
         </div>
       </div>
 
-      {/* Search + status stays as a non-scrolling header so the
-          virtualized list below gets a stable scroll container. */}
+      {/* Search + filter chips + status stays as a non-scrolling
+          header so the virtualized list below gets a stable scroll
+          container. */}
       <div className="border-b border-slate-200 bg-white px-6 py-3 dark:border-slate-800 dark:bg-slate-900">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -348,12 +386,61 @@ export function FolderDetail() {
             placeholder="Filter files by name…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
           />
-          {search && datasets.length > 0 && (
-            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        </div>
+
+        {/* Format + recency chip rows. Chips beat dropdowns here
+            because the user can see all options at once and one
+            click flips between them — common case is "show me CSVs
+            from this week" which is two clicks total. */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            Format
+          </span>
+          {(
+            [
+              ['all', 'All'],
+              ['csv', 'CSV'],
+              ['parquet', 'Parquet'],
+              ['excel', 'Excel'],
+              ['documents', 'Docs'],
+              ['other', 'Other'],
+            ] as Array<[FolderFormatFilter, string]>
+          ).map(([value, label]) => (
+            <FilterChip
+              key={value}
+              active={formatFilter === value}
+              onClick={() => setFormatFilter(value)}
+            >
+              {label}
+            </FilterChip>
+          ))}
+          <span className="ml-3 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            Modified
+          </span>
+          {(
+            [
+              ['any', 'Any time'],
+              ['24h', 'Last 24h'],
+              ['7d', 'Last 7d'],
+              ['30d', 'Last 30d'],
+            ] as Array<[FolderRecencyFilter, string]>
+          ).map(([value, label]) => (
+            <FilterChip
+              key={value}
+              active={recencyFilter === value}
+              onClick={() => setRecencyFilter(value)}
+            >
+              {label}
+            </FilterChip>
+          ))}
+        </div>
+
+        {(search || formatFilter !== 'all' || recencyFilter !== 'any') &&
+          datasets.length > 0 && (
+            <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
               {filtered.length} of {datasets.length} match
             </div>
           )}
-        </div>
 
         {scanState.kind !== 'idle' && (
           // Subtle inline indicator. The user already sees the file
@@ -555,9 +642,60 @@ function DatasetRow({
   );
 }
 
+/** Toggle pill used in the FolderDetail filter row. Active state is
+ *  filled purple; inactive is a subtle outline. Same shape repeats
+ *  across format + recency rows so the eye groups them as one
+ *  control surface. */
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+        active
+          ? 'border-purple-500 bg-purple-100 text-purple-700 dark:border-purple-400 dark:bg-purple-900/40 dark:text-purple-200'
+          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf']);
+const KNOWN_TABULAR = new Set(['csv', 'tsv', 'parquet', 'xlsx', 'xls']);
+
+/** Test whether a dataset's `file_format` belongs to the chip's
+ *  bucket. The grouping is intentionally chunky — users think in
+ *  "spreadsheets" not "xlsx vs xls"; in "documents" not "pdf vs
+ *  docx vs html". */
+function matchesFormat(filter: FolderFormatFilter, fmt: string): boolean {
+  const f = fmt.toLowerCase();
+  switch (filter) {
+    case 'all':
+      return true;
+    case 'csv':
+      return f === 'csv' || f === 'tsv';
+    case 'parquet':
+      return f === 'parquet';
+    case 'excel':
+      return f === 'xlsx' || f === 'xls';
+    case 'documents':
+      return DOCUMENT_FORMATS.has(f);
+    case 'other':
+      return !KNOWN_TABULAR.has(f) && !DOCUMENT_FORMATS.has(f);
+  }
+}
 
 function isDocumentFormat(fmt: string): boolean {
   return DOCUMENT_FORMATS.has(fmt.toLowerCase());
