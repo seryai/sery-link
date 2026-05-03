@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { AgentConfig } from '../types/events';
 import { useMetadataCache, type CachedDataset } from '../hooks/useMetadataCache';
+import { useAgentStore } from '../stores/agentStore';
 
 interface Command {
   id: string;
@@ -52,6 +53,7 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [datasetResults, setDatasetResults] = useState<CachedDataset[]>([]);
+  const authenticated = useAgentStore((s) => s.authenticated);
 
   const cache = useMetadataCache(workspaceId);
 
@@ -81,18 +83,23 @@ export function CommandPalette({
         },
         section: 'navigation',
       },
-      {
-        id: 'nav-machines',
-        label: 'Go to Machines',
-        description: 'See all the machines connected to this workspace',
-        icon: <Laptop className="h-4 w-4" />,
-        keywords: ['machines', 'devices', 'agents', 'pair', 'navigate'],
-        action: () => {
-          onNavigate('machines');
-          setIsOpen(false);
-        },
-        section: 'navigation',
-      },
+      // Machines is workspace-scoped; only surface it once connected.
+      ...(authenticated
+        ? [
+            {
+              id: 'nav-machines',
+              label: 'Go to Machines',
+              description: 'See all the machines connected to this workspace',
+              icon: <Laptop className="h-4 w-4" />,
+              keywords: ['machines', 'devices', 'agents', 'pair', 'navigate'],
+              action: () => {
+                onNavigate('machines');
+                setIsOpen(false);
+              },
+              section: 'navigation' as const,
+            },
+          ]
+        : []),
       {
         id: 'nav-privacy',
         label: 'Go to Privacy',
@@ -169,7 +176,7 @@ export function CommandPalette({
     }
 
     return baseCommands;
-  }, [config, onNavigate, onAddFolder, onRescanFolder, onRemoveFolder]);
+  }, [config, authenticated, onNavigate, onAddFolder, onRescanFolder, onRemoveFolder]);
 
   // Search datasets from cache when query changes
   useEffect(() => {
