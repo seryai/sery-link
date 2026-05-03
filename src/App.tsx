@@ -86,27 +86,15 @@ function AppInner() {
 
   // ROADMAP F9: the global Quick-Ask hotkey (registered in
   // src-tauri/src/hotkey.rs) emits a `quick-ask` event whenever it
-  // fires. Routing depends on whether BYOK is configured:
-  //   - BYOK key present → /ask (the natural "ask a question" surface)
-  //   - No BYOK key      → /search (still useful, and the user discovers
-  //                        Ask via the sidebar)
-  // Either way, the input is focused so the user can type immediately.
-  // Window show/focus is handled on the Rust side.
+  // fires. Post-pivot the desktop no longer hosts AI, so the hotkey
+  // routes to /search — the local data discovery surface. The /ask
+  // page survives as a thin "AI moved to dashboard" placeholder; we
+  // don't route the hotkey to it because the user can't actually
+  // ask anything from there.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen('quick-ask', async () => {
-      // Best-effort BYOK probe — if it fails we fall through to /search
-      // rather than blocking the hotkey.
-      let target = '/search';
-      try {
-        const status = await invoke<{ configured: boolean }>('get_byok_status');
-        if (status?.configured) {
-          target = '/ask';
-        }
-      } catch (err) {
-        console.warn('Quick-Ask: could not read BYOK status, defaulting to /search:', err);
-      }
-      navigate(target);
+      navigate('/search');
       // Defer to the next tick so the route has mounted before we look
       // for the input. Input components have `autoFocus`, but if the
       // user was already on the target route it doesn't remount, so we

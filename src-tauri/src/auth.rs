@@ -282,16 +282,10 @@ pub fn get_auth_mode(config: &Config) -> AuthMode {
         }
     }
 
-    // 2. Check the OS keychain for a saved BYOK key. Anthropic-first per
-    //    SPEC_BYOK.md v0.5.0 scope; OpenAI added in v0.5.x.
-    if let Ok(api_key) = keyring_store::get_byok_key("anthropic") {
-        if !api_key.is_empty() {
-            return AuthMode::BYOK {
-                provider: "anthropic".to_string(),
-                api_key,
-            };
-        }
-    }
+    // 2. (Removed in v0.5.3 pivot.) The OS-keychain BYOK lookup
+    //    used to live here — desktop no longer holds per-provider
+    //    API keys. Existing keychain entries are left alone; AI
+    //    happens cloud-side via the dashboard now.
 
     // 3. Fallback: env var (legacy / power-user path; useful in CI and dev).
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {

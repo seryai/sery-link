@@ -39,50 +39,8 @@ pub fn has_token() -> bool {
     get_token().is_ok()
 }
 
-// ---------------------------------------------------------------------------
-// BYOK (Bring Your Own Key) — separate keyring entry per provider so the
-// workspace token and BYOK keys can coexist. Per-provider keying so a user
-// can have both Anthropic and (future) OpenAI keys saved at once.
-// ---------------------------------------------------------------------------
-
-fn byok_account(provider: &str) -> String {
-    format!("byok_{}", provider.to_lowercase())
-}
-
-pub fn save_byok_key(provider: &str, key: &str) -> Result<()> {
-    let account = byok_account(provider);
-    let entry = Entry::new(SERVICE_NAME, &account)
-        .map_err(|e| AgentError::Keyring(format!("Failed to create BYOK entry: {}", e)))?;
-
-    entry
-        .set_password(key)
-        .map_err(|e| AgentError::Keyring(format!("Failed to save BYOK key: {}", e)))?;
-
-    Ok(())
-}
-
-pub fn get_byok_key(provider: &str) -> Result<String> {
-    let account = byok_account(provider);
-    let entry = Entry::new(SERVICE_NAME, &account)
-        .map_err(|e| AgentError::Keyring(format!("Failed to create BYOK entry: {}", e)))?;
-
-    entry
-        .get_password()
-        .map_err(|e| AgentError::Keyring(format!("Failed to retrieve BYOK key: {}", e)))
-}
-
-pub fn delete_byok_key(provider: &str) -> Result<()> {
-    let account = byok_account(provider);
-    let entry = Entry::new(SERVICE_NAME, &account)
-        .map_err(|e| AgentError::Keyring(format!("Failed to create BYOK entry: {}", e)))?;
-
-    entry
-        .delete_password()
-        .map_err(|e| AgentError::Keyring(format!("Failed to delete BYOK key: {}", e)))?;
-
-    Ok(())
-}
-
-pub fn has_byok_key(provider: &str) -> bool {
-    get_byok_key(provider).is_ok()
-}
+// BYOK keyring helpers were removed in the v0.5.3 → file-manager
+// pivot. AI now happens cloud-side via the dashboard, so the
+// desktop no longer holds per-provider API keys. Existing keychain
+// entries (`byok_<provider>`) are left in place — they're harmless
+// and the user can clear them via Keychain Access if they want.

@@ -20,26 +20,10 @@ import type {
 // + received_at. The in-memory slice keeps the same shape.
 export type SchemaNotification = StoredSchemaNotification;
 
-// One Q&A turn on the Ask page. Lifted out of the component so the
-// conversation + draft input survive sidebar navigation away and
-// back. Mirror of the local interface in Ask.tsx.
-export type AskSqlOutcome =
-  | {
-      kind: 'rows';
-      columns: string[];
-      rows: string[][];
-      total_rows: number;
-      truncated: boolean;
-    }
-  | { kind: 'empty' }
-  | { kind: 'insufficient_data'; reason: string }
-  | { kind: 'error'; message: string }
-  | { kind: 'no_sql_generated' };
-
-export interface AskSqlAttempt {
-  sql: string;
-  outcome: AskSqlOutcome;
-}
+// AskTurn / AskSqlAttempt / AskSqlOutcome were removed in the
+// v0.5.3 → file-manager pivot — the Ask page is now a placeholder
+// pointing at the cloud dashboard, no draft / conversation to
+// persist.
 
 /** Format-filter chip values for FolderDetail. `'all'` is the
  *  no-filter default; the rest each map to a set of file_format
@@ -62,17 +46,6 @@ export type FolderRecencyFilter = 'any' | '24h' | '7d' | '30d';
  *  the obvious "what changed recently" / "what's biggest" pivots
  *  data analysts reach for. */
 export type FolderSort = 'name' | 'modified-desc' | 'size-desc';
-
-export interface AskTurn {
-  id: number;
-  question: string;
-  answer: string;
-  provider: string;
-  usage: { input_tokens: number; output_tokens: number } | null;
-  asked_at: string;
-  sql_attempt: AskSqlAttempt | null;
-  considered_table_count: number;
-}
 
 const MAX_NOTIFICATIONS_KEEP = 200;
 
@@ -153,17 +126,6 @@ interface AgentState {
   searchResults: import('../types/events').SearchMatch[];
   setSearchQuery: (q: string) => void;
   setSearchResults: (results: import('../types/events').SearchMatch[]) => void;
-  // Ask-page draft + conversation. Lifted out of Ask.tsx so the user
-  // doesn't lose what they were typing (or the previous answers)
-  // when they switch tabs to look something up. Conversation can
-  // grow large — `clearAskTurns` lets the user start fresh from
-  // the UI's "Clear" affordance.
-  askDraft: string;
-  askTurns: AskTurn[];
-  setAskDraft: (s: string) => void;
-  setAskTurns: (turns: AskTurn[]) => void;
-  appendAskTurn: (turn: AskTurn) => void;
-  clearAskTurns: () => void;
   // Per-folder filter input (FolderDetail's "Filter files by name…").
   // Keyed by folder.path so each folder remembers its own filter
   // independently. Map keeps the schema flexible for very-many-
@@ -208,8 +170,6 @@ const initial = {
   schemaNotifications: [] as SchemaNotification[],
   searchQuery: '',
   searchResults: [] as import('../types/events').SearchMatch[],
-  askDraft: '',
-  askTurns: [] as AskTurn[],
   folderSearch: {} as Record<string, string>,
   folderFormat: {} as Record<string, FolderFormatFilter>,
   folderRecency: {} as Record<string, FolderRecencyFilter>,
@@ -256,12 +216,6 @@ export const useAgentStore = create<AgentState>((set) => ({
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
   setSearchQuery: (q) => set({ searchQuery: q }),
   setSearchResults: (results) => set({ searchResults: results }),
-  setAskDraft: (s) => set({ askDraft: s }),
-  setAskTurns: (turns) => set({ askTurns: turns }),
-  // Newest turn first — matches the UI which renders most-recent
-  // at the top so the user doesn't have to scroll past old answers.
-  appendAskTurn: (turn) => set((state) => ({ askTurns: [turn, ...state.askTurns] })),
-  clearAskTurns: () => set({ askTurns: [] }),
   setFolderSearch: (folderPath, query) =>
     set((state) => ({
       folderSearch: { ...state.folderSearch, [folderPath]: query },

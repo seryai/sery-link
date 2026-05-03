@@ -199,38 +199,8 @@ pub fn record(folder: &str, dataset_count: u64, column_count: u64, total_bytes: 
     let _ = append(&entry);
 }
 
-/// Record a single BYOK LLM call. Best-effort: failures are silent.
-///
-/// PRIVACY-CRITICAL: `host` is what proves the call went direct to the
-/// provider rather than via Sery's backend. The byok module only ever
-/// passes "api.anthropic.com" (or future providers' canonical hosts);
-/// if a different host shows up here, the BYOK guarantee is broken.
-pub fn record_byok_call(
-    provider: &str,
-    host: &str,
-    prompt_chars: u64,
-    response_chars: Option<u64>,
-    duration_ms: u64,
-    error: Option<String>,
-) {
-    let entry = AuditEntry {
-        timestamp: Utc::now().to_rfc3339(),
-        kind: AuditKind::ByokCall,
-        folder: String::new(),
-        dataset_count: 0,
-        column_count: 0,
-        total_bytes: 0,
-        provider: Some(provider.to_string()),
-        host: Some(host.to_string()),
-        prompt_chars: Some(prompt_chars),
-        response_chars,
-        duration_ms: Some(duration_ms),
-        status: if error.is_none() {
-            "success".to_string()
-        } else {
-            "error".to_string()
-        },
-        error,
-    };
-    let _ = append(&entry);
-}
+// `record_byok_call` was removed in the v0.5.3 → file-manager pivot
+// (BYOK lives cloud-side now). The AuditKind::ByokCall variant + the
+// `provider` / `host` / `prompt_chars` / `response_chars` /
+// `duration_ms` fields stay on AuditEntry so existing audit logs
+// still deserialise — they're just no longer written to.
