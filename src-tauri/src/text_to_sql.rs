@@ -249,12 +249,20 @@ fn build_sql_system_prompt(tables: &[TablePrompt]) -> String {
 
     s.push_str(
         "Instructions:\n\
-         - Emit exactly ONE SQL query inside a markdown code fence: ```sql ... ```\n\
-         - Use the read_parquet / read_csv_auto helpers shown above with the \
-           literal absolute paths.\n\
+         - If the user is asking ABOUT the table list itself (e.g. \"how \
+           many tables\", \"what files do I have\", \"list my data\", \
+           \"what columns does X have\"), answer DIRECTLY from the table \
+           listing above — do NOT fire INSUFFICIENT_DATA, and do NOT \
+           write SQL. Just give a clear natural-language answer using \
+           the tables/columns shown.\n\
+         - Otherwise, emit exactly ONE SQL query inside a markdown code \
+           fence: ```sql ... ```\n\
+         - Use the read_parquet / read_csv_auto helpers shown above with \
+           the literal absolute paths.\n\
          - For substring search on text columns prefer `column ILIKE '%term%'`.\n\
          - SELECT only. No CREATE / DROP / DELETE / INSERT / UPDATE.\n\
-         - If the available data can't answer the question, write \
+         - If the available data can't answer the question (data isn't \
+           there, not a meta-question), write \
            `INSUFFICIENT_DATA: <one-line reason>` instead of SQL.\n\
          - Keep the result small — add LIMIT 100 unless an aggregation is the answer.\n",
     );
