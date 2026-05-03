@@ -342,6 +342,31 @@ fn execute_sql(sql: &str) -> SqlOutcome {
     let _ = conn.execute("INSTALL httpfs", []);
     let _ = conn.execute("LOAD httpfs", []);
 
+    // DuckDB's Rust binding panics if column_count() / column_name()
+    // are called on a Statement before it's been executed. To get
+    // the column names ahead of iteration we run a separate
+    // `DESCRIBE (…)` query — that returns one row per output column
+    // with the name in column 0. Cheap (no row scan, just schema
+    // inference) and avoids fighting the Statement borrow checker
+    // to read names from inside the row callback.
+    let describe_sql = format!("DESCRIBE ({})", sql);
+    let columns: Vec<String> = match conn.prepare(&describe_sql) {
+        Ok(mut s) => match s.query_map([], |row| row.get::<_, String>(0)) {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(e) => {
+                return SqlOutcome::Error {
+                    message: format!("DESCRIBE failed: {}", e),
+                };
+            }
+        },
+        Err(e) => {
+            return SqlOutcome::Error {
+                message: format!("DESCRIBE prepare failed: {}", e),
+            };
+        }
+    };
+    let column_count = columns.len();
+
     let mut stmt = match conn.prepare(sql) {
         Ok(s) => s,
         Err(e) => {
@@ -350,15 +375,6 @@ fn execute_sql(sql: &str) -> SqlOutcome {
             };
         }
     };
-
-    let column_count = stmt.column_count();
-    let columns: Vec<String> = (0..column_count)
-        .map(|i| {
-            stmt.column_name(i)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "?".to_string())
-        })
-        .collect();
 
     let rows_iter = match stmt.query_map([], |row| {
         let mut out: Vec<String> = Vec::with_capacity(column_count);
