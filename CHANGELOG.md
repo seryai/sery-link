@@ -5,6 +5,45 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-05-01
+
+Cleanup release — four pending branches merged after dogfooding.
+
+### Fixed
+
+- **CSV / Parquet preview rows rendered in the top-left corner**
+  of the page instead of inside the Data preview card. The
+  virtualizer was using `position: absolute` rows inside a
+  `<tbody>` set to `position: relative`, but `display:
+  table-row-group` doesn't reliably create a positioning context.
+  Switched to top/bottom spacer rows (standard tanstack-virtual
+  table pattern); column widths now stay in sync with `<thead>`
+  for free.
+
+### Added
+
+- **S3 add modal pre-flights credentials** before persisting
+  anything. Bad keys, wrong region, or wrong bucket surface as an
+  inline error on the modal where the user can fix them, instead
+  of as a silent or empty rescan minutes later. Failures bypass
+  `remote_creds::save` so a bad attempt leaves no orphan keychain
+  entry.
+
+### Changed
+
+- **Sidebar hides Machines and Recipes when not connected to a
+  workspace.** Both pages were dead-end "Connect to see your
+  machines" empty states in local-only mode. Find / Folders /
+  Results / Notifications stay visible always (each has
+  local-relevant content). Routes still resolve, so deep links
+  keep working.
+- **Keychain reads are cached in-process for the session.** macOS
+  used to prompt twice at startup (`get_auth_mode` called
+  `has_token()` then `get_token()`) and then re-prompt for
+  Drive / S3 creds on every navigation. Now: one prompt per
+  keychain item per launch, then silent. Save / delete invalidate
+  the cache so it can never go stale.
+
 ## [0.6.1] — 2026-05-01
 
 S3 listing now actually finds the user's files.
