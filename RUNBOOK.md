@@ -2,13 +2,14 @@
 
 How Sery Link actually works end-to-end. Written so a confused
 user can pick it up cold and understand the difference between
-**Local**, **MCP**, and the **cloud workspace** — three independent
-paths that share one app.
+**Local (the universal gateway)**, **MCP**, and the **cloud
+workspace** — three independent paths that share one app.
 
 > **Version note**: this runbook describes Sery Link as it ships in
-> v0.6.0 (file-manager pivot — no on-device LLM keys, AI lives in
-> the cloud dashboard). For the v0.5.3-and-earlier BYOK / `/ask`
-> flow, check out the `v0.5.3` git tag.
+> v0.6.2 (file-manager pivot — no on-device LLM keys, AI lives in
+> the cloud dashboard; recursive S3 listings; pre-flight credential
+> check; keychain caching; sidebar gating). For the v0.5.3-and-
+> earlier BYOK / `/ask` flow, check out the `v0.5.3` git tag.
 
 ---
 
@@ -19,13 +20,13 @@ you can use any one without the others.
 
 | Path | What it does | Account? | Cost? |
 |---|---|---|---|
-| **A. Local** | Index folders. Column-aware search. Inline tabular preview. Convert CSV / TSV / Excel → Parquet. Document → markdown. Runs fully offline. | None | Free |
+| **A. Local — the universal data gateway** | Connect every cloud storage you have (local, S3, Drive today; SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive in v0.7+). Browse, preview tables without downloading, run profiles, search across all of them. Convert CSV / TSV / Excel → Parquet. Document → markdown. Fully offline (no cloud contact). | None | Free |
 | **B. MCP stdio** | Claude Desktop / Cursor / Continue spawns Sery Link as a local subprocess to read your folder. The *external* LLM client uses *its* key. | None | Whatever your LLM client costs |
-| **C. Cloud workspace** | Connect every machine you own with one workspace key. Cross-machine search + AI chat at app.sery.ai (server-side agent fans queries out across your machines via the existing tunnel). | Sery account | Free + 50 hosted queries/mo, or Plus $19 |
+| **C. Cloud workspace** | Connect with a workspace key — AI chat at app.sery.ai (server-side agent fans queries out across all your sources via the existing tunnel), multi-machine catalog sync, cross-machine search. | Sery account | Free + 50 hosted queries/mo, or Plus $19 |
 
-If you remember nothing else: **Local = file manager + indexer.
-MCP = external AI tools reading your folders. Cloud = multi-machine
-network with AI in the dashboard.**
+If you remember nothing else: **Local = universal cloud storage browser
+with SQL on remote bytes. MCP = external AI tools reading your folders.
+Cloud = AI chat across everything + multi-machine network.**
 
 ---
 
