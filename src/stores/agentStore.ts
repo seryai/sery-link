@@ -21,9 +21,8 @@ import type {
 export type SchemaNotification = StoredSchemaNotification;
 
 // AskTurn / AskSqlAttempt / AskSqlOutcome were removed in the
-// v0.5.3 → file-manager pivot — the Ask page is now a placeholder
-// pointing at the cloud dashboard, no draft / conversation to
-// persist.
+// v0.5.3 → file-manager pivot. The Ask page itself was deleted in
+// v0.6.0 — AI lives in the cloud dashboard, no draft to persist.
 
 /** Format-filter chip values for FolderDetail. `'all'` is the
  *  no-filter default; the rest each map to a set of file_format
