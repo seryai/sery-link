@@ -31,7 +31,7 @@ import type {
   DatasetMetadataPayload as DatasetMetadata,
 } from '../types/events';
 
-const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb']);
+const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf']);
 function isDocumentFormat(fmt: string) {
   return DOCUMENT_FORMATS.has(fmt.toLowerCase());
 }
