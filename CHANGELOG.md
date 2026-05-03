@@ -5,6 +5,72 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — 2026-05-01
+
+Audit-driven cleanup release. After the post-website-rewrite UI
+audit (datalake/UI_AUDIT_2026_05.md) flagged a handful of places
+where the desktop app contradicted or under-surfaced the new
+marketing copy, this release closes 6 of 7 audit items.
+
+### Fixed
+
+- **BYOK render path stripped from Privacy → Activity.** Pre-v0.6
+  audit logs still contained `byok_call` entries which rendered
+  with their own row component + a "BYOK calls" totals card,
+  contradicting the v0.6.0 BYOK-removal claim. The render path
+  is gone (component deleted, totals card dropped); legacy
+  entries on disk are filtered out at render time but preserved
+  in the JSONL for users who want to inspect via "Reveal audit
+  file." Net: -50 LoC in `Privacy.tsx`. (Audit B1.)
+- **Privacy disclosure card now distinguishes local vs cloud
+  scope.** "Results of queries you run" used to lump every
+  query together — a false statement for local-only users
+  whose preview / profile / search activity never leaves the
+  machine. Cards rewritten to enumerate items by surface
+  (catalog sync, AI chat, workspace events) and to explicitly
+  mark local browse / preview / profile / search as
+  device-only. (Audit B2.)
+
+### Changed
+
+- **Add Source modal shows the full protocol roadmap.** New
+  ProtocolRoadmapGrid above the existing tabs lists all 11
+  storage protocols with "Now" / "v0.7+" status badges. The 4
+  shipped (Local, HTTPS, S3, Drive) get emerald badges; the 7
+  coming (SFTP, WebDAV, B2, Azure, GCS, Dropbox, OneDrive) get
+  muted "v0.7+" badges. Tiles are informational until F42 ships
+  the unified protocol picker. (Audit I1.)
+- **Onboarding wizard surfaces Convert-to-Parquet.** One-line
+  tip on the welcome screen so users with piles of CSVs know
+  the conversion feature exists before they discover it
+  accidentally. (Audit I2.)
+- **Folder list nudges MCP discoverability.** When ≥1 folder
+  is being watched, the header subtitle now mentions exposing
+  via Settings → MCP. Subtle, dismissable-by-removing-folders.
+  (Audit I4.)
+- **Search page surfaces the Cloud workspace upgrade.** New
+  dismissable card above search results when local-only and
+  ≥1 result returned. Explains the $19/mo workspace + AI chat
+  upgrade and links to app.sery.ai/settings/workspace-keys.
+  Dismissal persists via localStorage; doesn't nag. (Audit I5.)
+
+### Deferred
+
+- **Settings → Privacy → Stored Credentials inspection panel.**
+  Tracked as audit I3. Needs cross-platform Rust work for
+  keychain enumeration that's beyond a 1-day scope. Punted to
+  the next sprint.
+
+### Verification
+
+- TypeScript `tsc --noEmit` clean.
+- Rust `cargo check --lib` clean (no Rust changes in this
+  release; type errors would have surfaced on dependent fields
+  if Privacy.tsx's audit-entry shape changed, but the
+  AuditEntry type itself is unchanged).
+- Manual click-through QA: founder pass against a real install
+  before tagging.
+
 ## [0.6.2] — 2026-05-01
 
 Cleanup release — four pending branches merged after dogfooding.
