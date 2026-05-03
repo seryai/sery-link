@@ -1,10 +1,10 @@
 # Sery Link
 
-**The desktop endpoint for [Sery](https://sery.ai) — a private data network for your files.**
+**Universal cloud storage browser, AI-era. Free + open source (AGPL-3.0).**
 
-Install Sery Link on every machine you own — laptop, desktop, NAS, server. Search and ask questions across all of them in plain English. Raw files never leave the device that owns them; Sery's cloud holds the catalog, never the data.
+Connect every cloud storage you have — local, S3, Google Drive, plus SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive (rolling out v0.7+). Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
 
-> **Like Tailscale for your files** — same network shape (operator coordinates, atoms stay where they are), but for search and AI across the machines you already own.
+> **Think of it as an AI-era Cyberduck** with column-aware search, preview-without-download for tabular files, and cloud AI on top. It's also the desktop endpoint for [Sery](https://sery.ai) — a private data network for your files (multi-machine workspace upgrade is opt-in).
 
 ## What you can do with one install
 
@@ -12,21 +12,26 @@ Sery Link works in three independent modes. Use any combination — they coexist
 
 | Mode | What it does | Sery account? |
 |---|---|---|
-| **Local** | Column-aware search, per-file column profiles, inline tabular preview, CSV/Excel → Parquet conversion, remote sources (HTTPS, S3, Google Drive) — runs fully offline | Not required |
+| **Local — universal data gateway** | Connect every storage you have. Column-aware search across all of them, per-file column profiles, inline tabular preview (parquet footers read over the wire — no download), CSV/Excel → Parquet conversion. Runs fully offline. | Not required |
 | **MCP stdio** | `Settings → MCP` toggle exposes a folder to Claude Desktop / Cursor / Continue via local stdio. The external LLM uses its own key. | Not required |
-| **Cloud workspace** | Connect with a workspace key — multi-machine catalog sync, cross-machine search at app.sery.ai, AI chat with cross-machine query fan-out, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
+| **Cloud workspace** | Connect with a workspace key — AI chat across all your sources at app.sery.ai/chat, multi-machine catalog sync, cross-machine search, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
 
-> **Where did BYOK go?** v0.5.3 shipped a paste-your-own-key `/ask` tab. v0.6.0 removed it — AI now lives in the cloud dashboard's `/chat` page, where the tool-use agent runs server-side and fans out queries across all your connected machines through the existing tunnel. See the [v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01) for the full rationale.
+**Storage protocols supported (today):** Local disk · HTTPS public URLs · S3 · Google Drive (OAuth).
+**Coming v0.7.x:** SFTP · WebDAV · Backblaze B2 · Azure Blob · Google Cloud Storage · Dropbox · OneDrive.
+
+> **Where did BYOK go?** v0.5.3 shipped a paste-your-own-key `/ask` tab. v0.6.0 removed it — AI now lives in the cloud dashboard's `/chat` page, where the tool-use agent runs server-side and fans out queries across all your connected sources through the existing tunnel. See the [v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01) for the full rationale.
 
 ## Features
 
-- 🔎 **Column-aware search** — match filenames, column names, and extracted document content across every folder and remote source in one pass
-- 📊 **Per-file column profiles** — schema, sample rows, null %, unique values, min/max/avg, computed locally
-- 📁 **Folder watching** — auto-detect changes in Parquet, CSV, Excel, and document files
-- 🌐 **Remote sources** — public HTTPS URLs or S3 listings; credentials in the OS keychain, fetched directly from your machine
-- 📄 **Documents → markdown** — DOCX, PPTX, HTML, PDF via the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate (bundled libpdfium + pandoc)
-- 💻 **Multi-machine workspace** — connect as many of your own machines as you want via one workspace key
-- ⌨️ **Keyboard-first UX** — Command Palette (Cmd+K), Quick-Ask hotkey (Cmd+Shift+S), fuzzy search
+- 🌐 **Browse every cloud you have, in one app** — local + S3 + Google Drive today; SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive in v0.7+. Credentials in the OS keychain, fetched directly from your machine.
+- ⚡ **Preview without downloading** — click any Parquet on S3 → schema + sample rows in <2s via the Parquet footer (no full file pull). CSV / TSV / Excel preview streams just enough.
+- 📊 **Per-file column profiles** — null %, unique values, min/max/avg, computed locally via DuckDB SUMMARIZE.
+- 🔎 **Column-aware search** — match filenames, column names, and extracted document content across every connected source in one pass.
+- 📁 **Folder + bucket watching** — auto-detect changes in Parquet, CSV, Excel, and document files.
+- 🔄 **Convert to Parquet** — turn any CSV / TSV / Excel into Parquet next to the source. The fastest way to make a pile of CSVs queryable.
+- 📄 **Documents → markdown** — DOCX, PPTX, HTML, PDF via the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate (bundled libpdfium + pandoc).
+- 💻 **Multi-machine workspace** (opt-in) — connect as many of your own machines as you want via one workspace key. AI chat at app.sery.ai/chat fans queries out across them.
+- ⌨️ **Keyboard-first UX** — Command Palette (Cmd+K), Quick-Search hotkey (Cmd+Shift+S), fuzzy search.
 - 🔒 **Verifiable privacy** — every outbound network event is logged to `~/.seryai/sync_audit.jsonl` with byte counts and host but never prompt or response text. Open the file in Settings → Privacy and watch it as you work.
 - 📦 **AGPL-3.0** — the protocol, auth flow, audit log format, and command surface are all inspectable. The privacy claims on [sery.ai/trust](https://sery.ai/trust) are verifiable in the source you're reading.
 
