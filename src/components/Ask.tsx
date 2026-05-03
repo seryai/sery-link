@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Link } from 'react-router-dom';
+import { useAgentStore } from '../stores/agentStore';
 import {
   AlertCircle,
   ArrowRight,
@@ -58,10 +59,21 @@ interface Turn {
 
 export function Ask() {
   const [status, setStatus] = useState<ByokStatus | null>(null);
-  const [prompt, setPrompt] = useState('');
+  // Draft + conversation lifted to the store so navigating to
+  // another tab doesn't wipe what the user typed or the answers
+  // they were reading. `asking` and `error` stay local — they're
+  // tied to an in-flight request and don't need to survive
+  // navigation (the request itself completes in the background
+  // either way).
+  const prompt = useAgentStore((s) => s.askDraft);
+  const setPrompt = useAgentStore((s) => s.setAskDraft);
+  const turns = useAgentStore((s) => s.askTurns);
+  const appendTurn = useAgentStore((s) => s.appendAskTurn);
+  // clearAskTurns is exposed in the store for a future "Clear
+  // conversation" affordance — not yet wired into the UI but kept
+  // out of useState so the lift covers it once the button lands.
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -86,17 +98,16 @@ export function Ask() {
     setError(null);
     try {
       const result = await invoke<AskResponse>('ask_byok', { prompt: trimmed });
-      setTurns((prev) => [
-        {
-          id: Date.now(),
-          question: trimmed,
-          answer: result.text,
-          provider: status.provider ?? 'anthropic',
-          usage: result.usage,
-          asked_at: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+      // Store's appendAskTurn prepends — newest at the top, same
+      // ordering the UI used before this lift.
+      appendTurn({
+        id: Date.now(),
+        question: trimmed,
+        answer: result.text,
+        provider: status.provider ?? 'anthropic',
+        usage: result.usage,
+        asked_at: new Date().toISOString(),
+      });
       setPrompt('');
     } catch (err) {
       setError(typeof err === 'string' ? err : String(err));

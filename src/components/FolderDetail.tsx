@@ -62,9 +62,16 @@ export function FolderDetail() {
   const navigate = useNavigate();
   const toast = useToast();
   const { config } = useAgentStore();
+  // Per-folder filter input lifted to the store so it survives
+  // navigation away and back. Keyed by folderPath so different
+  // folders' filters don't clobber each other.
+  const folderSearchMap = useAgentStore((s) => s.folderSearch);
+  const setFolderSearch = useAgentStore((s) => s.setFolderSearch);
 
   const folderPath = folderId ? decodeURIComponent(folderId) : '';
   const folder = config?.watched_folders.find((f) => f.path === folderPath);
+  const search = folderSearchMap[folderPath] ?? '';
+  const setSearch = (q: string) => setFolderSearch(folderPath, q);
 
   // Map<relative_path, DatasetMetadata> — keeps incremental updates O(1)
   // by upserting on each dataset_scanned event. Converted to an array
@@ -74,7 +81,6 @@ export function FolderDetail() {
   );
   const [scanState, setScanState] = useState<ScanState>({ kind: 'idle' });
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
   const initialLoadRef = useRef(false);
 
   const datasets = useMemo(

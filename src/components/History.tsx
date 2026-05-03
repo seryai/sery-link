@@ -28,8 +28,14 @@ type Filter = 'all' | 'success' | 'error';
 export function History() {
   const { history, setHistory } = useAgentStore();
   const toast = useToast();
-  const [filter, setFilter] = useState<Filter>('all');
-  const [search, setSearch] = useState('');
+  // Filter + search lifted to the store so navigating away and
+  // back doesn't reset the view to "all / no search". `expanded`
+  // and `showStats` stay local — they're scratch UI state that's
+  // fine to forget on remount.
+  const filter = useAgentStore((s) => s.historyFilter) as Filter;
+  const setFilter = useAgentStore((s) => s.setHistoryFilter);
+  const search = useAgentStore((s) => s.historySearch);
+  const setSearch = useAgentStore((s) => s.setHistorySearch);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showStats, setShowStats] = useState(false);
 
