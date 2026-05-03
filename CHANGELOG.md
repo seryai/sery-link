@@ -5,6 +5,35 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-05-01
+
+S3 listing now actually finds the user's files.
+
+### Fixed
+
+- **S3 prefix scans were missing nested data.** The default
+  listing pattern was `<prefix>/*.{csv,parquet}` — one level deep
+  and dependent on DuckDB-httpfs brace expansion that was observed
+  silently returning empty even with matching keys present. A user
+  added an S3 prefix that contained many CSV and Parquet files in
+  sub-folders and got "added with nothing" because none of those
+  paths matched. Two changes:
+  - Default listing is now `<prefix>/**/*` (recursive, no brace).
+  - Extension filtering (csv / tsv / parquet) happens Rust-side on
+    the listed object URLs, sidestepping brace expansion entirely.
+  - Capped at 10,000 listed objects per scan; explicit globs let
+    the user narrow further.
+- **Empty S3 listings now error instead of silently succeeding.**
+  Previously the scanner returned `Ok(vec![])` for a zero-match
+  glob and the UI showed "S3 source added" with no datasets and
+  no diagnostic. Now the scan errors with the actual pattern and
+  a hint about region / credentials / explicit glob, surfaced as
+  a sync_failed toast.
+- **PDF preview** rendered the row-preview error ("can't preview
+  rows for pdf files") instead of the document text panel. The
+  FileDetail document-format set was missing `pdf` while the
+  scanner already treated PDFs as documents.
+
 ## [0.5.2] — 2026-04-30
 
 ### Fixed
