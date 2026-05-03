@@ -20,6 +20,18 @@ import type {
 // + received_at. The in-memory slice keeps the same shape.
 export type SchemaNotification = StoredSchemaNotification;
 
+// One Q&A turn on the Ask page. Lifted out of the component so the
+// conversation + draft input survive sidebar navigation away and
+// back. Mirror of the local interface in Ask.tsx.
+export interface AskTurn {
+  id: number;
+  question: string;
+  answer: string;
+  provider: string;
+  usage: { input_tokens: number; output_tokens: number } | null;
+  asked_at: string;
+}
+
 const MAX_NOTIFICATIONS_KEEP = 200;
 
 export interface AgentToken {
@@ -99,6 +111,30 @@ interface AgentState {
   searchResults: import('../types/events').SearchMatch[];
   setSearchQuery: (q: string) => void;
   setSearchResults: (results: import('../types/events').SearchMatch[]) => void;
+  // Ask-page draft + conversation. Lifted out of Ask.tsx so the user
+  // doesn't lose what they were typing (or the previous answers)
+  // when they switch tabs to look something up. Conversation can
+  // grow large — `clearAskTurns` lets the user start fresh from
+  // the UI's "Clear" affordance.
+  askDraft: string;
+  askTurns: AskTurn[];
+  setAskDraft: (s: string) => void;
+  setAskTurns: (turns: AskTurn[]) => void;
+  appendAskTurn: (turn: AskTurn) => void;
+  clearAskTurns: () => void;
+  // Per-folder filter input (FolderDetail's "Filter files by name…").
+  // Keyed by folder.path so each folder remembers its own filter
+  // independently. Map keeps the schema flexible for very-many-
+  // folders use cases without ballooning the store object.
+  folderSearch: Record<string, string>;
+  setFolderSearch: (folderPath: string, query: string) => void;
+  // Results page (History) filter chips + search. The 'error'
+  // value matches the existing local type in History.tsx — keeping
+  // the string identical so the lift is a drop-in.
+  historyFilter: 'all' | 'success' | 'error';
+  historySearch: string;
+  setHistoryFilter: (f: 'all' | 'success' | 'error') => void;
+  setHistorySearch: (s: string) => void;
   setLoading: (value: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -119,6 +155,11 @@ const initial = {
   schemaNotifications: [] as SchemaNotification[],
   searchQuery: '',
   searchResults: [] as import('../types/events').SearchMatch[],
+  askDraft: '',
+  askTurns: [] as AskTurn[],
+  folderSearch: {} as Record<string, string>,
+  historyFilter: 'all' as 'all' | 'success' | 'error',
+  historySearch: '',
   isLoading: false,
   error: null,
 };
@@ -159,6 +200,18 @@ export const useAgentStore = create<AgentState>((set) => ({
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
   setSearchQuery: (q) => set({ searchQuery: q }),
   setSearchResults: (results) => set({ searchResults: results }),
+  setAskDraft: (s) => set({ askDraft: s }),
+  setAskTurns: (turns) => set({ askTurns: turns }),
+  // Newest turn first — matches the UI which renders most-recent
+  // at the top so the user doesn't have to scroll past old answers.
+  appendAskTurn: (turn) => set((state) => ({ askTurns: [turn, ...state.askTurns] })),
+  clearAskTurns: () => set({ askTurns: [] }),
+  setFolderSearch: (folderPath, query) =>
+    set((state) => ({
+      folderSearch: { ...state.folderSearch, [folderPath]: query },
+    })),
+  setHistoryFilter: (f) => set({ historyFilter: f }),
+  setHistorySearch: (s) => set({ historySearch: s }),
   setSchemaNotifications: (entries) =>
     set({ schemaNotifications: entries.slice(0, MAX_NOTIFICATIONS_KEEP) }),
   addSchemaNotification: (payload) =>
