@@ -15,9 +15,19 @@
 
 use crate::error::{AgentError, Result};
 use chrono::{DateTime, Duration, Utc};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 const SERVICE: &str = "sery-link-gdrive";
+
+// Process-wide cache: account_id → tokens. macOS prompts on every
+// keychain read against an ad-hoc-signed binary, so navigating around
+// the app would re-prompt for the same Drive account. Cache survives
+// the session; save/delete invalidate the relevant entry.
+static TOKEN_CACHE: Lazy<Mutex<HashMap<String, StoredTokens>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Tokens persisted to the keychain. Distinct from `TokenResponse` in
 /// `gdrive_oauth.rs` because that's the wire shape (`expires_in` is
@@ -88,10 +98,21 @@ pub fn save(account_id: &str, tokens: &StoredTokens) -> Result<()> {
     entry
         .set_password(&json)
         .map_err(|e| AgentError::Config(format!("keyring write: {}", e)))?;
+    TOKEN_CACHE
+        .lock()
+        .expect("TOKEN_CACHE poisoned")
+        .insert(account_id.to_string(), tokens.clone());
     Ok(())
 }
 
 pub fn load(account_id: &str) -> Result<Option<StoredTokens>> {
+    if let Some(cached) = TOKEN_CACHE
+        .lock()
+        .expect("TOKEN_CACHE poisoned")
+        .get(account_id)
+    {
+        return Ok(Some(cached.clone()));
+    }
     let entry = match keyring::Entry::new(SERVICE, account_id) {
         Ok(e) => e,
         Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
@@ -101,6 +122,10 @@ pub fn load(account_id: &str) -> Result<Option<StoredTokens>> {
             let tokens: StoredTokens = serde_json::from_str(&json).map_err(|e| {
                 AgentError::Serialization(format!("parse tokens: {}", e))
             })?;
+            TOKEN_CACHE
+                .lock()
+                .expect("TOKEN_CACHE poisoned")
+                .insert(account_id.to_string(), tokens.clone());
             Ok(Some(tokens))
         }
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -113,11 +138,16 @@ pub fn delete(account_id: &str) -> Result<()> {
         Ok(e) => e,
         Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
     };
-    match entry.delete_password() {
+    let result = match entry.delete_password() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(AgentError::Config(format!("keyring delete: {}", e))),
-    }
+    };
+    TOKEN_CACHE
+        .lock()
+        .expect("TOKEN_CACHE poisoned")
+        .remove(account_id);
+    result
 }
 
 #[cfg(test)]
