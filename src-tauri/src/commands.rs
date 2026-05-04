@@ -2987,8 +2987,38 @@ pub async fn set_source_group(
 #[tauri::command]
 pub async fn remove_source(id: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    // Snapshot the source's path/url BEFORE remove_source drops it,
+    // so we can clean up keychain creds + scan cache after persisting.
+    // None for kinds without a path-keyed mirror (Drive).
+    let cleanup_url: Option<String> = config
+        .sources
+        .iter()
+        .find(|s| s.id == id)
+        .and_then(|s| match &s.kind {
+            crate::sources::SourceKind::Local { path, .. } => {
+                Some(path.to_string_lossy().to_string())
+            }
+            crate::sources::SourceKind::Https { url }
+            | crate::sources::SourceKind::S3 { url } => Some(url.clone()),
+            crate::sources::SourceKind::GoogleDrive { .. } => None,
+        });
+
     config.remove_source(&id).map_err(|e| e.to_string())?;
-    config.save().map_err(|e| e.to_string())
+    config.save().map_err(|e| e.to_string())?;
+
+    // Best-effort cleanup of side state. Mirrors the existing
+    // remove_watched_folder cleanup so removing via the Sources
+    // sidebar leaves the same residue as removing via the legacy
+    // Folders tab — no orphan keychain entry, no stale cache.
+    if let Some(url) = cleanup_url {
+        if crate::url::is_s3_url(&url) {
+            let _ = crate::remote_creds::delete(&url);
+        }
+        let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&url));
+    }
+    let _ = restart_file_watcher().await;
+    Ok(())
 }
 
 #[tauri::command]
