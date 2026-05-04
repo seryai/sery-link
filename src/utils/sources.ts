@@ -104,3 +104,19 @@ export function legacyKindStringOf(
       return 'http';
   }
 }
+
+/** Return the path/url string used as the `scansInFlight` key for
+ *  this source. Mirrors the Rust resolve_source_path semantics:
+ *  Local → path, Https/S3 → url, Drive → null (Drive scans don't go
+ *  through the path-keyed scanner). */
+export function scanKeyOf(source: DataSource): string | null {
+  switch (source.kind.kind) {
+    case 'local':
+      return source.kind.path;
+    case 'https':
+    case 's3':
+      return source.kind.url;
+    case 'google_drive':
+      return null;
+  }
+}
