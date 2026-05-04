@@ -276,7 +276,17 @@ export type SourceKind =
     }
   | { kind: 'https'; url: string }
   | { kind: 's3'; url: string }
-  | { kind: 'google_drive'; account_id: string };
+  | { kind: 'google_drive'; account_id: string }
+  | {
+      // F43: SFTP server. Auth lives in the OS keychain keyed on
+      // source_id (sftp_creds module on the Rust side); this TS
+      // shape only carries the connection metadata.
+      kind: 'sftp';
+      host: string;
+      port: number;
+      username: string;
+      base_path: string;
+    };
 
 /** One bookmarked source in the Sources sidebar. */
 export interface DataSource {
