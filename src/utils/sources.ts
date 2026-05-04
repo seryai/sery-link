@@ -172,14 +172,20 @@ export type WebDavAuth =
 /** Bridge from the new structured `SourceKind` to the legacy string
  *  enum used by `<SourceIcon kind=...>`. The legacy enum predates
  *  F42 and is still consumed by FolderList; we map across so the
- *  Sources sidebar can reuse the same icon set without duplicating
- *  the SVGs. SFTP doesn't have a brand mark in SourceIcon yet — it
- *  falls through to the local-folder icon which is the closest
- *  semantic match (a folder you can see files inside). Replace with
- *  a dedicated SSH-terminal mark in a polish slice. */
+ *  Sources sidebar can reuse the same icon set. Each new protocol
+ *  gets a dedicated brand-recognisable mark in SourceIcon.tsx. */
 export function legacyKindStringOf(
   source: DataSource,
-): 'local' | 's3' | 'gdrive' | 'http' {
+):
+  | 'local'
+  | 's3'
+  | 'gdrive'
+  | 'http'
+  | 'sftp'
+  | 'webdav'
+  | 'dropbox'
+  | 'azure'
+  | 'onedrive' {
   switch (source.kind.kind) {
     case 'local':
       return 'local';
@@ -190,23 +196,15 @@ export function legacyKindStringOf(
     case 'https':
       return 'http';
     case 'sftp':
-      // Fallback to 'local' icon visually — a remote folder you
-      // browse like a local one. Future: dedicated SSH terminal mark.
-      return 'local';
+      return 'sftp';
     case 'web_dav':
-      // Fallback to 'http' (globe) since WebDAV is HTTP-based.
-      // Future: dedicated WebDAV mark.
-      return 'http';
+      return 'webdav';
     case 'dropbox':
-      // Fallback to 'http' (globe). Future: dedicated Dropbox blue
-      // box mark.
-      return 'http';
+      return 'dropbox';
     case 'azure_blob':
-      // Fallback to 'http' (globe). Future: Azure cloud icon.
-      return 'http';
+      return 'azure';
     case 'one_drive':
-      // Fallback to 'http' (globe). Future: OneDrive cloud icon.
-      return 'http';
+      return 'onedrive';
   }
 }
 
