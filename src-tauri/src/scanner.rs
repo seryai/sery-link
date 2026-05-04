@@ -234,6 +234,10 @@ pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String
         // result; the download-on-rescan flow lands in a follow-up
         // slice that resolves to ~/.seryai/sftp-cache/<source_id>/.
         SourceKind::Sftp { .. } => None,
+        // F44: same as Sftp — WebDAV scans go through
+        // rescan_webdav_source which downloads to webdav-cache and
+        // runs the local scanner there.
+        SourceKind::WebDav { .. } => None,
     }
 }
 

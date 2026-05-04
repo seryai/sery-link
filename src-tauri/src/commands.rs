@@ -3002,20 +3002,29 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::Https { url }
             | crate::sources::SourceKind::S3 { url } => Some(url.clone()),
             crate::sources::SourceKind::GoogleDrive { .. } => None,
-            // SFTP cleanup happens separately below via sftp_creds::delete
-            // — there's no URL-keyed mirror to invalidate.
+            // SFTP / WebDAV cleanup happens separately below via
+            // their respective creds::delete — neither has a
+            // URL-keyed mirror to invalidate.
             crate::sources::SourceKind::Sftp { .. } => None,
+            crate::sources::SourceKind::WebDav { .. } => None,
         });
 
-    // Pull the source_id-keyed SFTP entry out of the keychain too,
-    // matching the dual-cleanup invariant (audit B1 of the F42
-    // remove-cleanup work). Best-effort: a missing entry is fine.
-    let is_sftp = config
+    // Pull the source_id-keyed SFTP / WebDAV keychain entries out
+    // too, matching the dual-cleanup invariant. Best-effort: a
+    // missing entry is fine.
+    let removed_kind = config
         .sources
         .iter()
         .find(|s| s.id == id)
-        .map(|s| matches!(s.kind, crate::sources::SourceKind::Sftp { .. }))
-        .unwrap_or(false);
+        .map(|s| s.kind.clone());
+    let is_sftp = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::Sftp { .. })
+    );
+    let is_webdav = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::WebDav { .. })
+    );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
     config.save().map_err(|e| e.to_string())?;
@@ -3032,6 +3041,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     if is_sftp {
         let _ = crate::sftp_creds::delete(&id);
+    }
+    if is_webdav {
+        let _ = crate::webdav_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
     Ok(())
@@ -3223,6 +3235,148 @@ pub async fn rescan_sftp_source(
     let duration_ms = started.elapsed().as_millis() as u64;
 
     // Phase 3: persist the stats on the source itself.
+    if let Ok(mut config) = Config::load() {
+        config.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
+    }
+
+    Ok(serde_json::json!({
+        "datasets": dataset_count,
+        "columns": column_count,
+        "total_bytes": total_bytes,
+        "duration_ms": duration_ms,
+        "downloaded": downloaded,
+        "cache_dir": cache_path_str,
+    }))
+}
+
+/// F44 — pre-flight test for WebDAV credentials.
+#[tauri::command]
+pub async fn test_webdav_credentials(
+    server_url: String,
+    auth: crate::webdav::WebDavAuth,
+) -> Result<(), String> {
+    let creds = crate::webdav::WebDavCredentials {
+        server_url: server_url.trim().to_string(),
+        auth,
+    };
+    crate::webdav::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// F44 — kind-specific add for WebDAV sources. Pre-flight runs a
+/// PROPFIND Depth=0 to confirm the server is alive + creds work.
+/// Returns the new source's id.
+#[tauri::command]
+pub async fn add_webdav_source(
+    server_url: String,
+    base_path: String,
+    auth: crate::webdav::WebDavAuth,
+) -> Result<String, String> {
+    let creds = crate::webdav::WebDavCredentials {
+        server_url: server_url.trim().to_string(),
+        auth,
+    };
+    if !creds.is_valid() {
+        return Err(
+            "WebDAV credentials need server URL and an auth payload".to_string(),
+        );
+    }
+    // Pre-flight before persisting.
+    crate::webdav::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let trimmed_base = base_path.trim().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: format!("{}{}", creds.server_url, trimmed_base),
+        kind: crate::sources::SourceKind::WebDav {
+            server_url: creds.server_url.clone(),
+            base_path: trimmed_base,
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+
+    if returned_id == source_id {
+        crate::webdav_creds::save(&source_id, &creds).map_err(|e| e.to_string())?;
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+/// F44 slice 2 — full rescan of a WebDAV source. Mirrors
+/// rescan_sftp_source: walk + download to
+/// `~/.seryai/webdav-cache/<source_id>/` then run the local
+/// scanner. Full re-download every call.
+#[tauri::command]
+pub async fn rescan_webdav_source(
+    source_id: String,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("No source with id {source_id:?}"))?
+        .clone();
+    let base_path = match &source.kind {
+        crate::sources::SourceKind::WebDav { base_path, .. } => base_path.clone(),
+        _ => {
+            return Err(format!(
+                "Source {source_id:?} is not a WebDAV source"
+            ))
+        }
+    };
+    drop(config);
+
+    let creds = crate::webdav_creds::load(&source_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "No WebDAV credentials stored for this source — re-add or use \
+             Edit credentials"
+                .to_string()
+        })?;
+
+    let (cache_dir, downloaded) =
+        crate::webdav::walk_and_download(&creds, &base_path, &source_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let datasets = crate::scanner::scan_folder(&cache_path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let dataset_count = datasets.len() as u64;
+    let column_count: u64 = datasets
+        .iter()
+        .map(|d| d.schema.len() as u64)
+        .sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let duration_ms = started.elapsed().as_millis() as u64;
+
     if let Ok(mut config) = Config::load() {
         config.update_source_scan_stats(
             &source_id,

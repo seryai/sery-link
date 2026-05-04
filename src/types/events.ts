@@ -286,6 +286,13 @@ export type SourceKind =
       port: number;
       username: string;
       base_path: string;
+    }
+  | {
+      // F44: WebDAV server. Auth (Anonymous / Basic / Digest) in
+      // the keychain via webdav_creds; only metadata here.
+      kind: 'web_dav';
+      server_url: string;
+      base_path: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */

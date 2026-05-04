@@ -31,6 +31,8 @@ mod scanner;
 mod sftp;
 mod sftp_creds;
 mod sources;
+mod webdav;
+mod webdav_creds;
 mod url;
 mod schema_diff;
 mod schema_notifications;
@@ -218,6 +220,9 @@ pub fn run() {
             commands::add_sftp_source,
             commands::test_sftp_credentials,
             commands::rescan_sftp_source,
+            commands::add_webdav_source,
+            commands::test_webdav_credentials,
+            commands::rescan_webdav_source,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

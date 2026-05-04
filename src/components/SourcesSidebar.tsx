@@ -152,15 +152,19 @@ export function SourcesSidebar() {
 
   const onRescan = async (source: DataSource) => {
     setMenu(null);
-    // F43 slice 2: SFTP rescan is kind-aware — runs the
-    // download-then-scan flow via rescan_sftp_source, which
-    // pulls files to ~/.seryai/sftp-cache/<id>/ and then runs
-    // the local scanner against the cache.
-    if (source.kind.kind === 'sftp') {
+    // F43 / F44 slice 2: SFTP + WebDAV rescans are kind-aware —
+    // run the download-then-scan flow via their respective
+    // rescan_*_source command, which pulls files to a per-source
+    // cache dir and then runs the local scanner against it.
+    if (source.kind.kind === 'sftp' || source.kind.kind === 'web_dav') {
+      const rescanCommand =
+        source.kind.kind === 'sftp'
+          ? 'rescan_sftp_source'
+          : 'rescan_webdav_source';
       setBusy(true);
       try {
         toast.success(`Rescanning "${source.name}" (downloading…)`);
-        await invoke('rescan_sftp_source', { sourceId: source.id });
+        await invoke(rescanCommand, { sourceId: source.id });
         await reloadConfig();
         toast.success(`Rescan complete for "${source.name}"`);
       } catch (err) {
@@ -218,11 +222,18 @@ export function SourcesSidebar() {
    *  scanner, until the Drive adapter rewires through DataSource. */
   const onScanAll = async () => {
     const sftpTargets = sources.filter((s) => s.kind.kind === 'sftp');
+    const webdavTargets = sources.filter((s) => s.kind.kind === 'web_dav');
     const pathTargets = sources
-      .filter((s) => s.kind.kind !== 'sftp' && s.kind.kind !== 'google_drive')
+      .filter(
+        (s) =>
+          s.kind.kind !== 'sftp' &&
+          s.kind.kind !== 'web_dav' &&
+          s.kind.kind !== 'google_drive',
+      )
       .map((s) => ({ source: s, key: scanKeyOf(s) }))
       .filter((t): t is { source: DataSource; key: string } => t.key !== null);
-    const total = sftpTargets.length + pathTargets.length;
+    const total =
+      sftpTargets.length + webdavTargets.length + pathTargets.length;
     if (total === 0) {
       toast.error('No scannable sources');
       return;
@@ -230,8 +241,8 @@ export function SourcesSidebar() {
     toast.success(`Rescanning ${total} source(s)…`);
     // Fire-and-forget: each invoke returns when the scanner ACK's;
     // scan_progress events drive the StatusPill updates for path-
-    // keyed scans. SFTP scans don't emit live events yet (slice 3
-    // polish) — the toast confirmation is the user feedback.
+    // keyed scans. SFTP / WebDAV scans don't emit live events yet
+    // (slice 3 polish) — the toast confirmation is the user feedback.
     for (const { key } of pathTargets) {
       invoke('rescan_folder', { folderPath: key }).catch((err) => {
         console.error(`Scan-all failed for ${key}:`, err);
@@ -240,6 +251,11 @@ export function SourcesSidebar() {
     for (const source of sftpTargets) {
       invoke('rescan_sftp_source', { sourceId: source.id }).catch((err) => {
         console.error(`Scan-all SFTP failed for ${source.id}:`, err);
+      });
+    }
+    for (const source of webdavTargets) {
+      invoke('rescan_webdav_source', { sourceId: source.id }).catch((err) => {
+        console.error(`Scan-all WebDAV failed for ${source.id}:`, err);
       });
     }
   };

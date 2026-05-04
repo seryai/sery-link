@@ -66,9 +66,20 @@ pub enum SourceKind {
         /// mirrors this hierarchy locally.
         base_path: String,
     },
-    // F44, F46-F49 add new variants here. Each plugs into the same
-    // sidebar / scanner / cache abstractions; only the kind-specific
-    // credential payload + REST or filesystem layer differs.
+
+    /// F44: WebDAV server. Server URL + base_path live here;
+    /// auth (Anonymous / Basic / Digest) lives in the keychain via
+    /// `webdav_creds`, keyed on source_id. Files are downloaded to
+    /// `~/.seryai/webdav-cache/<source_id>/` on rescan.
+    WebDav {
+        /// Server base URL — e.g. `https://nc.example.com/remote.php/dav/files/<user>/`
+        /// for Nextcloud, `https://dav.example.com/` for generic.
+        server_url: String,
+        /// Path under server_url to walk recursively. Use `/` to
+        /// walk the entire tree.
+        base_path: String,
+    },
+    // F46-F49 add new variants here.
 }
 
 fn default_sftp_port() -> u16 {
@@ -211,6 +222,18 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
             // Friendly default: "host:base_path", e.g.
             // "fileserver:/home/data". User can rename anytime.
             format!("{}:{}", host, base_path)
+        }
+        SourceKind::WebDav {
+            server_url,
+            base_path,
+        } => {
+            // Friendly default: just the host portion of the URL +
+            // base_path, e.g. "nc.example.com:/Documents".
+            let host = url::Url::parse(server_url)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| server_url.clone());
+            format!("{}{}", host, base_path)
         }
     }
 }

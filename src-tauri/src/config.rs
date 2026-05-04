@@ -376,9 +376,11 @@ impl Config {
                     Some(url.clone())
                 }
                 SourceKind::GoogleDrive { .. } => None,
-                // SFTP entries aren't represented in watched_folders
-                // (no path-mirror), so no migration interaction.
+                // SFTP / WebDAV entries aren't represented in
+                // watched_folders (no path-mirror), so no migration
+                // interaction.
                 SourceKind::Sftp { .. } => None,
+                SourceKind::WebDav { .. } => None,
             })
             .collect();
 
@@ -566,6 +568,10 @@ impl Config {
             SourceKind::Sftp {
                 host, port, base_path, ..
             } => Some(format!("sftp://{}:{}{}", host, port, base_path)),
+            SourceKind::WebDav {
+                server_url,
+                base_path,
+            } => Some(format!("webdav::{}|{}", server_url, base_path)),
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -577,6 +583,10 @@ impl Config {
                 SourceKind::Sftp {
                     host, port, base_path, ..
                 } => format!("sftp://{}:{}{}", host, port, base_path) == *p,
+                SourceKind::WebDav {
+                    server_url,
+                    base_path,
+                } => format!("webdav::{}|{}", server_url, base_path) == *p,
             }) {
                 return existing.id.clone();
             }
@@ -651,8 +661,8 @@ impl Config {
         };
 
         // Find the path/url that mirrors this source in watched_folders
-        // so we can drop that too. Drive + SFTP return None — neither
-        // is represented in watched_folders by design.
+        // so we can drop that too. Drive + SFTP + WebDAV return None
+        // — none of those are represented in watched_folders by design.
         let mirror_path: Option<String> = match &removed.kind {
             SourceKind::Local { path, .. } => {
                 Some(path.to_string_lossy().to_string())
@@ -662,6 +672,7 @@ impl Config {
             }
             SourceKind::GoogleDrive { .. } => None,
             SourceKind::Sftp { .. } => None,
+            SourceKind::WebDav { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);
