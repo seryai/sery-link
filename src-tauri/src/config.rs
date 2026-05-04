@@ -376,6 +376,9 @@ impl Config {
                     Some(url.clone())
                 }
                 SourceKind::GoogleDrive { .. } => None,
+                // SFTP entries aren't represented in watched_folders
+                // (no path-mirror), so no migration interaction.
+                SourceKind::Sftp { .. } => None,
             })
             .collect();
 
@@ -531,6 +534,10 @@ impl Config {
     /// or when a kind-specific add command races with the
     /// incremental migration.
     pub fn add_source(&mut self, mut source: DataSource) -> String {
+        // Sftp identity = host:port:base_path (no other path/url
+        // mirror exists). Local/Https/S3 use their respective path
+        // or url. Drive intentionally allows multiple entries
+        // (multi-account future).
         let needle: Option<String> = match &source.kind {
             SourceKind::Local { path, .. } => {
                 Some(path.to_string_lossy().to_string())
@@ -539,6 +546,9 @@ impl Config {
                 Some(url.clone())
             }
             SourceKind::GoogleDrive { .. } => None,
+            SourceKind::Sftp {
+                host, port, base_path, ..
+            } => Some(format!("sftp://{}:{}{}", host, port, base_path)),
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -547,6 +557,9 @@ impl Config {
                 }
                 SourceKind::Https { url } | SourceKind::S3 { url } => url == p,
                 SourceKind::GoogleDrive { .. } => false,
+                SourceKind::Sftp {
+                    host, port, base_path, ..
+                } => format!("sftp://{}:{}{}", host, port, base_path) == *p,
             }) {
                 return existing.id.clone();
             }
@@ -621,8 +634,8 @@ impl Config {
         };
 
         // Find the path/url that mirrors this source in watched_folders
-        // so we can drop that too. Drive returns None — Drive sources
-        // aren't represented in watched_folders.
+        // so we can drop that too. Drive + SFTP return None — neither
+        // is represented in watched_folders by design.
         let mirror_path: Option<String> = match &removed.kind {
             SourceKind::Local { path, .. } => {
                 Some(path.to_string_lossy().to_string())
@@ -631,6 +644,7 @@ impl Config {
                 Some(url.clone())
             }
             SourceKind::GoogleDrive { .. } => None,
+            SourceKind::Sftp { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);

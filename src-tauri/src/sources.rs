@@ -51,9 +51,28 @@ pub enum SourceKind {
     /// (today always the literal `"default"`; multi-account is a
     /// future feature).
     GoogleDrive { account_id: String },
-    // F43-F49 add new variants here. Each plugs into the same
+
+    /// F43: SFTP server. Connection metadata (host / port / username
+    /// / base_path) lives here; auth (password OR private-key path)
+    /// lives in the keychain via `sftp_creds`, keyed on source_id.
+    /// Files are downloaded to `~/.seryai/sftp-cache/<source_id>/`
+    /// on rescan and the cache dir feeds the path-keyed scanner.
+    Sftp {
+        host: String,
+        #[serde(default = "default_sftp_port")]
+        port: u16,
+        username: String,
+        /// Absolute remote path to walk recursively. The cache
+        /// mirrors this hierarchy locally.
+        base_path: String,
+    },
+    // F44, F46-F49 add new variants here. Each plugs into the same
     // sidebar / scanner / cache abstractions; only the kind-specific
     // credential payload + REST or filesystem layer differs.
+}
+
+fn default_sftp_port() -> u16 {
+    22
 }
 
 /// One bookmarked source in the Sources sidebar. Future surfaces
@@ -187,6 +206,11 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
             } else {
                 format!("Google Drive · {}", account_id)
             }
+        }
+        SourceKind::Sftp { host, base_path, .. } => {
+            // Friendly default: "host:base_path", e.g.
+            // "fileserver:/home/data". User can rename anytime.
+            format!("{}:{}", host, base_path)
         }
     }
 }

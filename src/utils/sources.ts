@@ -107,14 +107,31 @@ export function sourceKindLabel(source: DataSource): string {
       return 'S3';
     case 'google_drive':
       return 'Google Drive';
+    case 'sftp':
+      return 'SFTP';
   }
 }
+
+/** F43: SFTP credential payload — discriminated union mirroring the
+ *  Rust SftpAuth enum's serde(tag = "type", rename_all = snake_case)
+ *  shape. Either a password OR a private key path (with optional
+ *  passphrase). */
+export type SftpAuth =
+  | { type: 'password'; password: string }
+  | {
+      type: 'private_key';
+      private_key_path: string;
+      passphrase?: string;
+    };
 
 /** Bridge from the new structured `SourceKind` to the legacy string
  *  enum used by `<SourceIcon kind=...>`. The legacy enum predates
  *  F42 and is still consumed by FolderList; we map across so the
  *  Sources sidebar can reuse the same icon set without duplicating
- *  the SVGs. */
+ *  the SVGs. SFTP doesn't have a brand mark in SourceIcon yet — it
+ *  falls through to the local-folder icon which is the closest
+ *  semantic match (a folder you can see files inside). Replace with
+ *  a dedicated SSH-terminal mark in a polish slice. */
 export function legacyKindStringOf(
   source: DataSource,
 ): 'local' | 's3' | 'gdrive' | 'http' {
@@ -127,13 +144,18 @@ export function legacyKindStringOf(
       return 'gdrive';
     case 'https':
       return 'http';
+    case 'sftp':
+      // Fallback to 'local' icon visually — a remote folder you
+      // browse like a local one. Future: dedicated SSH terminal mark.
+      return 'local';
   }
 }
 
 /** Return the path/url string used as the `scansInFlight` key for
  *  this source. Mirrors the Rust resolve_source_path semantics:
  *  Local → path, Https/S3 → url, Drive → null (Drive scans don't go
- *  through the path-keyed scanner). */
+ *  through the path-keyed scanner), SFTP → null until the
+ *  download-on-rescan flow lands. */
 export function scanKeyOf(source: DataSource): string | null {
   switch (source.kind.kind) {
     case 'local':
@@ -142,6 +164,7 @@ export function scanKeyOf(source: DataSource): string | null {
     case 's3':
       return source.kind.url;
     case 'google_drive':
+    case 'sftp':
       return null;
   }
 }

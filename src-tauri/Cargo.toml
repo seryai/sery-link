@@ -105,6 +105,14 @@ sery-mcp = "0.4"
 rmcp = { version = "1.5", features = ["transport-io"] }
 num_cpus = "1.16"
 
+# F43: SFTP source kind. ssh2 is the libssh2 binding; mature + sync
+# (matches our spawn_blocking pattern for S3 pre-flight). The
+# vendored-openssl + zlib-ng-compat features bundle the C deps so
+# release builds don't need brew install libssh2 on the user's
+# machine. Used in sftp.rs for connect / list / download against
+# user-provided SFTP servers.
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
 
 [dev-dependencies]
 tempfile = "3.8"

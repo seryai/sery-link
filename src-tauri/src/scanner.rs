@@ -229,6 +229,11 @@ pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String
         SourceKind::Local { path, .. } => Some(path.to_string_lossy().to_string()),
         SourceKind::Https { url } | SourceKind::S3 { url } => Some(url.clone()),
         SourceKind::GoogleDrive { .. } => None,
+        // F43: SFTP path-keyed scanner integration is deferred.
+        // Returning None means scan_source(Sftp) yields an empty
+        // result; the download-on-rescan flow lands in a follow-up
+        // slice that resolves to ~/.seryai/sftp-cache/<source_id>/.
+        SourceKind::Sftp { .. } => None,
     }
 }
 

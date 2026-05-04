@@ -32,6 +32,7 @@ import { useToast } from './Toast';
 import { SourceIcon } from './SourceIcon';
 import { GdriveBrowserPanel } from './GdriveBrowserPanel';
 import { isS3Url } from '../utils/url';
+import type { SftpAuth } from '../utils/sources';
 
 interface AddSourceModalProps {
   open: boolean;
@@ -50,10 +51,9 @@ interface S3Credentials {
   url_style?: 'path' | 'vhost';
 }
 
-type ImplementedKind = 'local' | 'https' | 's3' | 'gdrive';
+type ImplementedKind = 'local' | 'https' | 's3' | 'gdrive' | 'sftp';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
 type ComingSoonKind =
-  | 'sftp'
   | 'webdav'
   | 'azure'
   | 'dropbox'
@@ -70,6 +70,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'https', label: 'HTTPS URL', description: 'Public Parquet / CSV / Excel' },
   { kind: 's3', label: 'Amazon S3', description: 'Bucket or prefix with creds' },
   { kind: 'gdrive', label: 'Google Drive', description: 'Folder via OAuth' },
+  { kind: 'sftp', label: 'SFTP', description: 'Password or SSH key' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -83,7 +84,6 @@ const S3_COMPATIBLE: ProtocolTile[] = [
 ];
 
 const COMING_SOON: ProtocolTile[] = [
-  { kind: 'sftp', label: 'SFTP', description: 'Coming in v0.7+' },
   { kind: 'webdav', label: 'WebDAV', description: 'Coming in v0.7+' },
   { kind: 'azure', label: 'Azure Blob', description: 'Coming in v0.7+' },
   { kind: 'dropbox', label: 'Dropbox', description: 'Coming in v0.7+' },
@@ -134,7 +134,8 @@ type Stage =
   // 'url' covers HTTPS, S3, and S3-compatible providers (the form
   // auto-detects S3 by URL scheme; presets fill endpoint/region).
   | { kind: 'url'; initial?: UrlStageInitial }
-  | { kind: 'gdrive' };
+  | { kind: 'gdrive' }
+  | { kind: 'sftp' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -213,6 +214,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickLocal={onPickLocal}
               onPickUrl={() => setStage({ kind: 'url' })}
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
+              onPickSftp={() => setStage({ kind: 'sftp' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -230,6 +232,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           )}
           {stage.kind === 'gdrive' && (
             <GdriveBrowserPanel onClose={closeAll} />
+          )}
+          {stage.kind === 'sftp' && (
+            <SftpStage
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
           )}
         </div>
       </div>
@@ -257,7 +268,9 @@ function ModalHeader({
         ? providerLabel
           ? `Add a ${providerLabel} source`
           : 'Add an HTTPS or S3 source'
-        : 'Connect Google Drive';
+        : stage.kind === 'sftp'
+          ? 'Add an SFTP source'
+          : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -265,7 +278,9 @@ function ModalHeader({
         ? providerLabel
           ? `${providerLabel} speaks the S3 protocol — Sery talks to it via DuckDB's S3 client. Credentials live in your OS keychain.`
           : 'Public URLs and S3 buckets read schema locally. Credentials live in your OS keychain — never on Sery servers.'
-        : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+        : stage.kind === 'sftp'
+          ? "Files are pulled to a local cache via SSH; the connection's auth credentials live in your OS keychain."
+          : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -305,12 +320,14 @@ function PickerStage({
   onPickLocal,
   onPickUrl,
   onPickGdrive,
+  onPickSftp,
   onPickS3Compatible,
 }: {
   busy: boolean;
   onPickLocal: () => void;
   onPickUrl: () => void;
   onPickGdrive: () => void;
+  onPickSftp: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -332,6 +349,9 @@ function PickerStage({
                   break;
                 case 'gdrive':
                   onPickGdrive();
+                  break;
+                case 'sftp':
+                  onPickSftp();
                   break;
               }
             }}
@@ -628,6 +648,267 @@ function CredField({
   );
 }
 
+// ─── Stage B — SFTP form ───────────────────────────────────────────
+
+function SftpStage({
+  onAdded,
+  onCancel,
+}: {
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('22');
+  const [username, setUsername] = useState('');
+  const [basePath, setBasePath] = useState('/');
+  const [authMode, setAuthMode] = useState<'password' | 'private_key'>(
+    'password',
+  );
+  const [password, setPassword] = useState('');
+  const [keyPath, setKeyPath] = useState('~/.ssh/id_ed25519');
+  const [passphrase, setPassphrase] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const buildAuth = (): SftpAuth | null => {
+    if (authMode === 'password') {
+      if (!password) return null;
+      return { type: 'password', password };
+    }
+    if (!keyPath.trim()) return null;
+    return {
+      type: 'private_key',
+      private_key_path: keyPath.trim(),
+      passphrase: passphrase || undefined,
+    };
+  };
+
+  const portNumber = parseInt(port, 10);
+  const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const auth = buildAuth();
+  const canSubmit =
+    !busy &&
+    host.trim() !== '' &&
+    username.trim() !== '' &&
+    basePath.trim() !== '' &&
+    portValid &&
+    auth !== null;
+
+  const test = async () => {
+    if (!auth) return;
+    setError(null);
+    setTestStatus(null);
+    setBusy(true);
+    try {
+      await invoke<void>('test_sftp_credentials', {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        auth,
+      });
+      setTestStatus('ok');
+      toast.success('Connection OK');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!auth) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_sftp_source', {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        basePath: basePath.trim(),
+        auth,
+      });
+      toast.success('SFTP source added');
+      // Note: scanner integration for SFTP (download-on-rescan) is
+      // deferred. The new source appears in the sidebar but its
+      // first scan is a no-op until that slice ships.
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <CredField
+            label="Host"
+            value={host}
+            onChange={(v) => {
+              setHost(v);
+              setTestStatus(null);
+            }}
+            placeholder="fileserver.example.com"
+          />
+        </div>
+        <CredField
+          label="Port"
+          value={port}
+          onChange={(v) => {
+            setPort(v);
+            setTestStatus(null);
+          }}
+          placeholder="22"
+        />
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <CredField
+          label="Username"
+          value={username}
+          onChange={(v) => {
+            setUsername(v);
+            setTestStatus(null);
+          }}
+          placeholder="alice"
+        />
+        <CredField
+          label="Base path"
+          value={basePath}
+          onChange={setBasePath}
+          placeholder="/home/alice/data"
+        />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Authentication
+        </div>
+        <div className="mb-3 flex gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('password');
+              setTestStatus(null);
+            }}
+            className={`rounded-md border px-3 py-1 transition-colors ${
+              authMode === 'password'
+                ? 'border-purple-500 bg-purple-600 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+            }`}
+          >
+            Password
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('private_key');
+              setTestStatus(null);
+            }}
+            className={`rounded-md border px-3 py-1 transition-colors ${
+              authMode === 'private_key'
+                ? 'border-purple-500 bg-purple-600 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+            }`}
+          >
+            SSH key
+          </button>
+        </div>
+        {authMode === 'password' ? (
+          <CredField
+            label="Password"
+            value={password}
+            onChange={(v) => {
+              setPassword(v);
+              setTestStatus(null);
+            }}
+            type="password"
+            placeholder="••••••••"
+          />
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <CredField
+              label="Private key path"
+              value={keyPath}
+              onChange={(v) => {
+                setKeyPath(v);
+                setTestStatus(null);
+              }}
+              placeholder="~/.ssh/id_ed25519"
+            />
+            <CredField
+              label="Passphrase (optional)"
+              value={passphrase}
+              onChange={setPassphrase}
+              type="password"
+              placeholder="Only if the key is encrypted"
+            />
+          </div>
+        )}
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. The private key file itself
+          stays on disk; Sery only stores its path. Test the
+          connection before saving — bad creds surface here, not as
+          a silent empty rescan.
+        </p>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {testStatus === 'ok' && !error && (
+        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Connection OK — ready to save.
+        </div>
+      )}
+
+      <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+        <strong>Note:</strong> SFTP scanning ships in a follow-up
+        release. The source will be saved and bookmarked, but rescan
+        is a no-op until then. The bookmark + creds work today so
+        you can register your servers in advance.
+      </div>
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <button
+          onClick={test}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          {busy && testStatus !== 'ok' && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          Test connection
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Add SFTP source
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Helper: protocol tile ─────────────────────────────────────────
 
 function ProtocolCard({
@@ -695,6 +976,11 @@ function legacyIconKindForTile(
       return 's3';
     case 'gdrive':
       return 'gdrive';
+    case 'sftp':
+      // No dedicated SSH/terminal icon yet — fall back to the local-
+      // folder icon since SFTP is "a folder you can browse remotely."
+      // Polish slice can add a real SSH mark.
+      return 'local';
     default:
       return null;
   }

@@ -3002,7 +3002,20 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::Https { url }
             | crate::sources::SourceKind::S3 { url } => Some(url.clone()),
             crate::sources::SourceKind::GoogleDrive { .. } => None,
+            // SFTP cleanup happens separately below via sftp_creds::delete
+            // — there's no URL-keyed mirror to invalidate.
+            crate::sources::SourceKind::Sftp { .. } => None,
         });
+
+    // Pull the source_id-keyed SFTP entry out of the keychain too,
+    // matching the dual-cleanup invariant (audit B1 of the F42
+    // remove-cleanup work). Best-effort: a missing entry is fine.
+    let is_sftp = config
+        .sources
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| matches!(s.kind, crate::sources::SourceKind::Sftp { .. }))
+        .unwrap_or(false);
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
     config.save().map_err(|e| e.to_string())?;
@@ -3016,6 +3029,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             let _ = crate::remote_creds::delete(&url);
         }
         let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&url));
+    }
+    if is_sftp {
+        let _ = crate::sftp_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
     Ok(())
@@ -3042,6 +3058,111 @@ pub async fn get_s3_credentials_for_url(
     url: String,
 ) -> Result<Option<crate::remote_creds::S3Credentials>, String> {
     crate::remote_creds::load(&url).map_err(|e| e.to_string())
+}
+
+/// F43 — kind-specific add for SFTP sources.
+///
+/// Persists the connection metadata in `config.sources` (as a
+/// `Sftp` SourceKind) and the auth payload in the OS keychain
+/// keyed on the new source_id. Pre-flight runs the same
+/// connection + SFTP-channel-open as a real scan would, so bad
+/// host / bad creds / SFTP-disabled-on-server all surface here
+/// inline instead of as a silent empty rescan minutes later.
+///
+/// Returns the new source's id.
+///
+/// Scanner integration (download-on-rescan) is deferred to a
+/// follow-up slice. Until that lands, the source appears in the
+/// sidebar with kind=Sftp but its row stays in "pending" state
+/// because resolve_source_path returns None for Sftp.
+#[tauri::command]
+pub async fn add_sftp_source(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    base_path: String,
+    auth: crate::sftp::SftpAuth,
+) -> Result<String, String> {
+    let port = port.unwrap_or(22);
+    let creds = crate::sftp::SftpCredentials {
+        host: host.trim().to_string(),
+        port,
+        username: username.trim().to_string(),
+        auth,
+    };
+    if !creds.is_valid() {
+        return Err(
+            "SFTP credentials need host, username, and an auth payload".to_string(),
+        );
+    }
+
+    // Pre-flight: connect + open SFTP channel before persisting
+    // anything. Don't leave an orphan source/keychain entry on bad
+    // creds.
+    let creds_for_test = creds.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::sftp::test_credentials_blocking(&creds_for_test)
+    })
+    .await
+    .map_err(|e| format!("SFTP test task failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Pre-flight passed — now persist.
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: format!("{}:{}", creds.host, base_path.trim()),
+        kind: crate::sources::SourceKind::Sftp {
+            host: creds.host.clone(),
+            port: creds.port,
+            username: creds.username.clone(),
+            base_path: base_path.trim().to_string(),
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0, // overwritten by add_source
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+
+    // If add_source returned a different id, that means the source
+    // was already registered (deduped on host:port:base_path). Skip
+    // saving creds in that case — the existing creds entry still
+    // applies, and we don't want to overwrite the user's existing
+    // keychain entry from a duplicate Add click.
+    if returned_id == source_id {
+        crate::sftp_creds::save(&source_id, &creds).map_err(|e| e.to_string())?;
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+/// F43 — pre-flight test for SFTP credentials, used by the
+/// AddSourceModal's Test connection button before the user
+/// commits the add. Returns Ok(()) on success; the error message
+/// on failure is what the form renders inline.
+#[tauri::command]
+pub async fn test_sftp_credentials(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    auth: crate::sftp::SftpAuth,
+) -> Result<(), String> {
+    let creds = crate::sftp::SftpCredentials {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(22),
+        username: username.trim().to_string(),
+        auth,
+    };
+    tokio::task::spawn_blocking(move || {
+        crate::sftp::test_credentials_blocking(&creds)
+    })
+    .await
+    .map_err(|e| format!("SFTP test task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// F42 Day 4 slice 2 — kind-specific add for Local sources.
