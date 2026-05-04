@@ -35,6 +35,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { AddSourceModal } from './AddSourceModal';
+import { EditS3CredentialsDialog } from './EditS3CredentialsDialog';
 import { SourceIcon, sourceIconBgClass } from './SourceIcon';
 import {
   groupSources,
@@ -81,6 +82,9 @@ export function SourcesSidebar() {
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [groupPickerSourceId, setGroupPickerSourceId] = useState<string | null>(
+    null,
+  );
+  const [editCredsSourceId, setEditCredsSourceId] = useState<string | null>(
     null,
   );
 
@@ -175,6 +179,12 @@ export function SourcesSidebar() {
     } catch (err) {
       toast.error(`Couldn't reveal: ${err}`);
     }
+  };
+
+  const onEditCredentials = (source: DataSource) => {
+    setMenu(null);
+    if (source.kind.kind !== 's3') return;
+    setEditCredsSourceId(source.id);
   };
 
   const onMoveToGroup = (source: DataSource) => {
@@ -403,6 +413,7 @@ export function SourcesSidebar() {
           onRename={onRename}
           onRescan={onRescan}
           onRevealInFinder={onRevealInFinder}
+          onEditCredentials={onEditCredentials}
           onMoveToGroup={onMoveToGroup}
           onRemove={onRemove}
         />
@@ -423,6 +434,13 @@ export function SourcesSidebar() {
             )
           }
           onCancel={() => setGroupPickerSourceId(null)}
+        />
+      )}
+      {editCredsSourceId && (
+        <EditS3CredentialsDialog
+          source={sources.find((s) => s.id === editCredsSourceId)!}
+          onClose={() => setEditCredsSourceId(null)}
+          onSaved={reloadConfig}
         />
       )}
     </div>
@@ -562,6 +580,7 @@ interface ContextMenuProps {
   onRename: (source: DataSource) => void;
   onRescan: (source: DataSource) => void;
   onRevealInFinder: (source: DataSource) => void;
+  onEditCredentials: (source: DataSource) => void;
   onMoveToGroup: (source: DataSource) => void;
   onRemove: (source: DataSource) => void;
 }
@@ -573,12 +592,14 @@ function ContextMenu({
   onRename,
   onRescan,
   onRevealInFinder,
+  onEditCredentials,
   onMoveToGroup,
   onRemove,
 }: ContextMenuProps) {
   // Stop propagation so clicks INSIDE the menu don't trigger the
   // outside-click close handler attached at window level.
   const isLocal = source.kind.kind === 'local';
+  const isS3 = source.kind.kind === 's3';
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -587,6 +608,11 @@ function ContextMenu({
     >
       <MenuItem onClick={() => onRescan(source)}>Rescan now</MenuItem>
       <MenuItem onClick={() => onRename(source)}>Rename…</MenuItem>
+      {isS3 && (
+        <MenuItem onClick={() => onEditCredentials(source)}>
+          Edit credentials…
+        </MenuItem>
+      )}
       <MenuItem onClick={() => onMoveToGroup(source)}>Move to group…</MenuItem>
       {isLocal && (
         <MenuItem onClick={() => onRevealInFinder(source)}>
