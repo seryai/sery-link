@@ -193,6 +193,45 @@ pub async fn scan_folder_with_events(
     .map_err(|e| AgentError::FileSystem(format!("Scan task failed: {}", e)))?
 }
 
+/// F42 Day 3: kind-aware scan entry point. Dispatches on the
+/// `SourceKind` discriminant to the existing path-based scanner,
+/// extracting the path / URL from the structured kind. New code
+/// (Tauri commands in Day 4) calls this; existing callers stay on
+/// `scan_folder_with_events` until Day 5-6 reroutes them.
+///
+/// Drive sources currently return an empty result — the Drive adapter
+/// rewires through this abstraction in a later slice when the
+/// gdrive_walker module is refactored to consume `DataSource`.
+pub async fn scan_source(
+    source: &crate::sources::DataSource,
+    walk_progress: Option<WalkProgressCb>,
+    progress: Option<ProgressCb>,
+    on_dataset: Option<DatasetCb>,
+) -> Result<Vec<DatasetMetadata>> {
+    match resolve_source_path(source) {
+        Some(path_or_url) => {
+            scan_folder_with_events(&path_or_url, walk_progress, progress, on_dataset).await
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Extract the path (Local) or URL (Https/S3) from a DataSource so
+/// downstream code can keep using the existing path-keyed scanners.
+/// Returns `None` for kinds whose scan path doesn't fit the path-as-
+/// string shape (Drive — its walk is in gdrive_walker.rs).
+///
+/// Pure + unit-testable; the async wrapper above doesn't add logic
+/// beyond delegating to scan_folder_with_events.
+pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String> {
+    use crate::sources::SourceKind;
+    match &source.kind {
+        SourceKind::Local { path, .. } => Some(path.to_string_lossy().to_string()),
+        SourceKind::Https { url } | SourceKind::S3 { url } => Some(url.clone()),
+        SourceKind::GoogleDrive { .. } => None,
+    }
+}
+
 /// URL-based "folder" scan. Dispatches on URL shape:
 ///   * Single-object URL → one HEAD probe + one DuckDB DESCRIBE.
 ///   * S3 listing URL (prefix or glob) → enumerate via `glob()` and
@@ -2045,4 +2084,95 @@ pub async fn sync_metadata_to_cloud(
 
     let result: serde_json::Value = response.json().await?;
     Ok(result)
+}
+
+// ─── F42 Day 3: scan_source dispatch tests ─────────────────────────
+//
+// Pure tests for `resolve_source_path` — the kind→string projection
+// the scan_source wrapper relies on. The async wrapper itself is
+// covered indirectly: it's a thin delegate to `scan_folder_with_events`
+// which has its own integration tests, with the only added logic
+// being this projection.
+
+#[cfg(test)]
+mod scan_source_tests {
+    use super::resolve_source_path;
+    use crate::sources::{DataSource, SourceKind};
+    use std::path::PathBuf;
+
+    fn ds_with_kind(kind: SourceKind) -> DataSource {
+        DataSource {
+            id: "test-id".to_string(),
+            name: "test".to_string(),
+            kind,
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 0,
+            group: None,
+        }
+    }
+
+    #[test]
+    fn local_source_resolves_to_filesystem_path() {
+        let src = ds_with_kind(SourceKind::Local {
+            path: PathBuf::from("/Users/me/Documents"),
+            recursive: true,
+            exclude_patterns: Vec::new(),
+            max_file_size_mb: 1024,
+        });
+        assert_eq!(
+            resolve_source_path(&src),
+            Some("/Users/me/Documents".to_string())
+        );
+    }
+
+    #[test]
+    fn https_source_resolves_to_url() {
+        let src = ds_with_kind(SourceKind::Https {
+            url: "https://example.com/data.csv".to_string(),
+        });
+        assert_eq!(
+            resolve_source_path(&src),
+            Some("https://example.com/data.csv".to_string())
+        );
+    }
+
+    #[test]
+    fn s3_source_resolves_to_url() {
+        let src = ds_with_kind(SourceKind::S3 {
+            url: "s3://my-bucket/data/".to_string(),
+        });
+        assert_eq!(
+            resolve_source_path(&src),
+            Some("s3://my-bucket/data/".to_string())
+        );
+    }
+
+    #[test]
+    fn drive_source_returns_none_pending_adapter_rewire() {
+        // Drive scans walk through gdrive_walker.rs, not the path-keyed
+        // scanner. Returning None here is intentional and documents
+        // the deferred work — a later slice adds the Drive→DataSource
+        // bridge. Until then, scan_source(drive) is an empty no-op,
+        // not a panic.
+        let src = ds_with_kind(SourceKind::GoogleDrive {
+            account_id: "default".to_string(),
+        });
+        assert_eq!(resolve_source_path(&src), None);
+    }
+
+    #[test]
+    fn local_path_with_unicode_resolves_losslessly() {
+        let src = ds_with_kind(SourceKind::Local {
+            path: PathBuf::from("/Users/me/数据 folder"),
+            recursive: true,
+            exclude_patterns: Vec::new(),
+            max_file_size_mb: 1024,
+        });
+        assert_eq!(
+            resolve_source_path(&src),
+            Some("/Users/me/数据 folder".to_string())
+        );
+    }
 }
