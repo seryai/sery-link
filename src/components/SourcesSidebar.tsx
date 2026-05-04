@@ -248,7 +248,26 @@ export function SourcesSidebar() {
         await reloadConfig();
         toast.success(rescanCompletionMessage(source.name, result));
       } catch (err) {
-        toast.error(`Rescan failed: ${err}`);
+        const errStr = String(err);
+        // OneDrive token rotation: when Microsoft revokes the
+        // refresh_token (password change, app permissions revoked,
+        // tenant policy enforcement, …), rescan fails with one of
+        // these specific messages from onedrive.rs. Open the
+        // Reauth dialog automatically — saves the user from
+        // discovering "Re-authorize…" in the context menu.
+        if (
+          source.kind.kind === 'one_drive' &&
+          /re-auth needed|token rejected|refresh failed|access_denied/i.test(
+            errStr,
+          )
+        ) {
+          toast.error(
+            `"${source.name}" needs to re-authorize — opening sign-in…`,
+          );
+          setReauthSourceId(source.id);
+        } else {
+          toast.error(`Rescan failed: ${errStr}`);
+        }
       } finally {
         clearScanProgress(source.id);
         setBusy(false);
