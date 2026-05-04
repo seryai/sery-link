@@ -311,7 +311,7 @@ fn sanitize_path_component(s: &str) -> String {
 
 /// Per-file progress callback. Same shape as the other cache-and-
 /// scan kinds.
-pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
 /// Walk + download every supported file under `base_path`. Skips
 /// files whose size + server_modified match the previous walk's
@@ -338,87 +338,128 @@ pub async fn walk_and_download(
     let mut manifest = SyncManifest::load(&cache_dir);
 
     let listing = list_recursive(creds, base_path, MAX_DROPBOX_FILES).await?;
-    let total_supported = listing
-        .iter()
-        .filter(|f| {
-            PathBuf::from(&f.path_lower)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
-                .unwrap_or(false)
-        })
-        .count();
-    let mut downloaded = 0usize;
-    let mut considered = 0usize;
-    let mut current_keys: HashSet<String> = HashSet::new();
 
+    // Pre-pass: filter to supported files + compute the work list.
+    // Each work item carries the per-file values the task needs;
+    // doing this up front means the concurrent loop is purely
+    // I/O — no decisions, no shared mutable state for keys.
     let base_normalized = if base_path == "/" || base_path.is_empty() {
         "".to_string()
     } else {
         base_path.trim_end_matches('/').to_lowercase()
     };
 
-    for file in listing.iter() {
-        let path = PathBuf::from(&file.path_lower);
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        let supported = ext
-            .as_deref()
-            .map(crate::scanner::is_supported_ext)
-            .unwrap_or(false);
-        if !supported {
-            continue;
-        }
-
-        let rel_str = if base_normalized.is_empty() {
-            file.path_lower.trim_start_matches('/').to_string()
-        } else if let Some(s) = file.path_lower.strip_prefix(&base_normalized) {
-            s.trim_start_matches('/').to_string()
-        } else {
-            match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            }
-        };
-        let local_path = cache_dir.join(&rel_str);
-        let label = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-
-        // Key = path_lower (Dropbox guarantees stability).
-        // Mtime marker = server_modified (RFC 3339 string from API);
-        // empty sentinel when missing.
-        let key = file.path_lower.clone();
-        let mtime_marker = file
-            .server_modified
-            .clone()
-            .unwrap_or_else(|| "".to_string());
-        current_keys.insert(key.clone());
-
-        if manifest.needs_download(&key, file.size, &mtime_marker)
-            || !local_path.exists()
-        {
-            match download_file(creds, &file.path_lower, &local_path).await {
-                Ok(_) => {
-                    downloaded += 1;
-                    manifest.record(key, file.size, mtime_marker);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[dropbox] download failed for {}: {} — skipping",
-                        file.path_lower, e
-                    );
-                }
-            }
-        }
-        considered += 1;
-        if let Some(cb) = progress.as_ref() {
-            cb(considered, total_supported, label);
-        }
+    struct Work {
+        path_lower: String,
+        local_path: PathBuf,
+        label: String,
+        key: String,
+        mtime_marker: String,
+        size: u64,
     }
+    let work: Vec<Work> = listing
+        .iter()
+        .filter_map(|f| {
+            let path = PathBuf::from(&f.path_lower);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase());
+            if !ext
+                .as_deref()
+                .map(crate::scanner::is_supported_ext)
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            let rel_str = if base_normalized.is_empty() {
+                f.path_lower.trim_start_matches('/').to_string()
+            } else if let Some(s) = f.path_lower.strip_prefix(&base_normalized) {
+                s.trim_start_matches('/').to_string()
+            } else {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())?
+            };
+            let local_path = cache_dir.join(&rel_str);
+            let label = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            Some(Work {
+                path_lower: f.path_lower.clone(),
+                local_path,
+                label,
+                key: f.path_lower.clone(),
+                mtime_marker: f.server_modified.clone().unwrap_or_default(),
+                size: f.size,
+            })
+        })
+        .collect();
+
+    let total_supported = work.len();
+    let current_keys: HashSet<String> =
+        work.iter().map(|w| w.key.clone()).collect();
+
+    // Concurrent execution: up to MAX_CONCURRENT downloads in flight
+    // at once. Dropbox's API tolerates parallelism up to its
+    // per-app rate limit (~600 req/min for free accounts); 4
+    // concurrent saturates a typical home connection without
+    // tripping that. Manifest + counters live behind shared locks.
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    const MAX_CONCURRENT: usize = 4;
+
+    let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
+    let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let considered_ct = std::sync::Arc::new(AtomicUsize::new(0));
+
+    futures::stream::iter(work)
+        .for_each_concurrent(MAX_CONCURRENT, |w| {
+            let creds = creds.clone();
+            let manifest = manifest_mu.clone();
+            let downloaded = downloaded_ct.clone();
+            let considered = considered_ct.clone();
+            let progress = progress.clone();
+            async move {
+                let needs = {
+                    let m = manifest.lock().expect("manifest poisoned");
+                    m.needs_download(&w.key, w.size, &w.mtime_marker)
+                        || !w.local_path.exists()
+                };
+                if needs {
+                    match download_file(&creds, &w.path_lower, &w.local_path).await {
+                        Ok(_) => {
+                            downloaded.fetch_add(1, Ordering::Relaxed);
+                            let mut m = manifest.lock().expect("manifest poisoned");
+                            m.record(w.key.clone(), w.size, w.mtime_marker.clone());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[dropbox] download failed for {}: {} — skipping",
+                                w.path_lower, e
+                            );
+                        }
+                    }
+                }
+                let n = considered.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress.as_ref() {
+                    cb(n, total_supported, &w.label);
+                }
+            }
+        })
+        .await;
+
+    let downloaded = downloaded_ct.load(Ordering::Relaxed);
+    // Reclaim the manifest by replacing the Arc<Mutex<>> wrapper
+    // with the inner value. All tasks have completed by this point
+    // so the lock is uncontended.
+    let mut manifest = std::sync::Arc::try_unwrap(manifest_mu)
+        .expect("manifest still referenced — task didn't drop")
+        .into_inner()
+        .expect("manifest poisoned");
 
     // Drop stale entries + their cached files. Use the same path-
     // resolution rule we used on the way in.

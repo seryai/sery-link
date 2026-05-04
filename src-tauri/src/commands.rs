@@ -3241,7 +3241,7 @@ pub async fn rescan_sftp_source<R: Runtime>(
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();
     let progress_cb: crate::sftp::WalkProgressCb =
-        Box::new(move |current, total, file_label| {
+        std::sync::Arc::new(move |current, total, file_label| {
             crate::events::emit_scan_progress(
                 &app_for_progress,
                 crate::events::ScanProgress {
@@ -3554,7 +3554,7 @@ pub async fn rescan_onedrive_source<R: Runtime>(
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();
     let progress_cb: crate::onedrive::WalkProgressCb =
-        Box::new(move |current, total, file_label| {
+        std::sync::Arc::new(move |current, total, file_label| {
             crate::events::emit_scan_progress(
                 &app_for_progress,
                 crate::events::ScanProgress {
@@ -3717,7 +3717,7 @@ pub async fn rescan_azure_blob_source<R: Runtime>(
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();
     let progress_cb: crate::azure_blob::WalkProgressCb =
-        Box::new(move |current, total, file_label| {
+        std::sync::Arc::new(move |current, total, file_label| {
             crate::events::emit_scan_progress(
                 &app_for_progress,
                 crate::events::ScanProgress {
@@ -3874,7 +3874,7 @@ pub async fn rescan_dropbox_source<R: Runtime>(
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();
     let progress_cb: crate::dropbox::WalkProgressCb =
-        Box::new(move |current, total, file_label| {
+        std::sync::Arc::new(move |current, total, file_label| {
             crate::events::emit_scan_progress(
                 &app_for_progress,
                 crate::events::ScanProgress {
@@ -4035,7 +4035,7 @@ pub async fn rescan_webdav_source<R: Runtime>(
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();
     let progress_cb: crate::webdav::WalkProgressCb =
-        Box::new(move |current, total, file_label| {
+        std::sync::Arc::new(move |current, total, file_label| {
             crate::events::emit_scan_progress(
                 &app_for_progress,
                 crate::events::ScanProgress {

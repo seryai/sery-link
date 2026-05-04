@@ -317,7 +317,7 @@ fn sanitize_path_component(s: &str) -> String {
 /// download count. `file_label` is the remote path's basename for
 /// display ("sales.csv"); the empty string when no specific file
 /// applies.
-pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
 /// F43 slice 2 + slice 3: walk the remote base_path, download every
 /// supported tabular / document file under it to the local cache

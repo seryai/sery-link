@@ -549,7 +549,7 @@ fn sanitize_path_component(s: &str) -> String {
 
 /// Per-file progress callback. Same shape as the other cache-and-
 /// scan kinds.
-pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
 /// Walk + download. Same incremental-sync shape as the other
 /// cache-and-scan kinds. `progress` (if Some) fires once per

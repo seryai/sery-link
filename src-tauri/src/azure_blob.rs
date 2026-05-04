@@ -323,7 +323,7 @@ fn sanitize_path_component(s: &str) -> String {
 
 /// Per-file progress callback. Same shape as the other cache-and-
 /// scan kinds.
-pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
 /// Walk + download every supported blob under `prefix`. Skips
 /// blobs whose size + Last-Modified match the manifest from the
@@ -356,87 +356,120 @@ pub async fn walk_and_download(
         MAX_AZURE_FILES,
     )
     .await?;
-    let total_supported = listing
-        .iter()
-        .filter(|b| {
-            PathBuf::from(&b.name)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
-                .unwrap_or(false)
-        })
-        .count();
-    let mut downloaded = 0usize;
-    let mut considered = 0usize;
-    let mut current_keys: HashSet<String> = HashSet::new();
 
     let normalized_prefix = prefix.trim_start_matches('/').trim_end_matches('/').to_string();
 
-    for blob in listing.iter() {
-        let path = PathBuf::from(&blob.name);
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        let supported = ext
-            .as_deref()
-            .map(crate::scanner::is_supported_ext)
-            .unwrap_or(false);
-        if !supported {
-            continue;
-        }
-
-        let rel = if normalized_prefix.is_empty() {
-            blob.name.clone()
-        } else if let Some(s) = blob
-            .name
-            .strip_prefix(&format!("{}/", normalized_prefix))
-        {
-            s.to_string()
-        } else if blob.name == normalized_prefix {
-            path.file_name()
+    struct Work {
+        name: String,
+        local_path: PathBuf,
+        label: String,
+        key: String,
+        mtime_marker: String,
+        size: u64,
+    }
+    let work: Vec<Work> = listing
+        .iter()
+        .filter_map(|b| {
+            let path = PathBuf::from(&b.name);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase());
+            if !ext
+                .as_deref()
+                .map(crate::scanner::is_supported_ext)
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            let rel = if normalized_prefix.is_empty() {
+                b.name.clone()
+            } else if let Some(s) = b
+                .name
+                .strip_prefix(&format!("{}/", normalized_prefix))
+            {
+                s.to_string()
+            } else if b.name == normalized_prefix {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&b.name)
+                    .to_string()
+            } else {
+                b.name.clone()
+            };
+            let local_path = cache_dir.join(&rel);
+            let label = path
+                .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or(&blob.name)
-                .to_string()
-        } else {
-            blob.name.clone()
-        };
-        let local_path = cache_dir.join(&rel);
-        let label = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
+            Some(Work {
+                name: b.name.clone(),
+                local_path,
+                label,
+                key: b.name.clone(),
+                mtime_marker: b.last_modified.clone().unwrap_or_default(),
+                size: b.size_bytes,
+            })
+        })
+        .collect();
 
-        // Key = blob name (container-relative, stable). Mtime
-        // marker = Last-Modified header from Azure (HTTP-date format).
-        let key = blob.name.clone();
-        let mtime_marker = blob
-            .last_modified
-            .clone()
-            .unwrap_or_else(|| "".to_string());
-        current_keys.insert(key.clone());
+    let total_supported = work.len();
+    let current_keys: HashSet<String> =
+        work.iter().map(|w| w.key.clone()).collect();
 
-        if manifest.needs_download(&key, blob.size_bytes, &mtime_marker)
-            || !local_path.exists()
-        {
-            match download_blob(account_url, creds, &blob.name, &local_path).await {
-                Ok(_) => {
-                    downloaded += 1;
-                    manifest.record(key, blob.size_bytes, mtime_marker);
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    const MAX_CONCURRENT: usize = 4;
+
+    let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
+    let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let considered_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let account_url = account_url.to_string();
+
+    futures::stream::iter(work)
+        .for_each_concurrent(MAX_CONCURRENT, |w| {
+            let account_url = account_url.clone();
+            let creds = creds.clone();
+            let manifest = manifest_mu.clone();
+            let downloaded = downloaded_ct.clone();
+            let considered = considered_ct.clone();
+            let progress = progress.clone();
+            async move {
+                let needs = {
+                    let m = manifest.lock().expect("manifest poisoned");
+                    m.needs_download(&w.key, w.size, &w.mtime_marker)
+                        || !w.local_path.exists()
+                };
+                if needs {
+                    match download_blob(&account_url, &creds, &w.name, &w.local_path).await {
+                        Ok(_) => {
+                            downloaded.fetch_add(1, Ordering::Relaxed);
+                            let mut m = manifest.lock().expect("manifest poisoned");
+                            m.record(w.key.clone(), w.size, w.mtime_marker.clone());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[azure] download failed for {}: {} — skipping",
+                                w.name, e
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "[azure] download failed for {}: {} — skipping",
-                        blob.name, e
-                    );
+                let n = considered.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress.as_ref() {
+                    cb(n, total_supported, &w.label);
                 }
             }
-        }
-        considered += 1;
-        if let Some(cb) = progress.as_ref() {
-            cb(considered, total_supported, label);
-        }
-    }
+        })
+        .await;
+
+    let downloaded = downloaded_ct.load(Ordering::Relaxed);
+    let mut manifest = std::sync::Arc::try_unwrap(manifest_mu)
+        .expect("manifest still referenced")
+        .into_inner()
+        .expect("manifest poisoned");
 
     // Drop stale entries + their cached files.
     let stale = manifest.drop_missing(&current_keys);
