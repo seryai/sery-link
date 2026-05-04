@@ -14,7 +14,24 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Loader2, MoreVertical, Plus } from 'lucide-react';
+import { GripVertical, Loader2, MoreVertical, Plus } from 'lucide-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { SourceIcon, sourceIconBgClass } from './SourceIcon';
@@ -23,6 +40,7 @@ import {
   legacyKindStringOf,
   removeSource,
   renameSource,
+  reorderSources,
   scanKeyOf,
   setSourceGroup,
   sourceKindLabel,
@@ -182,20 +200,78 @@ export function SourcesSidebar() {
     }
   };
 
-  const renderRow = (source: DataSource) => (
-    <SourceRow
-      key={source.id}
-      source={source}
-      status={statusOf(source, scansInFlight)}
-      editing={editingSourceId === source.id}
-      onCommitRename={(name) => commitRename(source, name)}
-      onCancelRename={() => setEditingSourceId(null)}
-      onContextMenu={(e) => {
+  const renderRow = (source: DataSource, sortable: boolean) => {
+    const props: SourceRowProps = {
+      source,
+      status: statusOf(source, scansInFlight),
+      editing: editingSourceId === source.id,
+      onCommitRename: (name) => commitRename(source, name),
+      onCancelRename: () => setEditingSourceId(null),
+      onContextMenu: (e) => {
         e.preventDefault();
         setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
-      }}
-    />
+      },
+    };
+    return sortable ? (
+      <SortableSourceRow key={source.id} {...props} />
+    ) : (
+      <SourceRow key={source.id} {...props} />
+    );
+  };
+
+  // ─── Drag-reorder (top-level / ungrouped only) ─────────────────
+  // Within-group reorder + cross-bucket drag are deliberately out
+  // of scope for v0.7.0 — the ungrouped section is where users
+  // actually want their daily-use sources, and contained scope
+  // ships sooner. Cross-bucket moves use the existing
+  // "Move to group…" action.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = ungrouped.findIndex((s) => s.id === active.id);
+    const newIndex = ungrouped.findIndex((s) => s.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    // Optimistic local reorder so the UI doesn't snap back during
+    // the round-trip. The Rust side is authoritative on persistence;
+    // a failed commit triggers a reloadConfig that snaps to truth.
+    const reordered = arrayMove(ungrouped, oldIndex, newIndex);
+    if (config) {
+      const reorderedIds = new Set(reordered.map((s) => s.id));
+      const otherSources = sources.filter((s) => !reorderedIds.has(s.id));
+      // Re-stamp sort_order locally to match the post-server state:
+      // ungrouped first (in new order), grouped after (relative order
+      // preserved by sorting on existing sort_order).
+      otherSources.sort((a, b) => a.sort_order - b.sort_order);
+      const nextSources = [
+        ...reordered.map((s, i) => ({ ...s, sort_order: i })),
+        ...otherSources.map((s, i) => ({
+          ...s,
+          sort_order: reordered.length + i,
+        })),
+      ];
+      setConfig({ ...config, sources: nextSources });
+    }
+
+    // Persist. The Rust impl appends ungrouped IDs first then keeps
+    // grouped IDs at the tail in their existing relative order — same
+    // shape as the optimistic local reorder above, so the snap-on-
+    // reload is a no-op when the call succeeds.
+    try {
+      await reorderSources(reordered.map((s) => s.id));
+    } catch (err) {
+      toast.error(`Couldn't save new order: ${err}`);
+      await reloadConfig();
+    }
+  };
 
   if (sources.length === 0) {
     return (
@@ -226,17 +302,32 @@ export function SourcesSidebar() {
         )}
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {/* Ungrouped section — no header, just rows */}
+        {/* Ungrouped section — sortable via @dnd-kit */}
         {ungrouped.length > 0 && (
-          <div className="space-y-1">{ungrouped.map(renderRow)}</div>
+          <DndContext
+            sensors={dndSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={ungrouped.map((s) => s.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="space-y-1">
+                {ungrouped.map((s) => renderRow(s, true))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )}
-        {/* Named groups — collapsible header + rows */}
+        {/* Named groups — collapsible header + rows. Drag-reorder
+            within a group is out of scope for v0.7.0; cross-bucket
+            moves use the "Move to group…" action. */}
         {namedGroups.map(([groupName, members]) => (
           <SourceGroupSection
             key={groupName}
             groupName={groupName}
             sources={members}
-            renderRow={renderRow}
+            renderRow={(s) => renderRow(s, false)}
           />
         ))}
       </div>
@@ -264,6 +355,10 @@ interface SourceRowProps {
   onCommitRename: (newName: string) => void;
   onCancelRename: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  /** Optional drag-handle slot. Rendered to the left of the icon when
+   *  the row is sortable; otherwise omitted so non-draggable rows
+   *  (those inside a group section) keep their existing layout. */
+  dragHandle?: React.ReactNode;
 }
 
 function SourceRow({
@@ -273,14 +368,16 @@ function SourceRow({
   onCommitRename,
   onCancelRename,
   onContextMenu,
+  dragHandle,
 }: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
   const datasetCount = source.last_scan_stats?.datasets ?? null;
   return (
     <div
       onContextMenu={onContextMenu}
-      className="group flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+      className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
     >
+      {dragHandle}
       <div
         className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md ${sourceIconBgClass(
           legacyKind,
@@ -392,6 +489,35 @@ function ContextMenu({
       <MenuItem onClick={() => onRemove(source)} variant="danger">
         Remove source
       </MenuItem>
+    </div>
+  );
+}
+
+/** Sortable wrapper around <SourceRow>. Used only inside the
+ *  ungrouped (top-level) section's <SortableContext>; rows inside
+ *  named groups stay non-sortable for v0.7.0. */
+function SortableSourceRow(props: SourceRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: props.source.id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  const handle = (
+    <button
+      {...attributes}
+      {...listeners}
+      onClick={(e) => e.stopPropagation()}
+      className="flex h-6 w-4 cursor-grab items-center justify-center text-slate-400 opacity-0 transition-opacity hover:text-slate-600 group-hover:opacity-100 active:cursor-grabbing dark:hover:text-slate-200"
+      aria-label="Reorder source"
+    >
+      <GripVertical className="h-4 w-4" />
+    </button>
+  );
+  return (
+    <div ref={setNodeRef} style={style}>
+      <SourceRow {...props} dragHandle={handle} />
     </div>
   );
 }
