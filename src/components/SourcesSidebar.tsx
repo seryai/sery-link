@@ -1,10 +1,10 @@
-// F42 Day 5 — Sources sidebar (minimal slice).
+// F42 Days 5-6 — Sources sidebar.
 //
-// Read-only-mutation list of every registered DataSource. Renders
+// Mutation-capable list of every registered DataSource. Renders
 // each as a row with kind icon + name + dataset count + status
-// pill. Right-click opens a context menu with rename / move-to-
-// group / remove. No drag-reorder yet (Day 7) and no Add Source
-// modal here yet (heavier slice with kind-specific credential forms).
+// pill. Right-click opens a context menu with rename / rescan /
+// move-to-group / remove. No drag-reorder yet (Day 7) and no Add
+// Source modal here yet (Day 8 — kind-specific credential forms).
 //
 // This coexists with FolderList for v0.7.0 — Sources sidebar is
 // the new authoritative surface; FolderList stays for one release
@@ -12,7 +12,7 @@
 //
 // Spec ref: SPEC_F42_SOURCES_SIDEBAR.md §3.1
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Loader2, MoreVertical, Plus } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -59,6 +59,7 @@ export function SourcesSidebar() {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
 
   // Close any open context menu on outside click / escape.
   useEffect(() => {
@@ -92,11 +93,17 @@ export function SourcesSidebar() {
     .filter(([key]) => key !== '')
     .sort(([a], [b]) => a.localeCompare(b));
 
-  const onRename = async (source: DataSource) => {
+  // Inline rename: clicking "Rename…" puts the row into edit mode.
+  // The actual API call fires when the user submits the input
+  // (Enter / blur). Esc cancels without saving.
+  const onRename = (source: DataSource) => {
     setMenu(null);
-    const next = window.prompt('Rename source', source.name);
-    if (next === null) return; // user cancelled
-    const trimmed = next.trim();
+    setEditingSourceId(source.id);
+  };
+
+  const commitRename = async (source: DataSource, nextName: string) => {
+    setEditingSourceId(null);
+    const trimmed = nextName.trim();
     if (trimmed.length === 0 || trimmed === source.name) return;
     setBusy(true);
     try {
@@ -105,6 +112,29 @@ export function SourcesSidebar() {
       toast.success(`Renamed to "${trimmed}"`);
     } catch (err) {
       toast.error(`Couldn't rename: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRescan = async (source: DataSource) => {
+    setMenu(null);
+    const key = scanKeyOf(source);
+    if (!key) {
+      // Drive sources scan via gdrive_walker, not the path-keyed
+      // scanner. Until the Drive adapter rewires through DataSource,
+      // we surface a clean message instead of silently failing.
+      toast.error('Rescan for Google Drive sources is not yet supported here.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await invoke('rescan_folder', { folderPath: key });
+      toast.success(`Rescanning "${source.name}"…`);
+      // Don't await reload — the scan_progress event listener will
+      // tick scansInFlight and the StatusPill will animate.
+    } catch (err) {
+      toast.error(`Couldn't start rescan: ${err}`);
     } finally {
       setBusy(false);
     }
@@ -157,6 +187,9 @@ export function SourcesSidebar() {
       key={source.id}
       source={source}
       status={statusOf(source, scansInFlight)}
+      editing={editingSourceId === source.id}
+      onCommitRename={(name) => commitRename(source, name)}
+      onCancelRename={() => setEditingSourceId(null)}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
@@ -213,6 +246,7 @@ export function SourcesSidebar() {
           y={menu.y}
           source={sources.find((s) => s.id === menu.sourceId)!}
           onRename={onRename}
+          onRescan={onRescan}
           onMoveToGroup={onMoveToGroup}
           onRemove={onRemove}
         />
@@ -226,10 +260,20 @@ export function SourcesSidebar() {
 interface SourceRowProps {
   source: DataSource;
   status: SourceStatus;
+  editing: boolean;
+  onCommitRename: (newName: string) => void;
+  onCancelRename: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
-function SourceRow({ source, status, onContextMenu }: SourceRowProps) {
+function SourceRow({
+  source,
+  status,
+  editing,
+  onCommitRename,
+  onCancelRename,
+  onContextMenu,
+}: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
   const datasetCount = source.last_scan_stats?.datasets ?? null;
   return (
@@ -245,9 +289,17 @@ function SourceRow({ source, status, onContextMenu }: SourceRowProps) {
         <SourceIcon kind={legacyKind} size="sm" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-slate-800 dark:text-slate-100">
-          {source.name}
-        </div>
+        {editing ? (
+          <RenameInput
+            initial={source.name}
+            onCommit={onCommitRename}
+            onCancel={onCancelRename}
+          />
+        ) : (
+          <div className="truncate font-medium text-slate-800 dark:text-slate-100">
+            {source.name}
+          </div>
+        )}
         <div className="flex items-center gap-1.5 truncate text-xs text-slate-500 dark:text-slate-400">
           <StatusPill status={status} />
           <span className="truncate">
@@ -311,6 +363,7 @@ interface ContextMenuProps {
   y: number;
   source: DataSource;
   onRename: (source: DataSource) => void;
+  onRescan: (source: DataSource) => void;
   onMoveToGroup: (source: DataSource) => void;
   onRemove: (source: DataSource) => void;
 }
@@ -320,6 +373,7 @@ function ContextMenu({
   y,
   source,
   onRename,
+  onRescan,
   onMoveToGroup,
   onRemove,
 }: ContextMenuProps) {
@@ -331,6 +385,7 @@ function ContextMenu({
       style={{ left: x, top: y }}
       className="fixed z-50 min-w-[12rem] rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-900"
     >
+      <MenuItem onClick={() => onRescan(source)}>Rescan now</MenuItem>
       <MenuItem onClick={() => onRename(source)}>Rename…</MenuItem>
       <MenuItem onClick={() => onMoveToGroup(source)}>Move to group…</MenuItem>
       <div className="my-1 h-px bg-slate-200 dark:bg-slate-700" />
@@ -338,6 +393,49 @@ function ContextMenu({
         Remove source
       </MenuItem>
     </div>
+  );
+}
+
+/** Inline rename editor — replaces the row's name text with a focused
+ *  input. Enter submits; Escape cancels; blur commits (matching
+ *  Finder's rename UX). The parent owns the trim + no-op-if-unchanged
+ *  policy, so this component is purely about input handling. */
+function RenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Focus + select-all on mount so the user can type-to-replace.
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onCommit(value);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => onCommit(value)}
+      className="w-full rounded border border-purple-400 bg-white px-1 py-0.5 text-sm font-medium text-slate-800 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 dark:bg-slate-800 dark:text-slate-100"
+    />
   );
 }
 
