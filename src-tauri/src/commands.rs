@@ -3276,6 +3276,96 @@ pub async fn rescan_sftp_source(
     }))
 }
 
+/// F43 — Load stored SFTP credentials for a source so the Edit
+/// credentials dialog can pre-populate. Tauri IPC is local-only;
+/// passing the secret across doesn't cross any new trust line.
+#[tauri::command]
+pub async fn get_sftp_credentials_for_source(
+    source_id: String,
+) -> Result<Option<crate::sftp::SftpCredentials>, String> {
+    crate::sftp_creds::load(&source_id).map_err(|e| e.to_string())
+}
+
+/// F44 — same shape as get_sftp_credentials_for_source, for WebDAV.
+#[tauri::command]
+pub async fn get_webdav_credentials_for_source(
+    source_id: String,
+) -> Result<Option<crate::webdav::WebDavCredentials>, String> {
+    crate::webdav_creds::load(&source_id).map_err(|e| e.to_string())
+}
+
+/// F48 — same shape as get_sftp_credentials_for_source, for Dropbox.
+#[tauri::command]
+pub async fn get_dropbox_credentials_for_source(
+    source_id: String,
+) -> Result<Option<crate::dropbox::DropboxCredentials>, String> {
+    crate::dropbox_creds::load(&source_id).map_err(|e| e.to_string())
+}
+
+/// F46 — same shape as get_sftp_credentials_for_source, for Azure Blob.
+#[tauri::command]
+pub async fn get_azure_blob_credentials_for_source(
+    source_id: String,
+) -> Result<Option<crate::azure_blob::AzureBlobCredentials>, String> {
+    crate::azure_blob_creds::load(&source_id).map_err(|e| e.to_string())
+}
+
+/// F43/F44/F48/F46 — Update stored credentials for an existing
+/// source. Re-runs the protocol's pre-flight (so bad new creds
+/// surface as an inline error, not as a silent empty rescan), then
+/// overwrites the keychain entry. Used by the Edit credentials
+/// dialog flow for credential rotation.
+#[tauri::command]
+pub async fn update_sftp_credentials(
+    source_id: String,
+    creds: crate::sftp::SftpCredentials,
+) -> Result<(), String> {
+    let creds_for_test = creds.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::sftp::test_credentials_blocking(&creds_for_test)
+    })
+    .await
+    .map_err(|e| format!("SFTP test task failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+    crate::sftp_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_webdav_credentials(
+    source_id: String,
+    creds: crate::webdav::WebDavCredentials,
+) -> Result<(), String> {
+    crate::webdav::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::webdav_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_dropbox_credentials(
+    source_id: String,
+    creds: crate::dropbox::DropboxCredentials,
+) -> Result<(), String> {
+    crate::dropbox::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::dropbox_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
+/// Azure rotation needs the account_url to run pre-flight against,
+/// since the SAS alone doesn't tell us where it's scoped to.
+#[tauri::command]
+pub async fn update_azure_blob_credentials(
+    source_id: String,
+    account_url: String,
+    creds: crate::azure_blob::AzureBlobCredentials,
+) -> Result<(), String> {
+    crate::azure_blob::test_credentials(&account_url, &creds)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::azure_blob_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
 /// F46 — pre-flight test for Azure Blob credentials.
 #[tauri::command]
 pub async fn test_azure_blob_credentials(
