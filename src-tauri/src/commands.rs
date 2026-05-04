@@ -3140,6 +3140,114 @@ pub async fn add_sftp_source(
     Ok(returned_id)
 }
 
+/// F43 slice 2 — full rescan of an SFTP source.
+///
+/// Flow:
+///   1. Load source + creds.
+///   2. Walk the remote `base_path` and download every supported
+///      tabular / document file to ~/.seryai/sftp-cache/<source_id>/
+///      mirroring the remote hierarchy.
+///   3. Run the existing path-keyed local scanner against the cache
+///      dir — picks up CSV / Parquet / Excel / docs the same way it
+///      does for any local folder.
+///   4. Persist the resulting ScanStats on the source (not on
+///      watched_folders — SFTP isn't mirrored there).
+///
+/// Strategy is full re-download every time. Mtime-based incremental
+/// is F43 slice 3 once we have evidence users hit the wait time.
+///
+/// Returns the JSON shape `{ datasets, columns, total_bytes,
+/// duration_ms, downloaded }` so the frontend toast can show
+/// counts. `downloaded` is the SFTP file count specifically (a
+/// useful debug datapoint that's lost after the local scan
+/// re-tabulates dataset_count).
+#[tauri::command]
+pub async fn rescan_sftp_source(
+    source_id: String,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+
+    // Load source metadata.
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("No source with id {source_id:?}"))?
+        .clone();
+    let base_path = match &source.kind {
+        crate::sources::SourceKind::Sftp { base_path, .. } => base_path.clone(),
+        _ => {
+            return Err(format!(
+                "Source {source_id:?} is not an SFTP source"
+            ))
+        }
+    };
+    drop(config);
+
+    // Load creds.
+    let creds = crate::sftp_creds::load(&source_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "No SFTP credentials stored for this source — re-add or use \
+             Edit credentials"
+                .to_string()
+        })?;
+
+    // Phase 1: walk + download.
+    let creds_for_walk = creds.clone();
+    let source_id_for_walk = source_id.clone();
+    let (cache_dir, downloaded) = tokio::task::spawn_blocking(move || {
+        crate::sftp::walk_and_download_blocking(
+            &creds_for_walk,
+            &base_path,
+            &source_id_for_walk,
+        )
+    })
+    .await
+    .map_err(|e| format!("SFTP download task failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Phase 2: run the existing local scanner against the cache.
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let datasets = crate::scanner::scan_folder(&cache_path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let dataset_count = datasets.len() as u64;
+    let column_count: u64 = datasets
+        .iter()
+        .map(|d| d.schema.len() as u64)
+        .sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    // Phase 3: persist the stats on the source itself.
+    if let Ok(mut config) = Config::load() {
+        config.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
+    }
+
+    Ok(serde_json::json!({
+        "datasets": dataset_count,
+        "columns": column_count,
+        "total_bytes": total_bytes,
+        "duration_ms": duration_ms,
+        "downloaded": downloaded,
+        "cache_dir": cache_path_str,
+    }))
+}
+
 /// F43 — pre-flight test for SFTP credentials, used by the
 /// AddSourceModal's Test connection button before the user
 /// commits the add. Returns Ok(()) on success; the error message

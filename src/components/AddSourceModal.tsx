@@ -869,11 +869,13 @@ function SftpStage({
         </div>
       )}
 
-      <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
-        <strong>Note:</strong> SFTP scanning ships in a follow-up
-        release. The source will be saved and bookmarked, but rescan
-        is a no-op until then. The bookmark + creds work today so
-        you can register your servers in advance.
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Rescan downloads matching files (CSV / Parquet / Excel /
+        docs) to{' '}
+        <span className="font-mono">~/.seryai/sftp-cache/&lt;id&gt;/</span>{' '}
+        and indexes them locally. Each rescan is a full re-download —
+        bandwidth-heavy for large trees. Incremental sync ships in a
+        future release.
       </div>
 
       <div className="mt-6 flex items-center justify-between gap-2">
