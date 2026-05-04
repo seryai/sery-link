@@ -28,6 +28,7 @@ mod remote;
 mod remote_creds;
 mod scan_cache;
 mod scanner;
+mod sources;
 mod url;
 mod schema_diff;
 mod schema_notifications;
