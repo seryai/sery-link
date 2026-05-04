@@ -515,6 +515,23 @@ impl Config {
         }
     }
 
+    /// F43 slice 2: write scan stats to a source by id. Used by the
+    /// kind-specific rescan paths (currently SFTP — Drive may follow
+    /// when its adapter rewires through DataSource). The legacy
+    /// `update_folder_scan_stats` writes to watched_folders by path;
+    /// this writes to sources by id, which is the post-F42 truth.
+    pub fn update_source_scan_stats(
+        &mut self,
+        source_id: &str,
+        stats: ScanStats,
+        when: String,
+    ) {
+        if let Some(source) = self.sources.iter_mut().find(|s| s.id == source_id) {
+            source.last_scan_stats = Some(stats);
+            source.last_scan_at = Some(when);
+        }
+    }
+
     // ─── F42 source mutations (Day 4) ──────────────────────────────
     //
     // The frontend mutates sources through these helpers via the

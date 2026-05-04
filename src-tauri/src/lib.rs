@@ -217,6 +217,7 @@ pub fn run() {
             commands::add_local_source,
             commands::add_sftp_source,
             commands::test_sftp_credentials,
+            commands::rescan_sftp_source,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

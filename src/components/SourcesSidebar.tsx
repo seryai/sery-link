@@ -152,6 +152,24 @@ export function SourcesSidebar() {
 
   const onRescan = async (source: DataSource) => {
     setMenu(null);
+    // F43 slice 2: SFTP rescan is kind-aware — runs the
+    // download-then-scan flow via rescan_sftp_source, which
+    // pulls files to ~/.seryai/sftp-cache/<id>/ and then runs
+    // the local scanner against the cache.
+    if (source.kind.kind === 'sftp') {
+      setBusy(true);
+      try {
+        toast.success(`Rescanning "${source.name}" (downloading…)`);
+        await invoke('rescan_sftp_source', { sourceId: source.id });
+        await reloadConfig();
+        toast.success(`Rescan complete for "${source.name}"`);
+      } catch (err) {
+        toast.error(`Rescan failed: ${err}`);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const key = scanKeyOf(source);
     if (!key) {
       // Drive sources scan via gdrive_walker, not the path-keyed
@@ -193,25 +211,35 @@ export function SourcesSidebar() {
     setEditCredsSourceId(source.id);
   };
 
-  /** Kick a rescan for every source that has a path-keyed scanner.
-   *  Drive sources are skipped (they walk via gdrive_walker). The
-   *  scans run in parallel server-side via Tauri's command dispatch
-   *  but we issue one invoke per source so the StatusPills tick
-   *  individually as scansInFlight populates per-folder. */
+  /** Kick a rescan for every scannable source. Local / HTTPS / S3
+   *  go through rescan_folder (path-keyed); SFTP goes through
+   *  rescan_sftp_source (download-then-scan, kind-aware). Drive
+   *  is skipped — it scans via gdrive_walker, not the path-keyed
+   *  scanner, until the Drive adapter rewires through DataSource. */
   const onScanAll = async () => {
-    const targets = sources
+    const sftpTargets = sources.filter((s) => s.kind.kind === 'sftp');
+    const pathTargets = sources
+      .filter((s) => s.kind.kind !== 'sftp' && s.kind.kind !== 'google_drive')
       .map((s) => ({ source: s, key: scanKeyOf(s) }))
       .filter((t): t is { source: DataSource; key: string } => t.key !== null);
-    if (targets.length === 0) {
+    const total = sftpTargets.length + pathTargets.length;
+    if (total === 0) {
       toast.error('No scannable sources');
       return;
     }
-    toast.success(`Rescanning ${targets.length} source(s)…`);
+    toast.success(`Rescanning ${total} source(s)…`);
     // Fire-and-forget: each invoke returns when the scanner ACK's;
-    // scan_progress events drive the StatusPill updates.
-    for (const { key } of targets) {
+    // scan_progress events drive the StatusPill updates for path-
+    // keyed scans. SFTP scans don't emit live events yet (slice 3
+    // polish) — the toast confirmation is the user feedback.
+    for (const { key } of pathTargets) {
       invoke('rescan_folder', { folderPath: key }).catch((err) => {
         console.error(`Scan-all failed for ${key}:`, err);
+      });
+    }
+    for (const source of sftpTargets) {
+      invoke('rescan_sftp_source', { sourceId: source.id }).catch((err) => {
+        console.error(`Scan-all SFTP failed for ${source.id}:`, err);
       });
     }
   };
