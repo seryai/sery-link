@@ -1851,7 +1851,17 @@ function ProtocolCard({
 
 function legacyIconKindForTile(
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind,
-): 'local' | 'http' | 's3' | 'gdrive' | null {
+):
+  | 'local'
+  | 'http'
+  | 's3'
+  | 'gdrive'
+  | 'sftp'
+  | 'webdav'
+  | 'dropbox'
+  | 'azure'
+  | 'onedrive'
+  | null {
   switch (kind) {
     case 'local':
       return 'local';
@@ -1869,23 +1879,15 @@ function legacyIconKindForTile(
     case 'gdrive':
       return 'gdrive';
     case 'sftp':
-      // No dedicated SSH/terminal icon yet — fall back to the local-
-      // folder icon since SFTP is "a folder you can browse remotely."
-      // Polish slice can add a real SSH mark.
-      return 'local';
+      return 'sftp';
     case 'webdav':
-      // Globe icon since WebDAV is HTTP-based. Polish slice can
-      // add a dedicated mark.
-      return 'http';
+      return 'webdav';
     case 'dropbox':
-      // Globe icon for now. Polish slice adds the Dropbox blue-box mark.
-      return 'http';
+      return 'dropbox';
     case 'azure':
-      // Globe icon for now. Polish slice adds the Azure cloud mark.
-      return 'http';
+      return 'azure';
     case 'onedrive':
-      // Globe icon for now. Polish slice adds the OneDrive mark.
-      return 'http';
+      return 'onedrive';
     default:
       return null;
   }

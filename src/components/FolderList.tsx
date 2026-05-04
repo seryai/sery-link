@@ -269,6 +269,13 @@ function FolderCard({ folder, scan, onChanged }: FolderCardProps) {
           subtitle: folder.path,
         };
       case 'local':
+      // FolderList's classifySource only returns the 4 original
+      // kinds — the F43-F49 variants come through the new
+      // SourcesSidebar surface, not this legacy card. The default
+      // branch keeps TypeScript happy for the wider SourceKind
+      // union without changing real behavior.
+      // eslint-disable-next-line no-fallthrough
+      default:
         return { displayName: folderBasename(folder.path), subtitle: folder.path };
     }
   })();

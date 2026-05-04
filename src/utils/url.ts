@@ -23,7 +23,19 @@ export function isS3Url(path: string): boolean {
  *  icon + label. Drive lives under ~/.seryai/gdrive-cache/ on disk
  *  but conceptually is its own source type — we don't want it
  *  showing up labeled "local folder" with a cryptic cache path. */
-export type SourceKind = 'local' | 's3' | 'http' | 'gdrive';
+export type SourceKind =
+  | 'local'
+  | 's3'
+  | 'http'
+  | 'gdrive'
+  // F43-F49 cache-and-scan kinds. classifySource (used by FolderList
+  // legacy UI) doesn't return these — they only come from the
+  // SourcesSidebar via legacyKindStringOf in utils/sources.ts.
+  | 'sftp'
+  | 'webdav'
+  | 'dropbox'
+  | 'azure'
+  | 'onedrive';
 
 export function classifySource(path: string): SourceKind {
   const lower = path.trim().toLowerCase();
@@ -36,7 +48,12 @@ export function classifySource(path: string): SourceKind {
   return 'local';
 }
 
-/** Human label for the source-type pill / subtitle. */
+/** Human label for the source-type pill / subtitle. The legacy
+ *  FolderList UI only ever passes one of the original 4 kinds (its
+ *  classifySource doesn't return the F43-F49 variants). The new
+ *  kinds are listed for type exhaustiveness; the new SourcesSidebar
+ *  uses utils/sources.ts:sourceKindLabel which reads the structured
+ *  DataSource. */
 export function sourceKindLabel(kind: SourceKind): string {
   switch (kind) {
     case 'gdrive':
@@ -47,6 +64,16 @@ export function sourceKindLabel(kind: SourceKind): string {
       return 'Web URL';
     case 'local':
       return 'Local folder';
+    case 'sftp':
+      return 'SFTP';
+    case 'webdav':
+      return 'WebDAV';
+    case 'dropbox':
+      return 'Dropbox';
+    case 'azure':
+      return 'Azure Blob';
+    case 'onedrive':
+      return 'OneDrive';
   }
 }
 
