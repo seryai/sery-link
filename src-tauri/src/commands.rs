@@ -3009,6 +3009,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::WebDav { .. } => None,
             crate::sources::SourceKind::Dropbox { .. } => None,
             crate::sources::SourceKind::AzureBlob { .. } => None,
+            crate::sources::SourceKind::OneDrive { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3035,6 +3036,10 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         &removed_kind,
         Some(crate::sources::SourceKind::AzureBlob { .. })
     );
+    let is_onedrive = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::OneDrive { .. })
+    );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
     config.save().map_err(|e| e.to_string())?;
@@ -3060,6 +3065,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     if is_azure {
         let _ = crate::azure_blob_creds::delete(&id);
+    }
+    if is_onedrive {
+        let _ = crate::onedrive_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
     Ok(())
@@ -3364,6 +3372,177 @@ pub async fn update_azure_blob_credentials(
         .await
         .map_err(|e| e.to_string())?;
     crate::azure_blob_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
+/// F49 — Step 1 of OneDrive device code flow. Returns the user
+/// code + verification URL for the UI to display.
+#[tauri::command]
+pub async fn start_onedrive_auth() -> Result<crate::onedrive::DeviceCodeStart, String> {
+    crate::onedrive::start_device_code_flow()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// F49 — Step 2: poll Microsoft for the auth result. Returns
+/// `pending` (keep polling), `slow_down` (back off), or
+/// `completed` (with the credentials embedded). Frontend drives
+/// the polling loop using the `interval` from start_onedrive_auth.
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OneDrivePollResult {
+    Pending,
+    SlowDown,
+    Completed { creds: crate::onedrive::OneDriveCredentials },
+}
+
+#[tauri::command]
+pub async fn poll_onedrive_auth(
+    device_code: String,
+) -> Result<OneDrivePollResult, String> {
+    match crate::onedrive::poll_device_code(&device_code)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        crate::onedrive::PollOutcome::Pending => Ok(OneDrivePollResult::Pending),
+        crate::onedrive::PollOutcome::SlowDown => {
+            Ok(OneDrivePollResult::SlowDown)
+        }
+        crate::onedrive::PollOutcome::Completed(creds) => {
+            Ok(OneDrivePollResult::Completed { creds })
+        }
+    }
+}
+
+/// F49 — Step 3: register the OneDrive source after auth completes.
+/// Persists creds keyed on the new source_id.
+#[tauri::command]
+pub async fn add_onedrive_source(
+    base_path: String,
+    creds: crate::onedrive::OneDriveCredentials,
+) -> Result<String, String> {
+    if !creds.is_valid() {
+        return Err(
+            "OneDrive credentials need access + refresh tokens".to_string()
+        );
+    }
+    let trimmed_base = base_path.trim().to_string();
+
+    // Pre-flight: verify the access token actually works against
+    // Graph before persisting.
+    let mut creds_for_test = creds.clone();
+    crate::onedrive::test_credentials(&mut creds_for_test)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: if trimmed_base.is_empty() || trimmed_base == "/" {
+            "OneDrive".to_string()
+        } else {
+            format!("OneDrive · {}", trimmed_base)
+        },
+        kind: crate::sources::SourceKind::OneDrive {
+            base_path: trimmed_base,
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+
+    if returned_id == source_id {
+        // The access_token may have been refreshed during pre-flight;
+        // save the refreshed pair, not the original.
+        crate::onedrive_creds::save(&source_id, &creds_for_test)
+            .map_err(|e| e.to_string())?;
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+/// F49 — full rescan of a OneDrive source. Refreshes access token
+/// if expired, walks via Graph API, downloads to cache, runs
+/// scanner.
+#[tauri::command]
+pub async fn rescan_onedrive_source(
+    source_id: String,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("No source with id {source_id:?}"))?
+        .clone();
+    let base_path = match &source.kind {
+        crate::sources::SourceKind::OneDrive { base_path } => base_path.clone(),
+        _ => {
+            return Err(format!(
+                "Source {source_id:?} is not a OneDrive source"
+            ))
+        }
+    };
+    drop(config);
+
+    let mut creds = crate::onedrive_creds::load(&source_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "No OneDrive credentials stored for this source — re-add it"
+                .to_string()
+        })?;
+
+    let (cache_dir, downloaded) =
+        crate::onedrive::walk_and_download(&mut creds, &base_path, &source_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    // Persist any token refresh that happened during the walk.
+    crate::onedrive_creds::save(&source_id, &creds)
+        .map_err(|e| e.to_string())?;
+
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let datasets = crate::scanner::scan_folder(&cache_path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let dataset_count = datasets.len() as u64;
+    let column_count: u64 = datasets
+        .iter()
+        .map(|d| d.schema.len() as u64)
+        .sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let duration_ms = started.elapsed().as_millis() as u64;
+
+    if let Ok(mut config) = Config::load() {
+        config.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
+    }
+
+    Ok(serde_json::json!({
+        "datasets": dataset_count,
+        "columns": column_count,
+        "total_bytes": total_bytes,
+        "duration_ms": duration_ms,
+        "downloaded": downloaded,
+        "cache_dir": cache_path_str,
+    }))
 }
 
 /// F46 — pre-flight test for Azure Blob credentials.

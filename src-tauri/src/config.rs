@@ -383,6 +383,7 @@ impl Config {
                 SourceKind::WebDav { .. } => None,
                 SourceKind::Dropbox { .. } => None,
                 SourceKind::AzureBlob { .. } => None,
+                SourceKind::OneDrive { .. } => None,
             })
             .collect();
 
@@ -581,6 +582,9 @@ impl Config {
                 account_url,
                 prefix,
             } => Some(format!("azure::{}|{}", account_url, prefix)),
+            SourceKind::OneDrive { base_path } => {
+                Some(format!("onedrive::{}", base_path))
+            }
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -603,6 +607,9 @@ impl Config {
                     account_url,
                     prefix,
                 } => format!("azure::{}|{}", account_url, prefix) == *p,
+                SourceKind::OneDrive { base_path } => {
+                    format!("onedrive::{}", base_path) == *p
+                }
             }) {
                 return existing.id.clone();
             }
@@ -691,6 +698,7 @@ impl Config {
             SourceKind::WebDav { .. } => None,
             SourceKind::Dropbox { .. } => None,
             SourceKind::AzureBlob { .. } => None,
+            SourceKind::OneDrive { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);
