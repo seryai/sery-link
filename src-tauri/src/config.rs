@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use crate::error::{AgentError, Result};
-use crate::sources::{migrate_watched_folders_to_sources, DataSource};
+use crate::sources::{migrate_watched_folder_to_source, DataSource, SourceKind};
 
 // ---------------------------------------------------------------------------
 // Auth modes
@@ -337,25 +337,72 @@ impl Config {
         Ok(config)
     }
 
-    /// F42 Day 2 wire-up: populate `sources` from legacy
-    /// `watched_folders` on first load after upgrade. Idempotent — if
-    /// `sources` already has any entries, the migration is skipped
-    /// (the user is post-v0.7.0; legacy entries stay on disk for one
-    /// release for rollback safety per SPEC_F42_SOURCES_SIDEBAR.md
-    /// §2.3 but they're no longer the source of truth).
+    /// F42 Day 2 wire-up + incremental migration: populate `sources`
+    /// from legacy `watched_folders`. Runs on every Config::load.
+    ///
+    /// Behavior:
+    /// - First load after upgrade: bulk-migrate every watched_folder.
+    /// - Subsequent loads: pick up any watched_folder that doesn't yet
+    ///   have a corresponding source (matched by path/url). New
+    ///   entries get appended to the tail of `sources`, preserving
+    ///   existing source IDs.
+    ///
+    /// The incremental path matters because the existing
+    /// add_watched_folder / add_remote_source commands still write to
+    /// watched_folders only — until those are replaced by the
+    /// kind-specific add_*_source commands, this bridge keeps the
+    /// Sources sidebar in sync without requiring callers to dual-write.
     ///
     /// Drive accounts (`gdrive_watched_folders`) are NOT migrated
     /// here — they rewire through this abstraction when the gdrive
-    /// adapter itself is refactored to use `DataSource`. This slice
-    /// is purely the WatchedFolder → DataSource bridge.
+    /// adapter itself is refactored to use `DataSource`.
     fn migrate_sources_if_needed(&mut self) {
-        if !self.sources.is_empty() {
-            return;
-        }
         if self.watched_folders.is_empty() {
             return;
         }
-        self.sources = migrate_watched_folders_to_sources(&self.watched_folders);
+
+        // Build a set of paths/urls already represented in sources so
+        // we can skip already-migrated entries. Match by the path
+        // (Local) or url (Https/S3) field — same key the legacy
+        // watched_folders entry uses.
+        let known: std::collections::HashSet<String> = self
+            .sources
+            .iter()
+            .filter_map(|s| match &s.kind {
+                SourceKind::Local { path, .. } => {
+                    Some(path.to_string_lossy().to_string())
+                }
+                SourceKind::Https { url } | SourceKind::S3 { url } => {
+                    Some(url.clone())
+                }
+                SourceKind::GoogleDrive { .. } => None,
+            })
+            .collect();
+
+        let to_migrate: Vec<&WatchedFolder> = self
+            .watched_folders
+            .iter()
+            .filter(|wf| !known.contains(&wf.path))
+            .collect();
+
+        if to_migrate.is_empty() {
+            return;
+        }
+
+        // Append at the tail, preserving existing sort_order values.
+        let mut next_order = self
+            .sources
+            .iter()
+            .map(|s| s.sort_order)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        for wf in to_migrate {
+            let mut new_source = migrate_watched_folder_to_source(wf);
+            new_source.sort_order = next_order;
+            next_order += 1;
+            self.sources.push(new_source);
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -835,30 +882,80 @@ mod tests {
     }
 
     #[test]
-    fn migrate_sources_is_idempotent_when_sources_already_present() {
-        // User already on v0.7.x — sources is the source of truth;
-        // migration must NOT duplicate entries from watched_folders.
+    fn migrate_sources_preserves_existing_ids_across_reload() {
+        // User already on v0.7.x — re-running migration must NOT
+        // duplicate entries OR generate fresh IDs for already-known
+        // paths. Source IDs are load-bearing (keychain key, cache
+        // prefix, deep links) — they have to survive re-load.
         let mut config = Config::default();
         config.add_watched_folder("/Users/me/Documents".to_string(), true);
-        // Simulate first migration already happened
         config.migrate_sources_if_needed();
         assert_eq!(config.sources.len(), 1);
         let original_id = config.sources[0].id.clone();
 
-        // Add a NEW watched_folder (simulates a v0.6.x rollback that
-        // appended) — second migration call should NOT re-migrate.
-        config.add_watched_folder("/extra/path".to_string(), true);
+        // Re-run migration with no new watched_folders — must be a no-op.
         config.migrate_sources_if_needed();
-
         assert_eq!(
             config.sources.len(),
             1,
-            "second migration must be a no-op when sources is non-empty"
+            "migration with no new watched_folders must be a no-op"
         );
         assert_eq!(
             config.sources[0].id, original_id,
-            "existing source IDs must be preserved across re-load"
+            "existing source IDs must survive re-load"
         );
+    }
+
+    #[test]
+    fn migrate_sources_picks_up_new_watched_folders_incrementally() {
+        // The legacy add_watched_folder / add_remote_source commands
+        // still write only to watched_folders. The incremental path
+        // closes that gap so the Sources sidebar reflects the new
+        // entry on next Config::load — without dual-writing.
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Documents".to_string(), true);
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 1);
+        let original_id = config.sources[0].id.clone();
+        let original_order = config.sources[0].sort_order;
+
+        // Simulate a subsequent add via the legacy command path.
+        config.add_watched_folder("s3://my-bucket/data/".to_string(), true);
+        config.migrate_sources_if_needed();
+
+        assert_eq!(config.sources.len(), 2, "new source must be picked up");
+        // First source preserved
+        assert_eq!(config.sources[0].id, original_id);
+        assert_eq!(config.sources[0].sort_order, original_order);
+        // New source appended at the tail
+        assert!(matches!(config.sources[1].kind, SourceKind::S3 { .. }));
+        assert_eq!(
+            config.sources[1].sort_order,
+            original_order + 1,
+            "new source must take the next sort_order slot"
+        );
+    }
+
+    #[test]
+    fn migrate_sources_skips_paths_already_in_sources() {
+        // Mixed state: sources has one entry, watched_folders has the
+        // same one (legacy still written) plus a new one. Migration
+        // must add only the new one — not duplicate the matching path.
+        let mut config = Config::default();
+        config.add_watched_folder("/a".to_string(), true);
+        config.add_watched_folder("/b".to_string(), true);
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 2);
+
+        // Re-call: the two existing paths are already known; nothing
+        // to add.
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 2);
+
+        // Add a third watched_folder; migration adds exactly one source.
+        config.add_watched_folder("/c".to_string(), true);
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 3);
     }
 
     #[test]
