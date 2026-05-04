@@ -34,6 +34,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
+import { AddSourceModal } from './AddSourceModal';
 import { SourceIcon, sourceIconBgClass } from './SourceIcon';
 import {
   groupSources,
@@ -78,6 +79,7 @@ export function SourcesSidebar() {
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   // Close any open context menu on outside click / escape.
   useEffect(() => {
@@ -275,31 +277,53 @@ export function SourcesSidebar() {
 
   if (sources.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-        <div className="mb-4 rounded-full bg-purple-100 p-4 dark:bg-purple-900/40">
-          <Plus className="h-8 w-8 text-purple-600 dark:text-purple-300" />
+      <>
+        <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+          <div className="mb-4 rounded-full bg-purple-100 p-4 dark:bg-purple-900/40">
+            <Plus className="h-8 w-8 text-purple-600 dark:text-purple-300" />
+          </div>
+          <h2 className="mb-2 text-lg font-semibold text-slate-800 dark:text-slate-100">
+            No sources yet
+          </h2>
+          <p className="mb-4 max-w-sm text-sm text-slate-600 dark:text-slate-400">
+            Bookmark a folder, S3 bucket, or remote URL — Sery indexes the
+            schema locally and never copies the data unless you ask.
+          </p>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-purple-700"
+          >
+            <Plus className="h-4 w-4" />
+            Add a source
+          </button>
         </div>
-        <h2 className="mb-2 text-lg font-semibold text-slate-800 dark:text-slate-100">
-          No sources yet
-        </h2>
-        <p className="max-w-sm text-sm text-slate-600 dark:text-slate-400">
-          Add a folder, S3 bucket, or remote URL from the{' '}
-          <span className="font-medium">Folders</span> tab — it'll show up
-          here automatically. (A unified Add Source modal lands later in v0.7.)
-        </p>
-      </div>
+        <AddSourceModal
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          onAdded={reloadConfig}
+        />
+      </>
     );
   }
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-        <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
-          Sources
-        </h1>
-        {busy && (
-          <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-        )}
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
+            Sources
+          </h1>
+          {busy && (
+            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+          )}
+        </div>
+        <button
+          onClick={() => setAddOpen(true)}
+          className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-purple-700"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add source
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {/* Ungrouped section — sortable via @dnd-kit */}
@@ -342,6 +366,11 @@ export function SourcesSidebar() {
           onRemove={onRemove}
         />
       )}
+      <AddSourceModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdded={reloadConfig}
+      />
     </div>
   );
 }

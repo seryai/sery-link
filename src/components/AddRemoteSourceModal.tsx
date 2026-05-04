@@ -5,7 +5,7 @@
 // validates the URL, stores it in watched_folders, and relies on the
 // usual rescan flow to pull schema + samples.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Cloud, Globe, KeyRound, Loader2, X } from 'lucide-react';
 import { useToast } from './Toast';
@@ -18,6 +18,10 @@ interface AddRemoteSourceModalProps {
   open: boolean;
   onClose: () => void;
   onAdded: (url: string) => void;
+  /** Pre-position the modal on a specific tab. F42's AddSourceModal
+   *  uses this to route the protocol picker's Drive tile straight to
+   *  the gdrive flow. Defaults to 'url' for the existing call sites. */
+  initialTab?: Tab;
 }
 
 interface S3Credentials {
@@ -31,8 +35,16 @@ export function AddRemoteSourceModal({
   open,
   onClose,
   onAdded,
+  initialTab = 'url',
 }: AddRemoteSourceModalProps) {
-  const [tab, setTab] = useState<Tab>('url');
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  // Sync tab on each open so callers (notably AddSourceModal's
+  // protocol picker) can route directly to the right tab without
+  // stale state from a prior open lingering.
+  useEffect(() => {
+    if (open) setTab(initialTab);
+  }, [open, initialTab]);
   const [url, setUrl] = useState('');
   const [accessKey, setAccessKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
