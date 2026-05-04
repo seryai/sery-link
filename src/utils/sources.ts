@@ -109,6 +109,8 @@ export function sourceKindLabel(source: DataSource): string {
       return 'Google Drive';
     case 'sftp':
       return 'SFTP';
+    case 'web_dav':
+      return 'WebDAV';
   }
 }
 
@@ -123,6 +125,15 @@ export type SftpAuth =
       private_key_path: string;
       passphrase?: string;
     };
+
+/** F44: WebDAV credential payload — discriminated union mirroring
+ *  the Rust WebDavAuth enum's serde tag. Anonymous = no creds (rare
+ *  but exists); Basic = typical Nextcloud / ownCloud; Digest =
+ *  legacy servers. */
+export type WebDavAuth =
+  | { type: 'anonymous' }
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'digest'; username: string; password: string };
 
 /** Bridge from the new structured `SourceKind` to the legacy string
  *  enum used by `<SourceIcon kind=...>`. The legacy enum predates
@@ -148,6 +159,10 @@ export function legacyKindStringOf(
       // Fallback to 'local' icon visually — a remote folder you
       // browse like a local one. Future: dedicated SSH terminal mark.
       return 'local';
+    case 'web_dav':
+      // Fallback to 'http' (globe) since WebDAV is HTTP-based.
+      // Future: dedicated WebDAV mark.
+      return 'http';
   }
 }
 
@@ -165,6 +180,7 @@ export function scanKeyOf(source: DataSource): string | null {
       return source.kind.url;
     case 'google_drive':
     case 'sftp':
+    case 'web_dav':
       return null;
   }
 }

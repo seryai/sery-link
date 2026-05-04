@@ -32,7 +32,7 @@ import { useToast } from './Toast';
 import { SourceIcon } from './SourceIcon';
 import { GdriveBrowserPanel } from './GdriveBrowserPanel';
 import { isS3Url } from '../utils/url';
-import type { SftpAuth } from '../utils/sources';
+import type { SftpAuth, WebDavAuth } from '../utils/sources';
 
 interface AddSourceModalProps {
   open: boolean;
@@ -51,13 +51,15 @@ interface S3Credentials {
   url_style?: 'path' | 'vhost';
 }
 
-type ImplementedKind = 'local' | 'https' | 's3' | 'gdrive' | 'sftp';
+type ImplementedKind =
+  | 'local'
+  | 'https'
+  | 's3'
+  | 'gdrive'
+  | 'sftp'
+  | 'webdav';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
-type ComingSoonKind =
-  | 'webdav'
-  | 'azure'
-  | 'dropbox'
-  | 'onedrive';
+type ComingSoonKind = 'azure' | 'dropbox' | 'onedrive';
 
 interface ProtocolTile {
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind;
@@ -71,6 +73,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 's3', label: 'Amazon S3', description: 'Bucket or prefix with creds' },
   { kind: 'gdrive', label: 'Google Drive', description: 'Folder via OAuth' },
   { kind: 'sftp', label: 'SFTP', description: 'Password or SSH key' },
+  { kind: 'webdav', label: 'WebDAV', description: 'Nextcloud / ownCloud / generic' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -84,7 +87,6 @@ const S3_COMPATIBLE: ProtocolTile[] = [
 ];
 
 const COMING_SOON: ProtocolTile[] = [
-  { kind: 'webdav', label: 'WebDAV', description: 'Coming in v0.7+' },
   { kind: 'azure', label: 'Azure Blob', description: 'Coming in v0.7+' },
   { kind: 'dropbox', label: 'Dropbox', description: 'Coming in v0.7+' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Coming in v0.7+' },
@@ -135,7 +137,8 @@ type Stage =
   // auto-detects S3 by URL scheme; presets fill endpoint/region).
   | { kind: 'url'; initial?: UrlStageInitial }
   | { kind: 'gdrive' }
-  | { kind: 'sftp' };
+  | { kind: 'sftp' }
+  | { kind: 'webdav' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -215,6 +218,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickUrl={() => setStage({ kind: 'url' })}
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
               onPickSftp={() => setStage({ kind: 'sftp' })}
+              onPickWebDav={() => setStage({ kind: 'webdav' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -235,6 +239,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           )}
           {stage.kind === 'sftp' && (
             <SftpStage
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'webdav' && (
+            <WebDavStage
               onAdded={() => {
                 onAdded();
                 closeAll();
@@ -270,7 +283,9 @@ function ModalHeader({
           : 'Add an HTTPS or S3 source'
         : stage.kind === 'sftp'
           ? 'Add an SFTP source'
-          : 'Connect Google Drive';
+          : stage.kind === 'webdav'
+            ? 'Add a WebDAV source'
+            : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -280,7 +295,9 @@ function ModalHeader({
           : 'Public URLs and S3 buckets read schema locally. Credentials live in your OS keychain — never on Sery servers.'
         : stage.kind === 'sftp'
           ? "Files are pulled to a local cache via SSH; the connection's auth credentials live in your OS keychain."
-          : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+          : stage.kind === 'webdav'
+            ? 'Works with Nextcloud, ownCloud, and any generic WebDAV server. Files cache locally; auth lives in your OS keychain.'
+            : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -321,6 +338,7 @@ function PickerStage({
   onPickUrl,
   onPickGdrive,
   onPickSftp,
+  onPickWebDav,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -328,6 +346,7 @@ function PickerStage({
   onPickUrl: () => void;
   onPickGdrive: () => void;
   onPickSftp: () => void;
+  onPickWebDav: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -352,6 +371,9 @@ function PickerStage({
                   break;
                 case 'sftp':
                   onPickSftp();
+                  break;
+                case 'webdav':
+                  onPickWebDav();
                   break;
               }
             }}
@@ -911,6 +933,251 @@ function SftpStage({
   );
 }
 
+// ─── Stage B — WebDAV form ─────────────────────────────────────────
+
+function WebDavStage({
+  onAdded,
+  onCancel,
+}: {
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [serverUrl, setServerUrl] = useState('');
+  const [basePath, setBasePath] = useState('/');
+  const [authMode, setAuthMode] = useState<
+    'anonymous' | 'basic' | 'digest'
+  >('basic');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const buildAuth = (): WebDavAuth | null => {
+    if (authMode === 'anonymous') return { type: 'anonymous' };
+    if (!username.trim() || !password) return null;
+    return authMode === 'basic'
+      ? { type: 'basic', username: username.trim(), password }
+      : { type: 'digest', username: username.trim(), password };
+  };
+
+  const auth = buildAuth();
+  const canSubmit =
+    !busy &&
+    serverUrl.trim() !== '' &&
+    basePath.trim() !== '' &&
+    auth !== null;
+
+  const test = async () => {
+    if (!auth) return;
+    setError(null);
+    setTestStatus(null);
+    setBusy(true);
+    try {
+      await invoke<void>('test_webdav_credentials', {
+        serverUrl: serverUrl.trim(),
+        auth,
+      });
+      setTestStatus('ok');
+      toast.success('Connection OK');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!auth) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_webdav_source', {
+        serverUrl: serverUrl.trim(),
+        basePath: basePath.trim(),
+        auth,
+      });
+      toast.success('WebDAV source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <CredField
+        label="Server URL"
+        value={serverUrl}
+        onChange={(v) => {
+          setServerUrl(v);
+          setTestStatus(null);
+        }}
+        placeholder="https://nc.example.com/remote.php/dav/files/<user>/"
+      />
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Nextcloud:{' '}
+        <span className="font-mono">
+          https://nc.example.com/remote.php/dav/files/&lt;user&gt;/
+        </span>
+        {' · '}ownCloud:{' '}
+        <span className="font-mono">
+          https://owncloud.example.com/remote.php/dav/files/&lt;user&gt;/
+        </span>
+      </p>
+
+      <div className="mt-3">
+        <CredField
+          label="Base path"
+          value={basePath}
+          onChange={setBasePath}
+          placeholder="/Documents"
+        />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Authentication
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('basic');
+              setTestStatus(null);
+            }}
+            className={`rounded-md border px-3 py-1 transition-colors ${
+              authMode === 'basic'
+                ? 'border-purple-500 bg-purple-600 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+            }`}
+          >
+            Basic
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('digest');
+              setTestStatus(null);
+            }}
+            className={`rounded-md border px-3 py-1 transition-colors ${
+              authMode === 'digest'
+                ? 'border-purple-500 bg-purple-600 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+            }`}
+          >
+            Digest
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAuthMode('anonymous');
+              setTestStatus(null);
+            }}
+            className={`rounded-md border px-3 py-1 transition-colors ${
+              authMode === 'anonymous'
+                ? 'border-purple-500 bg-purple-600 text-white'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200'
+            }`}
+          >
+            Anonymous
+          </button>
+        </div>
+        {authMode !== 'anonymous' ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <CredField
+              label="Username"
+              value={username}
+              onChange={(v) => {
+                setUsername(v);
+                setTestStatus(null);
+              }}
+              placeholder="alice"
+            />
+            <CredField
+              label="Password / app token"
+              value={password}
+              onChange={(v) => {
+                setPassword(v);
+                setTestStatus(null);
+              }}
+              type="password"
+              placeholder="••••••••"
+            />
+          </div>
+        ) : (
+          <p className="text-xs text-purple-800/80 dark:text-purple-200/80">
+            No credentials sent. Only works for public WebDAV
+            servers — most providers refuse anonymous access.
+          </p>
+        )}
+        {authMode === 'basic' && (
+          <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+            For Nextcloud / ownCloud, generate an app password in
+            Settings → Security and paste it here. Stored in your
+            OS keychain; never sent to Sery servers.
+          </p>
+        )}
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {testStatus === 'ok' && !error && (
+        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Connection OK — ready to save.
+        </div>
+      )}
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Rescan downloads matching files (CSV / Parquet / Excel /
+        docs) to{' '}
+        <span className="font-mono">
+          ~/.seryai/webdav-cache/&lt;id&gt;/
+        </span>{' '}
+        and indexes them locally. Each rescan is a full re-download.
+      </div>
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <button
+          onClick={test}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          {busy && testStatus !== 'ok' && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          Test connection
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Add WebDAV source
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Helper: protocol tile ─────────────────────────────────────────
 
 function ProtocolCard({
@@ -983,6 +1250,10 @@ function legacyIconKindForTile(
       // folder icon since SFTP is "a folder you can browse remotely."
       // Polish slice can add a real SSH mark.
       return 'local';
+    case 'webdav':
+      // Globe icon since WebDAV is HTTP-based. Polish slice can
+      // add a dedicated mark.
+      return 'http';
     default:
       return null;
   }
