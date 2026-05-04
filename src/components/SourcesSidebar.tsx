@@ -66,13 +66,27 @@ interface RowMenuState {
 
 /** Compute the visible status of a source from its scan history +
  *  any in-flight scan. "scanning" wins over the static state because
- *  it's the freshest signal. */
+ *  it's the freshest signal.
+ *
+ *  Two key spaces share the scansInFlight map:
+ *    - Path/URL keys for the path-keyed scanner (Local / HTTPS / S3),
+ *      populated by backend `scan_progress` events.
+ *    - Source-ID keys for the cache-and-scan kinds (SFTP / WebDAV /
+ *      Dropbox / Azure / OneDrive), populated optimistically by the
+ *      frontend rescan handlers — the backend doesn't (yet) emit
+ *      live events during the download phase, so without this the
+ *      pill stays dark for potentially minutes. */
 function statusOf(
   source: DataSource,
   scansInFlight: Record<string, unknown>,
 ): SourceStatus {
   const key = scanKeyOf(source);
   if (key && key in scansInFlight) {
+    return 'scanning';
+  }
+  // Cache-and-scan kinds: scanKeyOf returns null (no path-keyed
+  // scanner involvement). Fall back to source.id keying.
+  if (source.id in scansInFlight) {
     return 'scanning';
   }
   if (source.last_scan_at) {
@@ -82,7 +96,13 @@ function statusOf(
 }
 
 export function SourcesSidebar() {
-  const { config, setConfig, scansInFlight } = useAgentStore();
+  const {
+    config,
+    setConfig,
+    scansInFlight,
+    applyScanProgress,
+    clearScanProgress,
+  } = useAgentStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
@@ -153,10 +173,13 @@ export function SourcesSidebar() {
 
   const onRescan = async (source: DataSource) => {
     setMenu(null);
-    // F43 / F44 / F48: SFTP + WebDAV + Dropbox rescans are
-    // kind-aware — run the download-then-scan flow via their
-    // respective rescan_*_source command, which pulls files to a
-    // per-source cache dir and then runs the local scanner.
+    // F43 / F44 / F46 / F48 / F49: SFTP + WebDAV + Dropbox + Azure
+    // + OneDrive rescans are kind-aware — run the download-then-scan
+    // flow via their respective rescan_*_source command. The backend
+    // doesn't emit live progress events during the download phase
+    // yet, so we optimistically set scansInFlight[source.id] to
+    // tick the StatusPill blue from the moment the user clicks
+    // Rescan until the call returns.
     if (
       source.kind.kind === 'sftp' ||
       source.kind.kind === 'web_dav' ||
@@ -175,6 +198,12 @@ export function SourcesSidebar() {
                 ? 'rescan_azure_blob_source'
                 : 'rescan_onedrive_source';
       setBusy(true);
+      applyScanProgress({
+        folder: source.id,
+        current: 0,
+        total: 0,
+        current_file: '',
+      });
       try {
         toast.success(`Rescanning "${source.name}" (downloading…)`);
         await invoke(rescanCommand, { sourceId: source.id });
@@ -183,6 +212,7 @@ export function SourcesSidebar() {
       } catch (err) {
         toast.error(`Rescan failed: ${err}`);
       } finally {
+        clearScanProgress(source.id);
         setBusy(false);
       }
       return;
@@ -276,41 +306,47 @@ export function SourcesSidebar() {
     toast.success(`Rescanning ${total} source(s)…`);
     // Fire-and-forget: each invoke returns when the scanner ACK's;
     // scan_progress events drive the StatusPill updates for path-
-    // keyed scans. Cache-and-scan kinds don't emit live events yet
-    // (slice 3 polish) — the toast confirmation is the user feedback.
+    // keyed scans. Cache-and-scan kinds get optimistic frontend
+    // ticks (set on dispatch, cleared on resolve/reject) since the
+    // backend doesn't emit live events during the download phase.
     for (const { key } of pathTargets) {
       invoke('rescan_folder', { folderPath: key }).catch((err) => {
         console.error(`Scan-all failed for ${key}:`, err);
       });
     }
-    for (const source of sftpTargets) {
-      invoke('rescan_sftp_source', { sourceId: source.id }).catch((err) => {
-        console.error(`Scan-all SFTP failed for ${source.id}:`, err);
+
+    const dispatchCacheAndScan = (
+      command: string,
+      source: DataSource,
+      label: string,
+    ) => {
+      applyScanProgress({
+        folder: source.id,
+        current: 0,
+        total: 0,
+        current_file: '',
       });
+      invoke(command, { sourceId: source.id })
+        .catch((err) => {
+          console.error(`Scan-all ${label} failed for ${source.id}:`, err);
+        })
+        .finally(() => clearScanProgress(source.id));
+    };
+
+    for (const source of sftpTargets) {
+      dispatchCacheAndScan('rescan_sftp_source', source, 'SFTP');
     }
     for (const source of webdavTargets) {
-      invoke('rescan_webdav_source', { sourceId: source.id }).catch((err) => {
-        console.error(`Scan-all WebDAV failed for ${source.id}:`, err);
-      });
+      dispatchCacheAndScan('rescan_webdav_source', source, 'WebDAV');
     }
     for (const source of dropboxTargets) {
-      invoke('rescan_dropbox_source', { sourceId: source.id }).catch((err) => {
-        console.error(`Scan-all Dropbox failed for ${source.id}:`, err);
-      });
+      dispatchCacheAndScan('rescan_dropbox_source', source, 'Dropbox');
     }
     for (const source of azureTargets) {
-      invoke('rescan_azure_blob_source', { sourceId: source.id }).catch(
-        (err) => {
-          console.error(`Scan-all Azure failed for ${source.id}:`, err);
-        },
-      );
+      dispatchCacheAndScan('rescan_azure_blob_source', source, 'Azure');
     }
     for (const source of onedriveTargets) {
-      invoke('rescan_onedrive_source', { sourceId: source.id }).catch(
-        (err) => {
-          console.error(`Scan-all OneDrive failed for ${source.id}:`, err);
-        },
-      );
+      dispatchCacheAndScan('rescan_onedrive_source', source, 'OneDrive');
     }
   };
 
