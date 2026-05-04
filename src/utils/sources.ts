@@ -69,6 +69,34 @@ export function getS3CredentialsForUrl(
   return invoke<S3Credentials | null>('get_s3_credentials_for_url', { url });
 }
 
+/** F43 — Load existing SFTP credentials for a source. */
+export function getSftpCredentialsForSource(
+  sourceId: string,
+): Promise<{ host: string; port: number; username: string; auth: SftpAuth } | null> {
+  return invoke('get_sftp_credentials_for_source', { sourceId });
+}
+
+/** F44 — Load existing WebDAV credentials for a source. */
+export function getWebDavCredentialsForSource(
+  sourceId: string,
+): Promise<{ server_url: string; auth: WebDavAuth } | null> {
+  return invoke('get_webdav_credentials_for_source', { sourceId });
+}
+
+/** F48 — Load existing Dropbox PAT for a source. */
+export function getDropboxCredentialsForSource(
+  sourceId: string,
+): Promise<{ access_token: string } | null> {
+  return invoke('get_dropbox_credentials_for_source', { sourceId });
+}
+
+/** F46 — Load existing Azure Blob SAS for a source. */
+export function getAzureBlobCredentialsForSource(
+  sourceId: string,
+): Promise<{ sas_token: string } | null> {
+  return invoke('get_azure_blob_credentials_for_source', { sourceId });
+}
+
 /** Sort a sources list by sort_order for stable rendering. */
 export function sortSources(sources: DataSource[]): DataSource[] {
   return [...sources].sort((a, b) => a.sort_order - b.sort_order);

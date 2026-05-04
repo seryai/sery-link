@@ -41,6 +41,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { AddSourceModal } from './AddSourceModal';
+import { EditCredentialsDialog } from './EditCredentialsDialog';
 import { EditS3CredentialsDialog } from './EditS3CredentialsDialog';
 import { SourceIcon, sourceIconBgClass } from './SourceIcon';
 import {
@@ -220,8 +221,19 @@ export function SourcesSidebar() {
 
   const onEditCredentials = (source: DataSource) => {
     setMenu(null);
-    if (source.kind.kind !== 's3') return;
-    setEditCredsSourceId(source.id);
+    // S3 + the four cache-and-scan kinds all support credential
+    // rotation. Local / HTTPS / Drive don't (Local has no creds;
+    // HTTPS public; Drive uses OAuth tokens managed by gdrive_oauth
+    // separately).
+    if (
+      source.kind.kind === 's3' ||
+      source.kind.kind === 'sftp' ||
+      source.kind.kind === 'web_dav' ||
+      source.kind.kind === 'dropbox' ||
+      source.kind.kind === 'azure_blob'
+    ) {
+      setEditCredsSourceId(source.id);
+    }
   };
 
   /** Kick a rescan for every scannable source. Local / HTTPS / S3
@@ -548,13 +560,30 @@ export function SourcesSidebar() {
           onCancel={() => setGroupPickerSourceId(null)}
         />
       )}
-      {editCredsSourceId && (
-        <EditS3CredentialsDialog
-          source={sources.find((s) => s.id === editCredsSourceId)!}
-          onClose={() => setEditCredsSourceId(null)}
-          onSaved={reloadConfig}
-        />
-      )}
+      {editCredsSourceId &&
+        (() => {
+          const target = sources.find((s) => s.id === editCredsSourceId);
+          if (!target) return null;
+          // S3 has its own dialog (different shape — works on URL,
+          // and predates the cache-and-scan generalization).
+          if (target.kind.kind === 's3') {
+            return (
+              <EditS3CredentialsDialog
+                source={target}
+                onClose={() => setEditCredsSourceId(null)}
+                onSaved={reloadConfig}
+              />
+            );
+          }
+          // SFTP / WebDAV / Dropbox / Azure share the unified dialog.
+          return (
+            <EditCredentialsDialog
+              source={target}
+              onClose={() => setEditCredsSourceId(null)}
+              onSaved={reloadConfig}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -711,7 +740,12 @@ function ContextMenu({
   // Stop propagation so clicks INSIDE the menu don't trigger the
   // outside-click close handler attached at window level.
   const isLocal = source.kind.kind === 'local';
-  const isS3 = source.kind.kind === 's3';
+  const hasEditableCreds =
+    source.kind.kind === 's3' ||
+    source.kind.kind === 'sftp' ||
+    source.kind.kind === 'web_dav' ||
+    source.kind.kind === 'dropbox' ||
+    source.kind.kind === 'azure_blob';
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -720,7 +754,7 @@ function ContextMenu({
     >
       <MenuItem onClick={() => onRescan(source)}>Rescan now</MenuItem>
       <MenuItem onClick={() => onRename(source)}>Rename…</MenuItem>
-      {isS3 && (
+      {hasEditableCreds && (
         <MenuItem onClick={() => onEditCredentials(source)}>
           Edit credentials…
         </MenuItem>
