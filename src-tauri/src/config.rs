@@ -125,7 +125,7 @@ fn default_max_file_size_mb() -> u64 {
     1024 // 1 GB
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanStats {
     pub datasets: u64,
     pub columns: u64,
