@@ -163,6 +163,20 @@ export function SourcesSidebar() {
     }
   };
 
+  const onRevealInFinder = async (source: DataSource) => {
+    setMenu(null);
+    if (source.kind.kind !== 'local') {
+      // Spec §3.1 lists "Show in Finder" as Local-only; the menu
+      // hides it for other kinds, but defensively bail here too.
+      return;
+    }
+    try {
+      await invoke('reveal_in_finder', { path: source.kind.path });
+    } catch (err) {
+      toast.error(`Couldn't reveal: ${err}`);
+    }
+  };
+
   const onMoveToGroup = (source: DataSource) => {
     setMenu(null);
     setGroupPickerSourceId(source.id);
@@ -388,6 +402,7 @@ export function SourcesSidebar() {
           source={sources.find((s) => s.id === menu.sourceId)!}
           onRename={onRename}
           onRescan={onRescan}
+          onRevealInFinder={onRevealInFinder}
           onMoveToGroup={onMoveToGroup}
           onRemove={onRemove}
         />
@@ -546,6 +561,7 @@ interface ContextMenuProps {
   source: DataSource;
   onRename: (source: DataSource) => void;
   onRescan: (source: DataSource) => void;
+  onRevealInFinder: (source: DataSource) => void;
   onMoveToGroup: (source: DataSource) => void;
   onRemove: (source: DataSource) => void;
 }
@@ -556,11 +572,13 @@ function ContextMenu({
   source,
   onRename,
   onRescan,
+  onRevealInFinder,
   onMoveToGroup,
   onRemove,
 }: ContextMenuProps) {
   // Stop propagation so clicks INSIDE the menu don't trigger the
   // outside-click close handler attached at window level.
+  const isLocal = source.kind.kind === 'local';
   return (
     <div
       onClick={(e) => e.stopPropagation()}
@@ -570,6 +588,11 @@ function ContextMenu({
       <MenuItem onClick={() => onRescan(source)}>Rescan now</MenuItem>
       <MenuItem onClick={() => onRename(source)}>Rename…</MenuItem>
       <MenuItem onClick={() => onMoveToGroup(source)}>Move to group…</MenuItem>
+      {isLocal && (
+        <MenuItem onClick={() => onRevealInFinder(source)}>
+          Show in Finder
+        </MenuItem>
+      )}
       <div className="my-1 h-px bg-slate-200 dark:bg-slate-700" />
       <MenuItem onClick={() => onRemove(source)} variant="danger">
         Remove source
