@@ -118,7 +118,16 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
         setBusy(false);
         return;
       }
-      await invoke('add_watched_folder', { path: selected, recursive: true });
+      // F42 Day 4 slice 2: use the kind-specific add command which
+      // writes directly to `sources` Vec (with mirror watched_folders
+      // entry for the legacy scanner path). Eliminates the migration-
+      // on-next-load round trip — the new source is in `sources`
+      // immediately, so the Sources sidebar reflects it as soon as
+      // reloadConfig fires.
+      await invoke<string>('add_local_source', {
+        path: selected,
+        recursive: true,
+      });
       toast.success('Folder added');
       // Background scan — same pattern as FolderList.
       invoke('rescan_folder', { folderPath: selected }).catch((err) => {

@@ -212,6 +212,7 @@ pub fn run() {
             commands::remove_source,
             commands::reorder_sources,
             commands::get_s3_credentials_for_url,
+            commands::add_local_source,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

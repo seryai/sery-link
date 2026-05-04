@@ -520,6 +520,50 @@ impl Config {
     // no async) so the Config tests can exercise them directly; the
     // Tauri command wrappers handle load/save around each call.
 
+    /// Append a fresh DataSource to `sources`, assigning sort_order
+    /// to the next available slot. Returns the new source's id (which
+    /// the caller already knows but the helper returns it as a
+    /// convenience for the Tauri command path).
+    ///
+    /// Idempotent guard: if a source with the same kind-derived
+    /// path / url already exists, this is a no-op and returns the
+    /// existing id. Prevents duplicates when the user re-clicks Add
+    /// or when a kind-specific add command races with the
+    /// incremental migration.
+    pub fn add_source(&mut self, mut source: DataSource) -> String {
+        let needle: Option<String> = match &source.kind {
+            SourceKind::Local { path, .. } => {
+                Some(path.to_string_lossy().to_string())
+            }
+            SourceKind::Https { url } | SourceKind::S3 { url } => {
+                Some(url.clone())
+            }
+            SourceKind::GoogleDrive { .. } => None,
+        };
+        if let Some(p) = &needle {
+            if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
+                SourceKind::Local { path, .. } => {
+                    path.to_string_lossy() == p.as_str()
+                }
+                SourceKind::Https { url } | SourceKind::S3 { url } => url == p,
+                SourceKind::GoogleDrive { .. } => false,
+            }) {
+                return existing.id.clone();
+            }
+        }
+        let next_order = self
+            .sources
+            .iter()
+            .map(|s| s.sort_order)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        source.sort_order = next_order;
+        let id = source.id.clone();
+        self.sources.push(source);
+        id
+    }
+
     /// Rename a source by id. Returns NotFound if no source matches.
     pub fn rename_source(&mut self, id: &str, new_name: String) -> Result<()> {
         match self.sources.iter_mut().find(|s| s.id == id) {
@@ -1071,6 +1115,116 @@ mod tests {
         config.migrate_sources_if_needed();
         // sort_order set by migration to 0/1/2
         config
+    }
+
+    #[test]
+    fn add_source_appends_with_next_sort_order() {
+        let mut config = config_with_three_sources();
+        // Existing sort_orders: 0, 1, 2
+        let new_src = DataSource {
+            id: "new-id".to_string(),
+            name: "New".to_string(),
+            kind: SourceKind::S3 {
+                url: "s3://new-bucket/".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: -999, // any garbage; add_source overwrites
+            group: None,
+        };
+        let returned = config.add_source(new_src);
+        assert_eq!(returned, "new-id");
+        assert_eq!(config.sources.len(), 4);
+        assert_eq!(config.sources.last().unwrap().sort_order, 3);
+    }
+
+    #[test]
+    fn add_source_is_idempotent_on_path() {
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Docs".to_string(), true);
+        config.migrate_sources_if_needed();
+        let original_id = config.sources[0].id.clone();
+
+        // Try to re-add the same path with a fresh DataSource
+        let dup = DataSource::new_local(
+            std::path::PathBuf::from("/Users/me/Docs"),
+            true,
+        );
+        let returned = config.add_source(dup);
+
+        assert_eq!(returned, original_id, "re-add must return existing id");
+        assert_eq!(config.sources.len(), 1, "no duplicate created");
+    }
+
+    #[test]
+    fn add_source_returns_existing_id_for_matching_url() {
+        let mut config = Config::default();
+        let s3a = DataSource {
+            id: "s3a".to_string(),
+            name: "Bucket".to_string(),
+            kind: SourceKind::S3 {
+                url: "s3://x/y/".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 0,
+            group: None,
+        };
+        config.add_source(s3a);
+
+        let s3b = DataSource {
+            id: "s3b-different-id".to_string(),
+            name: "Different name".to_string(),
+            kind: SourceKind::S3 {
+                url: "s3://x/y/".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 99,
+            group: None,
+        };
+        let returned = config.add_source(s3b);
+        assert_eq!(returned, "s3a", "matching URL returns existing id");
+        assert_eq!(config.sources.len(), 1);
+    }
+
+    #[test]
+    fn add_source_drive_kind_does_not_dedupe_on_path() {
+        // Drive sources don't have a path-shape mirror so the
+        // dedupe check should be a no-op. Two Drive entries with
+        // the same account_id are allowed to coexist (rare but
+        // valid for future multi-account support).
+        let mut config = Config::default();
+        let drive1 = DataSource {
+            id: "drive1".to_string(),
+            name: "Drive 1".to_string(),
+            kind: SourceKind::GoogleDrive {
+                account_id: "default".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 0,
+            group: None,
+        };
+        let drive2 = DataSource {
+            id: "drive2".to_string(),
+            name: "Drive 2".to_string(),
+            kind: SourceKind::GoogleDrive {
+                account_id: "default".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 0,
+            group: None,
+        };
+        config.add_source(drive1);
+        config.add_source(drive2);
+        assert_eq!(config.sources.len(), 2);
     }
 
     #[test]
