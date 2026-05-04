@@ -1,0 +1,86 @@
+// F42 Sources — typed Tauri invoke wrappers.
+//
+// Thin, typed bridges to the four mutation commands shipped in
+// src-tauri/src/commands.rs (Day 4 — slice 1). The Rust side is
+// authoritative on the contract; this file mirrors it so frontend
+// callers don't sprinkle untyped invoke('rename_source', { ... })
+// everywhere with the Tauri argName camelCase pitfalls.
+//
+// Note on Tauri's argument-naming convention: tauri's invoke
+// auto-converts the Rust snake_case parameter names to camelCase on
+// the JS side. So `rename_source(id, new_name)` in Rust is called
+// from JS as `invoke('rename_source', { id, newName })` — NOT
+// `new_name`. These wrappers handle that translation so callers
+// don't have to remember it.
+
+import { invoke } from '@tauri-apps/api/core';
+import type { DataSource } from '../types/events';
+
+/** Rename a source by id. Throws if no source matches. */
+export function renameSource(id: string, newName: string): Promise<void> {
+  return invoke<void>('rename_source', { id, newName });
+}
+
+/** Move a source to a group, or pass `null` to move it back to
+ *  the top-level (ungrouped) section. */
+export function setSourceGroup(
+  id: string,
+  group: string | null,
+): Promise<void> {
+  return invoke<void>('set_source_group', { id, group });
+}
+
+/** Drop a source by id. Does NOT remove the corresponding entry in
+ *  watched_folders (legacy field is read-only post-v0.7.0 and kept
+ *  for one release for rollback safety). */
+export function removeSource(id: string): Promise<void> {
+  return invoke<void>('remove_source', { id });
+}
+
+/** Rewrite each source's sort_order based on the input id list.
+ *  IDs missing from `orderedIds` get appended at the tail in their
+ *  pre-call relative order — defensive against a partial list. */
+export function reorderSources(orderedIds: string[]): Promise<void> {
+  return invoke<void>('reorder_sources', { orderedIds });
+}
+
+/** Sort a sources list by sort_order for stable rendering. */
+export function sortSources(sources: DataSource[]): DataSource[] {
+  return [...sources].sort((a, b) => a.sort_order - b.sort_order);
+}
+
+/** Group sources by their `group` field. Top-level (ungrouped)
+ *  sources land under the empty-string key. Each group's array is
+ *  sorted by sort_order. */
+export function groupSources(
+  sources: DataSource[],
+): Map<string, DataSource[]> {
+  const groups = new Map<string, DataSource[]>();
+  for (const source of sortSources(sources)) {
+    const key = source.group ?? '';
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(source);
+    } else {
+      groups.set(key, [source]);
+    }
+  }
+  return groups;
+}
+
+/** Human-friendly label for the protocol of a source — used in the
+ *  sidebar row and the Add Source modal's protocol picker. Mirrors
+ *  the labels chosen by sourceKindLabel(WatchedFolder) but operates
+ *  on the new SourceKind union. */
+export function sourceKindLabel(source: DataSource): string {
+  switch (source.kind.kind) {
+    case 'local':
+      return 'Local';
+    case 'https':
+      return 'HTTPS';
+    case 's3':
+      return 'S3';
+    case 'google_drive':
+      return 'Google Drive';
+  }
+}

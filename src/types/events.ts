@@ -258,6 +258,46 @@ export interface WatchedFolder {
   mcp_enabled?: boolean;
 }
 
+// ─── F42 Sources data model (mirrors src-tauri/src/sources.rs) ────
+//
+// Discriminated union with `kind` as the tag, matching the
+// #[serde(tag = "kind", rename_all = "snake_case")] on the Rust side.
+// Every protocol Sery Link can register as a source has a variant
+// here. F43-F49 add new variants (sftp, webdav, b2, azure, gcs,
+// dropbox, onedrive) following the same shape.
+
+export type SourceKind =
+  | {
+      kind: 'local';
+      path: string;
+      recursive: boolean;
+      exclude_patterns: string[];
+      max_file_size_mb: number;
+    }
+  | { kind: 'https'; url: string }
+  | { kind: 's3'; url: string }
+  | { kind: 'google_drive'; account_id: string };
+
+/** One bookmarked source in the Sources sidebar. */
+export interface DataSource {
+  /** Stable UUID generated on add; never reused. */
+  id: string;
+  /** User-editable display name (defaults to a sensible per-kind
+   *  derivation; renamable via `rename_source`). */
+  name: string;
+  /** Protocol-specific configuration. */
+  kind: SourceKind;
+  /** MCP exposure toggle. */
+  mcp_enabled: boolean;
+  /** RFC3339 timestamp of last successful scan. */
+  last_scan_at: string | null;
+  last_scan_stats: ScanStats | null;
+  /** Sidebar ordering — set by `reorder_sources`. */
+  sort_order: number;
+  /** Optional grouping; null = top-level. */
+  group: string | null;
+}
+
 /** One ready-to-paste MCP config snippet returned by the
  *  `get_mcp_snippets` Tauri command. The frontend renders these as
  *  cards with a copy-to-clipboard button. */
@@ -282,6 +322,10 @@ export interface AgentConfig {
     agent_id: string | null;
   };
   watched_folders: WatchedFolder[];
+  /** F42 Sources sidebar — populated by Config::load's migration on
+   *  first run after upgrade. Optional in TS so configs from before
+   *  v0.7.0 (which lack the field) still deserialize. */
+  sources?: DataSource[];
   cloud: {
     api_url: string;
     websocket_url: string;
