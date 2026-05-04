@@ -25,7 +25,7 @@ import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
-  closestCenter,
+  closestCorners,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -458,18 +458,63 @@ export function SourcesSidebar() {
     );
   };
 
-  // ─── Drag-reorder (within each bucket) ─────────────────────────
-  // Each bucket — the ungrouped section and each named group —
-  // is its own DndContext, so dragging reorders within that bucket
-  // only. Cross-bucket drag (drop onto a foreign group) is out of
-  // scope; users move sources between groups via the
-  // "Move to group…" action which has clearer semantics.
+  // ─── Drag-reorder (within + across buckets) ────────────────────
+  // Single outer DndContext spans all buckets so cross-bucket
+  // drops work: a drag from "Personal" to a row in "Work" both
+  // changes the source's `group` AND inserts it at the drop
+  // position. closestCorners is the recommended collision
+  // strategy for multi-container @dnd-kit setups. Within-bucket
+  // drag still works exactly as before — the same handler detects
+  // the same/different-bucket case and dispatches accordingly.
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
+
+  /** Locate which bucket a source-id belongs to in the current
+   *  visual layout. Returns the bucket key + the array, or null
+   *  when the id isn't in any bucket (shouldn't happen with our
+   *  drag scaffolding but defensive). The bucket key is "" for
+   *  ungrouped, otherwise the named-group string. */
+  const findBucket = (
+    id: string,
+  ): { key: string; bucket: DataSource[] } | null => {
+    if (ungrouped.some((s) => s.id === id)) {
+      return { key: '', bucket: ungrouped };
+    }
+    for (const [name, members] of namedGroups) {
+      if (members.some((s) => s.id === id)) {
+        return { key: name, bucket: members };
+      }
+    }
+    return null;
+  };
+
+  const onDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    const fromBucket = findBucket(activeId);
+    const toBucket = findBucket(overId);
+    if (!fromBucket || !toBucket) return;
+
+    if (fromBucket.key === toBucket.key) {
+      // Same bucket — pure reorder.
+      const oldIndex = fromBucket.bucket.findIndex((s) => s.id === activeId);
+      const newIndex = fromBucket.bucket.findIndex((s) => s.id === overId);
+      if (oldIndex < 0 || newIndex < 0) return;
+      await reorderWithinBucket(fromBucket.bucket, oldIndex, newIndex);
+      return;
+    }
+
+    // Cross-bucket: move active into target bucket at over's
+    // position, change its group, persist both.
+    await moveAcrossBuckets(activeId, fromBucket, toBucket, overId);
+  };
 
   const reorderWithinBucket = async (
     bucket: DataSource[],
@@ -520,15 +565,73 @@ export function SourcesSidebar() {
     }
   };
 
-  const makeBucketDragHandler =
-    (bucket: DataSource[]) => async (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const oldIndex = bucket.findIndex((s) => s.id === active.id);
-      const newIndex = bucket.findIndex((s) => s.id === over.id);
-      if (oldIndex < 0 || newIndex < 0) return;
-      await reorderWithinBucket(bucket, oldIndex, newIndex);
-    };
+  /** Cross-bucket move: pull `activeId` out of `fromBucket`, insert
+   *  it at the position of `overId` in `toBucket`, change its group
+   *  field, and persist both setSourceGroup + reorderSources. */
+  const moveAcrossBuckets = async (
+    activeId: string,
+    fromBucket: { key: string; bucket: DataSource[] },
+    toBucket: { key: string; bucket: DataSource[] },
+    overId: string,
+  ) => {
+    const moved = fromBucket.bucket.find((s) => s.id === activeId);
+    if (!moved) return;
+
+    const newGroup = toBucket.key === '' ? null : toBucket.key;
+
+    // Compute the new ordering for both buckets. The active source
+    // gets removed from its old bucket and inserted before overId
+    // in the new bucket.
+    const newFrom = fromBucket.bucket.filter((s) => s.id !== activeId);
+    const overIndex = toBucket.bucket.findIndex((s) => s.id === overId);
+    const newTo = [
+      ...toBucket.bucket.slice(0, overIndex),
+      { ...moved, group: newGroup },
+      ...toBucket.bucket.slice(overIndex),
+    ];
+
+    // Rebuild the full sources list in visual order, swapping in
+    // the new bucket arrangements where applicable.
+    const isFromUngrouped = fromBucket.key === '';
+    const isToUngrouped = toBucket.key === '';
+    const newUngrouped = isFromUngrouped
+      ? newFrom
+      : isToUngrouped
+        ? newTo
+        : ungrouped;
+    const newNamed = namedGroups.map(([gname, members]) => {
+      if (gname === fromBucket.key) return newFrom;
+      if (gname === toBucket.key) return newTo;
+      return members;
+    });
+    const finalSources = [...newUngrouped, ...newNamed.flatMap((m) => m)];
+
+    // Optimistic local re-stamp.
+    if (config) {
+      const stamped = finalSources.map((s, i) => ({
+        ...s,
+        sort_order: i,
+        group: s.id === activeId ? newGroup : s.group,
+      }));
+      setConfig({ ...config, sources: stamped });
+    }
+
+    // Two backend calls: change the group first (so the post-load
+    // grouping computation lands in the right bucket), then push
+    // the new global order. On any failure, snap back via reload.
+    try {
+      await setSourceGroup(activeId, newGroup);
+      await reorderSources(finalSources.map((s) => s.id));
+      toast.success(
+        newGroup === null
+          ? `Moved "${moved.name}" to top level`
+          : `Moved "${moved.name}" to "${newGroup}"`,
+      );
+    } catch (err) {
+      toast.error(`Couldn't move: ${err}`);
+      await reloadConfig();
+    }
+  };
 
   if (sources.length === 0) {
     return (
@@ -591,14 +694,19 @@ export function SourcesSidebar() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {/* Ungrouped section — its own DndContext so drag reorders
-            within the ungrouped bucket only. */}
-        {ungrouped.length > 0 && (
-          <DndContext
-            sensors={dndSensors}
-            collisionDetection={closestCenter}
-            onDragEnd={makeBucketDragHandler(ungrouped)}
-          >
+        {/* Single outer DndContext covers ALL buckets so drops
+            across groups work. Each bucket still has its own
+            SortableContext (required by @dnd-kit for the
+            within-list reorder mechanics). closestCorners is the
+            recommended collision strategy for multi-container
+            sortable layouts. */}
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCorners}
+          onDragEnd={onDragEnd}
+        >
+          {/* Ungrouped section. */}
+          {ungrouped.length > 0 && (
             <SortableContext
               items={ungrouped.map((s) => s.id)}
               strategy={verticalListSortingStrategy}
@@ -607,22 +715,22 @@ export function SourcesSidebar() {
                 {ungrouped.map((s) => renderRow(s, true))}
               </div>
             </SortableContext>
-          </DndContext>
-        )}
-        {/* Named groups — each gets its OWN DndContext so within-
-            group drag works but cross-bucket drag doesn't (cross-
-            bucket moves use the "Move to group…" action which has
-            clearer semantics for the group-membership change). */}
-        {namedGroups.map(([groupName, members]) => (
-          <SourceGroupSection
-            key={groupName}
-            groupName={groupName}
-            sources={members}
-            sensors={dndSensors}
-            onDragEnd={makeBucketDragHandler(members)}
-            renderRow={(s) => renderRow(s, true)}
-          />
-        ))}
+          )}
+          {/* Named groups — each is its own SortableContext but
+              shares the outer DndContext, so dragging from one
+              group to another (or to the ungrouped section above)
+              fires onDragEnd with active+over in different
+              buckets. The handler detects that and triggers
+              setSourceGroup + reorderSources. */}
+          {namedGroups.map(([groupName, members]) => (
+            <SourceGroupSection
+              key={groupName}
+              groupName={groupName}
+              sources={members}
+              renderRow={(s) => renderRow(s, true)}
+            />
+          ))}
+        </DndContext>
       </div>
       {menu && (
         <ContextMenu
@@ -780,16 +888,12 @@ function SourceRow({
 interface SourceGroupSectionProps {
   groupName: string;
   sources: DataSource[];
-  sensors: ReturnType<typeof useSensors>;
-  onDragEnd: (event: DragEndEvent) => void;
   renderRow: (source: DataSource) => React.ReactNode;
 }
 
 function SourceGroupSection({
   groupName,
   sources,
-  sensors,
-  onDragEnd,
   renderRow,
 }: SourceGroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -805,18 +909,16 @@ function SourceGroupSection({
         </span>
       </button>
       {!collapsed && (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={onDragEnd}
+        // SortableContext only — the DndContext is one level up in
+        // SourcesSidebar so cross-bucket drops work. The SortableContext
+        // here just defines this group's local item list for
+        // within-group reorder mechanics.
+        <SortableContext
+          items={sources.map((s) => s.id)}
+          strategy={verticalListSortingStrategy}
         >
-          <SortableContext
-            items={sources.map((s) => s.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="space-y-1">{sources.map(renderRow)}</div>
-          </SortableContext>
-        </DndContext>
+          <div className="space-y-1">{sources.map(renderRow)}</div>
+        </SortableContext>
       )}
     </div>
   );
