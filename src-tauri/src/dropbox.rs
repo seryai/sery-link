@@ -265,22 +265,31 @@ pub async fn download_file(
         )));
     }
 
-    let bytes = resp.bytes().await.map_err(|e| {
-        AgentError::Network(format!("read body: {e}"))
-    })?;
+    // Stream the body to disk in chunks. Avoids buffering full
+    // file in memory — important for users with multi-GB Dropbox
+    // datasets that would otherwise OOM the app.
     let mut local = tokio::fs::File::create(local_path).await.map_err(|e| {
         AgentError::FileSystem(format!(
             "create local {}: {e}",
             local_path.display()
         ))
     })?;
-    local.write_all(&bytes).await.map_err(|e| {
-        AgentError::FileSystem(format!("write local: {e}"))
-    })?;
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut total: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            AgentError::Network(format!("read chunk: {e}"))
+        })?;
+        local.write_all(&chunk).await.map_err(|e| {
+            AgentError::FileSystem(format!("write local: {e}"))
+        })?;
+        total += chunk.len() as u64;
+    }
     local.flush().await.map_err(|e| {
         AgentError::FileSystem(format!("flush local: {e}"))
     })?;
-    Ok(bytes.len() as u64)
+    Ok(total)
 }
 
 /// Where the Dropbox cache lives for a given source. Mirror of
