@@ -14,7 +14,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { GripVertical, Loader2, MoreVertical, Plus } from 'lucide-react';
+import {
+  GripVertical,
+  Loader2,
+  MoreVertical,
+  Plus,
+  RefreshCw,
+} from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -185,6 +191,29 @@ export function SourcesSidebar() {
     setMenu(null);
     if (source.kind.kind !== 's3') return;
     setEditCredsSourceId(source.id);
+  };
+
+  /** Kick a rescan for every source that has a path-keyed scanner.
+   *  Drive sources are skipped (they walk via gdrive_walker). The
+   *  scans run in parallel server-side via Tauri's command dispatch
+   *  but we issue one invoke per source so the StatusPills tick
+   *  individually as scansInFlight populates per-folder. */
+  const onScanAll = async () => {
+    const targets = sources
+      .map((s) => ({ source: s, key: scanKeyOf(s) }))
+      .filter((t): t is { source: DataSource; key: string } => t.key !== null);
+    if (targets.length === 0) {
+      toast.error('No scannable sources');
+      return;
+    }
+    toast.success(`Rescanning ${targets.length} source(s)…`);
+    // Fire-and-forget: each invoke returns when the scanner ACK's;
+    // scan_progress events drive the StatusPill updates.
+    for (const { key } of targets) {
+      invoke('rescan_folder', { folderPath: key }).catch((err) => {
+        console.error(`Scan-all failed for ${key}:`, err);
+      });
+    }
   };
 
   const onMoveToGroup = (source: DataSource) => {
@@ -363,13 +392,23 @@ export function SourcesSidebar() {
             <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
           )}
         </div>
-        <button
-          onClick={() => setAddOpen(true)}
-          className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-purple-700"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add source
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onScanAll}
+            title="Rescan every source"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Scan all
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-purple-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add source
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
         {/* Ungrouped section — its own DndContext so drag reorders
