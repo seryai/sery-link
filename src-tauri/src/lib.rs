@@ -240,6 +240,7 @@ pub fn run() {
             commands::poll_onedrive_auth,
             commands::add_onedrive_source,
             commands::rescan_onedrive_source,
+            commands::reauth_onedrive_source,
             commands::get_sftp_credentials_for_source,
             commands::get_webdav_credentials_for_source,
             commands::get_dropbox_credentials_for_source,

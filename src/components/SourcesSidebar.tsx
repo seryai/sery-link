@@ -43,6 +43,7 @@ import { useToast } from './Toast';
 import { AddSourceModal } from './AddSourceModal';
 import { EditCredentialsDialog } from './EditCredentialsDialog';
 import { EditS3CredentialsDialog } from './EditS3CredentialsDialog';
+import { ReauthOneDriveDialog } from './ReauthOneDriveDialog';
 import { SourceIcon, sourceIconBgClass } from './SourceIcon';
 import {
   groupSources,
@@ -114,6 +115,7 @@ export function SourcesSidebar() {
   const [editCredsSourceId, setEditCredsSourceId] = useState<string | null>(
     null,
   );
+  const [reauthSourceId, setReauthSourceId] = useState<string | null>(null);
 
   // Close any open context menu on outside click / escape.
   useEffect(() => {
@@ -257,7 +259,9 @@ export function SourcesSidebar() {
     // S3 + the four cache-and-scan kinds all support credential
     // rotation. Local / HTTPS / Drive don't (Local has no creds;
     // HTTPS public; Drive uses OAuth tokens managed by gdrive_oauth
-    // separately).
+    // separately). OneDrive doesn't fit the edit-creds pattern
+    // (token-based, not password-like) — it gets a Re-authorize…
+    // entry instead, handled by onReauth.
     if (
       source.kind.kind === 's3' ||
       source.kind.kind === 'sftp' ||
@@ -267,6 +271,12 @@ export function SourcesSidebar() {
     ) {
       setEditCredsSourceId(source.id);
     }
+  };
+
+  const onReauth = (source: DataSource) => {
+    setMenu(null);
+    if (source.kind.kind !== 'one_drive') return;
+    setReauthSourceId(source.id);
   };
 
   /** Kick a rescan for every scannable source. Local / HTTPS / S3
@@ -587,6 +597,7 @@ export function SourcesSidebar() {
           onRescan={onRescan}
           onRevealInFinder={onRevealInFinder}
           onEditCredentials={onEditCredentials}
+          onReauth={onReauth}
           onMoveToGroup={onMoveToGroup}
           onRemove={onRemove}
         />
@@ -609,6 +620,18 @@ export function SourcesSidebar() {
           onCancel={() => setGroupPickerSourceId(null)}
         />
       )}
+      {reauthSourceId &&
+        (() => {
+          const target = sources.find((s) => s.id === reauthSourceId);
+          if (!target || target.kind.kind !== 'one_drive') return null;
+          return (
+            <ReauthOneDriveDialog
+              source={target}
+              onClose={() => setReauthSourceId(null)}
+              onSaved={reloadConfig}
+            />
+          );
+        })()}
       {editCredsSourceId &&
         (() => {
           const target = sources.find((s) => s.id === editCredsSourceId);
@@ -771,6 +794,7 @@ interface ContextMenuProps {
   onRescan: (source: DataSource) => void;
   onRevealInFinder: (source: DataSource) => void;
   onEditCredentials: (source: DataSource) => void;
+  onReauth: (source: DataSource) => void;
   onMoveToGroup: (source: DataSource) => void;
   onRemove: (source: DataSource) => void;
 }
@@ -783,12 +807,14 @@ function ContextMenu({
   onRescan,
   onRevealInFinder,
   onEditCredentials,
+  onReauth,
   onMoveToGroup,
   onRemove,
 }: ContextMenuProps) {
   // Stop propagation so clicks INSIDE the menu don't trigger the
   // outside-click close handler attached at window level.
   const isLocal = source.kind.kind === 'local';
+  const isOneDrive = source.kind.kind === 'one_drive';
   const hasEditableCreds =
     source.kind.kind === 's3' ||
     source.kind.kind === 'sftp' ||
@@ -807,6 +833,9 @@ function ContextMenu({
         <MenuItem onClick={() => onEditCredentials(source)}>
           Edit credentials…
         </MenuItem>
+      )}
+      {isOneDrive && (
+        <MenuItem onClick={() => onReauth(source)}>Re-authorize…</MenuItem>
       )}
       <MenuItem onClick={() => onMoveToGroup(source)}>Move to group…</MenuItem>
       {isLocal && (

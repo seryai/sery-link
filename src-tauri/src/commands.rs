@@ -3413,6 +3413,38 @@ pub async fn poll_onedrive_auth(
     }
 }
 
+/// F49 — Re-authorize an existing OneDrive source. Used when the
+/// stored refresh_token has been revoked (user changed their
+/// Microsoft password, revoked app permissions, etc.) — the
+/// rescan path then surfaces "auth needed" errors that this
+/// command lets the user fix without removing + re-adding the
+/// source (which would lose the source's name / group /
+/// sort_order / cache / sync-manifest).
+///
+/// Same auth flow as `add_onedrive_source` (caller drives the
+/// device-code dance via start + poll); this just persists the
+/// resulting tokens keyed on the existing source_id.
+#[tauri::command]
+pub async fn reauth_onedrive_source(
+    source_id: String,
+    creds: crate::onedrive::OneDriveCredentials,
+) -> Result<(), String> {
+    if !creds.is_valid() {
+        return Err(
+            "OneDrive credentials need access + refresh tokens".to_string()
+        );
+    }
+    // Pre-flight: confirm the new tokens actually work against
+    // Graph before persisting (mutates creds in place if a refresh
+    // happens during the test).
+    let mut creds_for_test = creds.clone();
+    crate::onedrive::test_credentials(&mut creds_for_test)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::onedrive_creds::save(&source_id, &creds_for_test)
+        .map_err(|e| e.to_string())
+}
+
 /// F49 — Step 3: register the OneDrive source after auth completes.
 /// Persists creds keyed on the new source_id.
 #[tauri::command]
