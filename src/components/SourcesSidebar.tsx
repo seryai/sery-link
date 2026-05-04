@@ -80,6 +80,9 @@ export function SourcesSidebar() {
   const [menu, setMenu] = useState<RowMenuState | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [groupPickerSourceId, setGroupPickerSourceId] = useState<string | null>(
+    null,
+  );
 
   // Close any open context menu on outside click / escape.
   useEffect(() => {
@@ -160,22 +163,23 @@ export function SourcesSidebar() {
     }
   };
 
-  const onMoveToGroup = async (source: DataSource) => {
+  const onMoveToGroup = (source: DataSource) => {
     setMenu(null);
-    const groupNames = namedGroups.map(([key]) => key);
-    const hint =
-      groupNames.length > 0
-        ? `Existing groups: ${groupNames.join(', ')}\n(empty input clears group)`
-        : '(empty input clears group)';
-    const next = window.prompt(`Move to group\n${hint}`, source.group ?? '');
-    if (next === null) return;
-    const trimmed = next.trim();
+    setGroupPickerSourceId(source.id);
+  };
+
+  const commitGroupChange = async (
+    source: DataSource,
+    newGroup: string | null,
+  ) => {
+    setGroupPickerSourceId(null);
+    if ((source.group ?? null) === newGroup) return;
     setBusy(true);
     try {
-      await setSourceGroup(source.id, trimmed.length === 0 ? null : trimmed);
+      await setSourceGroup(source.id, newGroup);
       await reloadConfig();
       toast.success(
-        trimmed.length === 0 ? 'Moved to top level' : `Moved to "${trimmed}"`,
+        newGroup === null ? 'Moved to top level' : `Moved to "${newGroup}"`,
       );
     } catch (err) {
       toast.error(`Couldn't move: ${err}`);
@@ -371,6 +375,19 @@ export function SourcesSidebar() {
         onClose={() => setAddOpen(false)}
         onAdded={reloadConfig}
       />
+      {groupPickerSourceId && (
+        <GroupPickerDialog
+          source={sources.find((s) => s.id === groupPickerSourceId)!}
+          existingGroups={namedGroups.map(([name]) => name)}
+          onCommit={(newGroup) =>
+            commitGroupChange(
+              sources.find((s) => s.id === groupPickerSourceId)!,
+              newGroup,
+            )
+          }
+          onCancel={() => setGroupPickerSourceId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -614,6 +631,115 @@ function MenuItem({
     >
       {children}
     </button>
+  );
+}
+
+/** Modal-ish dialog for picking a group. Shows the existing groups
+ *  as chip-style options + a "+ New group" inline input, plus a
+ *  "Top level" choice that clears the group. Prefer this over
+ *  window.prompt because (a) typing the same group name twice with
+ *  inconsistent casing creates two near-identical groups, and (b)
+ *  prompt() interrupts the rendered UI in a way that's especially
+ *  ugly inside an Electron/Tauri shell. */
+function GroupPickerDialog({
+  source,
+  existingGroups,
+  onCommit,
+  onCancel,
+}: {
+  source: DataSource;
+  existingGroups: string[];
+  onCommit: (group: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [newGroup, setNewGroup] = useState('');
+
+  // Esc to cancel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+      >
+        <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            Move "{source.name}" to…
+          </h3>
+        </div>
+        <div className="space-y-2 p-4">
+          {/* Top-level option — clears the group field. */}
+          <button
+            onClick={() => onCommit(null)}
+            className={`block w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+              source.group === null
+                ? 'bg-purple-50 font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
+            }`}
+          >
+            Top level (no group)
+          </button>
+          {existingGroups.map((g) => (
+            <button
+              key={g}
+              onClick={() => onCommit(g)}
+              className={`block w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                source.group === g
+                  ? 'bg-purple-50 font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                  : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'
+              }`}
+            >
+              {g}
+            </button>
+          ))}
+          <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-700">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Or create new
+            </label>
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                type="text"
+                value={newGroup}
+                onChange={(e) => setNewGroup(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newGroup.trim().length > 0) {
+                    onCommit(newGroup.trim());
+                  }
+                }}
+                placeholder="Group name"
+                className="flex-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 placeholder-slate-400 focus:border-purple-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+              />
+              <button
+                onClick={() =>
+                  newGroup.trim().length > 0 && onCommit(newGroup.trim())
+                }
+                disabled={newGroup.trim().length === 0}
+                className="rounded bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+          <button
+            onClick={onCancel}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

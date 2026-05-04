@@ -324,8 +324,15 @@ function UrlStage({
           session_token: sessionToken.trim() || undefined,
         };
       }
-      await invoke<string>('add_remote_source', args);
+      const normalised = await invoke<string>('add_remote_source', args);
       toast.success(isS3 ? 'S3 source added' : 'Remote source added');
+      // Match the Local add path: auto-kick the initial scan in the
+      // background so the user sees row counts populate without
+      // needing to right-click → Rescan. Failures here are non-fatal
+      // — the user can manually rescan from the sidebar context menu.
+      invoke('rescan_folder', { folderPath: normalised }).catch((err) => {
+        console.error('Initial scan failed:', err);
+      });
       onAdded();
     } catch (err) {
       setError(String(err));
