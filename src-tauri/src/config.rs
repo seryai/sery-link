@@ -552,16 +552,44 @@ impl Config {
     }
 
     /// Drop a source by id. Returns NotFound if no source matches.
-    /// Does NOT remove the corresponding entry in `watched_folders` —
-    /// that legacy field is read-only post-v0.7.0 and kept for one
-    /// release for rollback safety per spec §2.3.
+    ///
+    /// Also drops the matching `watched_folders` entry (matched by
+    /// path/url against the source's kind) — without this, the
+    /// incremental migration in `migrate_sources_if_needed` would
+    /// re-create the source on next load with a fresh UUID, defeating
+    /// the user's "remove" action. Drive sources don't have a
+    /// watched_folders mirror, so that branch is a sources-only drop.
+    ///
+    /// The watched_folders cleanup means the on-disk legacy field
+    /// becomes incomplete after a remove — that's acceptable because
+    /// (a) v0.7.0 still writes both fields for rollback safety, but
+    /// the SOURCE-of-truth for current state is `sources`, and (b)
+    /// the only consumer of watched_folders post-migration is the
+    /// FolderList legacy UI that's going away in v0.7.1.
     pub fn remove_source(&mut self, id: &str) -> Result<()> {
-        let before = self.sources.len();
-        self.sources.retain(|s| s.id != id);
-        if self.sources.len() == before {
-            return Err(AgentError::NotFound(format!(
-                "No source with id {id:?}"
-            )));
+        let removed = match self.sources.iter().position(|s| s.id == id) {
+            Some(idx) => self.sources.remove(idx),
+            None => {
+                return Err(AgentError::NotFound(format!(
+                    "No source with id {id:?}"
+                )));
+            }
+        };
+
+        // Find the path/url that mirrors this source in watched_folders
+        // so we can drop that too. Drive returns None — Drive sources
+        // aren't represented in watched_folders.
+        let mirror_path: Option<String> = match &removed.kind {
+            SourceKind::Local { path, .. } => {
+                Some(path.to_string_lossy().to_string())
+            }
+            SourceKind::Https { url } | SourceKind::S3 { url } => {
+                Some(url.clone())
+            }
+            SourceKind::GoogleDrive { .. } => None,
+        };
+        if let Some(p) = mirror_path {
+            self.watched_folders.retain(|wf| wf.path != p);
         }
         Ok(())
     }
@@ -1088,11 +1116,71 @@ mod tests {
     }
 
     #[test]
+    fn remove_source_also_drops_mirror_watched_folder() {
+        // Without this, the next Config::load would re-migrate the
+        // orphan watched_folder into a fresh source with a new UUID
+        // — the user's "remove" wouldn't stick across re-launch.
+        let mut config = config_with_three_sources();
+        // The 3 sources mirror watched_folders /a, /b, /c
+        assert_eq!(config.watched_folders.len(), 3);
+        let target_id = config.sources[1].id.clone();
+        config.remove_source(&target_id).unwrap();
+
+        // sources lost one
+        assert_eq!(config.sources.len(), 2);
+        // watched_folders lost the matching one
+        assert_eq!(config.watched_folders.len(), 2);
+        assert!(!config.watched_folders.iter().any(|wf| wf.path == "/b"));
+        // Re-running migration must NOT bring it back
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 2);
+    }
+
+    #[test]
+    fn remove_source_drive_kind_only_drops_source_no_mirror_lookup() {
+        // Drive sources have no watched_folders mirror — remove must
+        // not panic or accidentally drop the wrong entry.
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Documents".to_string(), true);
+        config.migrate_sources_if_needed();
+        // Manually inject a Drive source (not represented in
+        // watched_folders by design — see migrate_watched_folder_to_source).
+        config.sources.push(DataSource {
+            id: "drive-id".to_string(),
+            name: "Drive".to_string(),
+            kind: SourceKind::GoogleDrive {
+                account_id: "default".to_string(),
+            },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 99,
+            group: None,
+        });
+        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.watched_folders.len(), 1);
+
+        config.remove_source("drive-id").unwrap();
+        // Drive source dropped; the local source's mirror untouched.
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(
+            config.watched_folders.len(),
+            1,
+            "Drive remove must not touch watched_folders"
+        );
+    }
+
+    #[test]
     fn remove_source_returns_not_found_for_unknown_id() {
         let mut config = config_with_three_sources();
         let result = config.remove_source("phantom");
         assert!(matches!(result, Err(AgentError::NotFound(_))));
         assert_eq!(config.sources.len(), 3, "no entries dropped on miss");
+        assert_eq!(
+            config.watched_folders.len(),
+            3,
+            "no watched_folders dropped on miss"
+        );
     }
 
     #[test]
