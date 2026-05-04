@@ -465,6 +465,96 @@ impl Config {
         }
     }
 
+    // ─── F42 source mutations (Day 4) ──────────────────────────────
+    //
+    // The frontend mutates sources through these helpers via the
+    // commands::{rename_source, set_source_group, remove_source,
+    // reorder_sources} Tauri commands. Each helper is pure (no FS,
+    // no async) so the Config tests can exercise them directly; the
+    // Tauri command wrappers handle load/save around each call.
+
+    /// Rename a source by id. Returns NotFound if no source matches.
+    pub fn rename_source(&mut self, id: &str, new_name: String) -> Result<()> {
+        match self.sources.iter_mut().find(|s| s.id == id) {
+            Some(source) => {
+                source.name = new_name;
+                Ok(())
+            }
+            None => Err(AgentError::NotFound(format!(
+                "No source with id {id:?}"
+            ))),
+        }
+    }
+
+    /// Set or clear a source's group. `None` moves it to the top-level
+    /// (ungrouped). Returns NotFound if no source matches.
+    pub fn set_source_group(
+        &mut self,
+        id: &str,
+        group: Option<String>,
+    ) -> Result<()> {
+        match self.sources.iter_mut().find(|s| s.id == id) {
+            Some(source) => {
+                source.group = group;
+                Ok(())
+            }
+            None => Err(AgentError::NotFound(format!(
+                "No source with id {id:?}"
+            ))),
+        }
+    }
+
+    /// Drop a source by id. Returns NotFound if no source matches.
+    /// Does NOT remove the corresponding entry in `watched_folders` —
+    /// that legacy field is read-only post-v0.7.0 and kept for one
+    /// release for rollback safety per spec §2.3.
+    pub fn remove_source(&mut self, id: &str) -> Result<()> {
+        let before = self.sources.len();
+        self.sources.retain(|s| s.id != id);
+        if self.sources.len() == before {
+            return Err(AgentError::NotFound(format!(
+                "No source with id {id:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Rewrite each source's `sort_order` based on the input id list.
+    /// IDs missing from `ordered_ids` keep their existing order
+    /// appended after the explicitly ordered ones — defensive against
+    /// the frontend sending a partial list. Returns NotFound if any id
+    /// in `ordered_ids` doesn't match a source (the user can't reorder
+    /// a phantom).
+    pub fn reorder_sources(&mut self, ordered_ids: &[String]) -> Result<()> {
+        for id in ordered_ids {
+            if !self.sources.iter().any(|s| &s.id == id) {
+                return Err(AgentError::NotFound(format!(
+                    "No source with id {id:?}"
+                )));
+            }
+        }
+        for (i, id) in ordered_ids.iter().enumerate() {
+            if let Some(s) = self.sources.iter_mut().find(|s| &s.id == id) {
+                s.sort_order = i as i32;
+            }
+        }
+        // Sources not mentioned: shift to the tail, preserving their
+        // existing relative order.
+        let tail_start = ordered_ids.len() as i32;
+        let mut tail_idx = tail_start;
+        let mut unmentioned: Vec<&mut DataSource> = self
+            .sources
+            .iter_mut()
+            .filter(|s| !ordered_ids.contains(&s.id))
+            .collect();
+        unmentioned.sort_by_key(|s| s.sort_order);
+        for s in unmentioned {
+            s.sort_order = tail_idx;
+            tail_idx += 1;
+        }
+        Ok(())
+    }
+
     /// Migrate existing users to the new auth mode system.
     /// Checks keyring for existing token and sets appropriate auth mode.
     pub fn migrate_if_needed(&mut self) -> Result<()> {
@@ -844,6 +934,112 @@ mod tests {
         // mcp_enabled + last_scan_at carry through
         assert!(src.mcp_enabled);
         assert_eq!(src.last_scan_at.as_deref(), Some("2026-04-15T10:00:00Z"));
+    }
+
+    // ─── F42 source mutations (Day 4) ──────────────────────────────
+
+    fn config_with_three_sources() -> Config {
+        let mut config = Config::default();
+        config.add_watched_folder("/a".to_string(), true);
+        config.add_watched_folder("/b".to_string(), true);
+        config.add_watched_folder("/c".to_string(), true);
+        config.migrate_sources_if_needed();
+        // sort_order set by migration to 0/1/2
+        config
+    }
+
+    #[test]
+    fn rename_source_changes_name_in_place() {
+        let mut config = config_with_three_sources();
+        let id = config.sources[1].id.clone();
+        config
+            .rename_source(&id, "Renamed".to_string())
+            .expect("rename should succeed");
+        assert_eq!(config.sources[1].name, "Renamed");
+    }
+
+    #[test]
+    fn rename_source_returns_not_found_for_unknown_id() {
+        let mut config = config_with_three_sources();
+        let result = config.rename_source("does-not-exist", "X".to_string());
+        assert!(matches!(result, Err(AgentError::NotFound(_))));
+    }
+
+    #[test]
+    fn set_source_group_assigns_and_clears_group() {
+        let mut config = config_with_three_sources();
+        let id = config.sources[0].id.clone();
+        config
+            .set_source_group(&id, Some("Work".to_string()))
+            .expect("set_group should succeed");
+        assert_eq!(config.sources[0].group.as_deref(), Some("Work"));
+
+        // None clears the group
+        config
+            .set_source_group(&id, None)
+            .expect("clear_group should succeed");
+        assert!(config.sources[0].group.is_none());
+    }
+
+    #[test]
+    fn remove_source_drops_one_entry() {
+        let mut config = config_with_three_sources();
+        let id = config.sources[1].id.clone();
+        config.remove_source(&id).expect("remove should succeed");
+        assert_eq!(config.sources.len(), 2);
+        assert!(!config.sources.iter().any(|s| s.id == id));
+    }
+
+    #[test]
+    fn remove_source_returns_not_found_for_unknown_id() {
+        let mut config = config_with_three_sources();
+        let result = config.remove_source("phantom");
+        assert!(matches!(result, Err(AgentError::NotFound(_))));
+        assert_eq!(config.sources.len(), 3, "no entries dropped on miss");
+    }
+
+    #[test]
+    fn reorder_sources_rewrites_sort_order_per_input_list() {
+        let mut config = config_with_three_sources();
+        let ids: Vec<String> = config.sources.iter().map(|s| s.id.clone()).collect();
+        // Reverse
+        let reversed = vec![ids[2].clone(), ids[1].clone(), ids[0].clone()];
+        config
+            .reorder_sources(&reversed)
+            .expect("reorder should succeed");
+        // Now sort_order matches the new positions
+        let by_id: std::collections::HashMap<&String, i32> =
+            config.sources.iter().map(|s| (&s.id, s.sort_order)).collect();
+        assert_eq!(by_id[&ids[2]], 0);
+        assert_eq!(by_id[&ids[1]], 1);
+        assert_eq!(by_id[&ids[0]], 2);
+    }
+
+    #[test]
+    fn reorder_sources_appends_unmentioned_to_tail() {
+        let mut config = config_with_three_sources();
+        let ids: Vec<String> = config.sources.iter().map(|s| s.id.clone()).collect();
+        // Only mention the middle one; the other two should land after it
+        let partial = vec![ids[1].clone()];
+        config
+            .reorder_sources(&partial)
+            .expect("partial reorder should succeed");
+        let by_id: std::collections::HashMap<&String, i32> =
+            config.sources.iter().map(|s| (&s.id, s.sort_order)).collect();
+        assert_eq!(by_id[&ids[1]], 0);
+        // Unmentioned entries get tail positions, preserving their
+        // pre-call relative order (ids[0] was sort_order 0 < ids[2]
+        // sort_order 2 → ids[0] before ids[2] in tail)
+        assert_eq!(by_id[&ids[0]], 1);
+        assert_eq!(by_id[&ids[2]], 2);
+    }
+
+    #[test]
+    fn reorder_sources_returns_not_found_for_phantom_id() {
+        let mut config = config_with_three_sources();
+        let real_id = config.sources[0].id.clone();
+        let result = config.reorder_sources(&[real_id, "phantom".to_string()]);
+        assert!(matches!(result, Err(AgentError::NotFound(_))));
     }
 
     #[test]
