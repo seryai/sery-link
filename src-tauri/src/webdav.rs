@@ -328,7 +328,7 @@ fn sanitize_path_component(s: &str) -> String {
 
 /// Per-file progress callback. Same signature as
 /// `sftp::WalkProgressCb`.
-pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
 /// Walk the remote `base_path` and download every supported tabular
 /// / document file under it to the local cache dir. Mirrors the
@@ -359,79 +359,108 @@ pub async fn walk_and_download(
 
     let listing = list_recursive(creds, base_path, MAX_WEBDAV_FILES).await?;
     let base_pb = PathBuf::from(base_path);
-    let total_supported = listing
+
+    struct Work {
+        href: String,
+        local_path: PathBuf,
+        label: String,
+        key: String,
+        mtime_marker: String,
+        size: u64,
+    }
+    let work: Vec<Work> = listing
         .iter()
-        .filter(|f| {
-            PathBuf::from(&f.remote_href)
+        .filter_map(|f| {
+            let path = PathBuf::from(&f.remote_href);
+            let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .map(|e| e.to_ascii_lowercase());
+            if !ext
+                .as_deref()
+                .map(crate::scanner::is_supported_ext)
                 .unwrap_or(false)
+            {
+                return None;
+            }
+            let relative = match path.strip_prefix(&base_pb) {
+                Ok(r) => r.to_path_buf(),
+                Err(_) => path.file_name().map(PathBuf::from)?,
+            };
+            let local_path = cache_dir.join(&relative);
+            let label = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            Some(Work {
+                href: f.remote_href.clone(),
+                local_path,
+                label,
+                key: f.remote_href.clone(),
+                mtime_marker: f
+                    .mtime_unix
+                    .map(|t| t.to_string())
+                    .unwrap_or_else(|| "0".to_string()),
+                size: f.size_bytes,
+            })
         })
-        .count();
-    let mut downloaded = 0usize;
-    let mut considered = 0usize;
-    let mut current_keys: HashSet<String> = HashSet::new();
+        .collect();
 
-    for file in listing.iter() {
-        let path = PathBuf::from(&file.remote_href);
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        let supported = ext
-            .as_deref()
-            .map(crate::scanner::is_supported_ext)
-            .unwrap_or(false);
-        if !supported {
-            continue;
-        }
+    let total_supported = work.len();
+    let current_keys: HashSet<String> =
+        work.iter().map(|w| w.key.clone()).collect();
 
-        let relative = match path.strip_prefix(&base_pb) {
-            Ok(r) => r.to_path_buf(),
-            Err(_) => match path.file_name() {
-                Some(name) => PathBuf::from(name),
-                None => continue,
-            },
-        };
-        let local_path = cache_dir.join(&relative);
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    const MAX_CONCURRENT: usize = 4;
 
-        let label = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+    let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
+    let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let considered_ct = std::sync::Arc::new(AtomicUsize::new(0));
 
-        // Manifest key = remote href. Mtime marker = the Unix
-        // timestamp from the WebDAV multistatus response (already
-        // an i64; stringify for byte-comparison).
-        let key = file.remote_href.clone();
-        let mtime_marker = file
-            .mtime_unix
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| "0".to_string());
-        current_keys.insert(key.clone());
-
-        if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
-            || !local_path.exists()
-        {
-            match download_file(creds, &file.remote_href, &local_path).await {
-                Ok(_) => {
-                    downloaded += 1;
-                    manifest.record(key, file.size_bytes, mtime_marker);
+    futures::stream::iter(work)
+        .for_each_concurrent(MAX_CONCURRENT, |w| {
+            let creds = creds.clone();
+            let manifest = manifest_mu.clone();
+            let downloaded = downloaded_ct.clone();
+            let considered = considered_ct.clone();
+            let progress = progress.clone();
+            async move {
+                let needs = {
+                    let m = manifest.lock().expect("manifest poisoned");
+                    m.needs_download(&w.key, w.size, &w.mtime_marker)
+                        || !w.local_path.exists()
+                };
+                if needs {
+                    match download_file(&creds, &w.href, &w.local_path).await {
+                        Ok(_) => {
+                            downloaded.fetch_add(1, Ordering::Relaxed);
+                            let mut m = manifest.lock().expect("manifest poisoned");
+                            m.record(w.key.clone(), w.size, w.mtime_marker.clone());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[webdav] download failed for {}: {} — skipping",
+                                w.href, e
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "[webdav] download failed for {}: {} — skipping",
-                        file.remote_href, e
-                    );
+                let n = considered.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress.as_ref() {
+                    cb(n, total_supported, &w.label);
                 }
             }
-        }
-        considered += 1;
-        if let Some(cb) = progress.as_ref() {
-            cb(considered, total_supported, label);
-        }
-    }
+        })
+        .await;
+
+    let downloaded = downloaded_ct.load(Ordering::Relaxed);
+    let mut manifest = std::sync::Arc::try_unwrap(manifest_mu)
+        .expect("manifest still referenced")
+        .into_inner()
+        .expect("manifest poisoned");
 
     let stale = manifest.drop_missing(&current_keys);
     for stale_key in &stale {
