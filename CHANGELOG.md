@@ -5,165 +5,206 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — F42 Sources sidebar + F45 S3-compatible endpoints
+## [Unreleased] — Sources sidebar + 4 new storage protocols
 
-The "Folders" sidebar surface gains a sibling: **Sources**, a unified
-list of every connected place — local folders, S3 buckets, HTTPS
-URLs, Google Drive accounts — with one row per bookmark, kind icon,
-status pill, and a right-click menu for daily ops. The marketing-page
-promise made real, and the foundation every future protocol adapter
-(F43–F50) plugs into. See `datalake/SPEC_F42_SOURCES_SIDEBAR.md`
-for the full design.
+A two-part release. **Part one (F42)** rebuilds the sidebar around a
+unified `Sources` surface so every connected place — local folders,
+S3 buckets, HTTPS URLs, Drive accounts, future protocols — appears
+as one bookmark row with consistent right-click ops. The marketing-
+page promise made real, and the foundation every protocol adapter
+plugs into. **Part two (F43–F48)** ships four genuinely new storage
+protocols on top of that foundation: SFTP, WebDAV, Dropbox, and
+Azure Blob, plus four S3-compatible presets (B2 / Wasabi / R2 / GCS).
 
-### Added
+Picker now: **8 implemented** (Local · HTTPS · S3 · Drive · SFTP ·
+WebDAV · Dropbox · Azure Blob) + **4 S3-compatible presets** + **1
+coming soon** (OneDrive — needs full OAuth, no PAT shortcut).
+
+See `datalake/SPEC_F42_SOURCES_SIDEBAR.md` for the foundation
+design.
+
+### F42 — Sources sidebar foundation
 
 - **`/sources` route + Sources sidebar** (`SourcesSidebar`) with
   kind icon, name, protocol label, dataset count, and live status
   pill (scanning / online / pending — driven by `scansInFlight`).
   Coexists with the legacy Folders tab for v0.7.0; FolderList comes
   out in v0.7.1.
-- **Right-click context menu per row**: Rescan now / Rename… /
-  Move to group… / Remove source. Rename is inline (Finder-style:
+- **Right-click context menu**: Rescan now / Rename… / Edit
+  credentials… (kinds with creds) / Move to group… / Show in
+  Finder (Local) / Remove source. Rename is inline (Finder-style:
   Enter commits, Esc cancels, blur commits). Move-to-group opens
   a real picker with chip-style options for existing groups + an
-  inline "Create new" input — replaces the old `window.prompt`.
+  inline "Create new" input.
 - **Drag-reorder via @dnd-kit/sortable**. Each visual bucket — the
   ungrouped section and each named group — is its own DndContext,
-  so drag reorders within a bucket. Cross-bucket moves still go
-  through the "Move to group…" action. Pointer + keyboard reorder
-  both supported.
-- **`+ Add source` button + `AddSourceModal`** unified entry point.
-  Stage A is a tile grid showing every protocol Sery Link can
-  register: 4 active (Local, HTTPS, S3, Drive), **4 S3-compatible**
-  (Backblaze B2, Wasabi, Cloudflare R2, Google Cloud Storage —
-  see F45 below), and 5 "Coming soon" (SFTP, WebDAV, Azure,
-  Dropbox, OneDrive). Stage B is the kind-specific form INLINE in
-  the same modal — no jolt-handoff. Initial scan auto-kicks in
-  the background after add.
-- **Live status pill** colored dot per row (blue pulse = scanning,
-  green = online, slate = pending). Picks up `scansInFlight`
-  events without a refresh.
-- **"Scan all" button** in the sidebar header for bulk refresh of
-  every source (skips Drive, which walks via gdrive_walker).
-- **"Show in Finder"** context menu item for Local sources.
-- **"Edit credentials…"** dialog for S3 sources — pre-loads existing
-  creds from keychain, runs the same DuckDB-side pre-flight as
-  initial add, auto-rescans after save. Lets users rotate AWS keys
-  / STS tokens without losing the source's name / group / sort_order.
+  so drag reorders within a bucket. Cross-bucket moves go through
+  "Move to group…". Pointer + keyboard reorder both supported.
+- **`+ Add source` button + `AddSourceModal`** unified entry. The
+  protocol picker shows every kind Sery Link can register; clicking
+  a tile transitions to the kind-specific form INLINE in the same
+  modal — no jolt-handoff. Initial scan auto-kicks in the
+  background after add.
+- **"Scan all" button** in the sidebar header for bulk refresh.
+- **`Config::load` migration**: existing v0.6.x users see their
+  `watched_folders` auto-populated into the new `sources` Vec on
+  first load. Source IDs survive subsequent loads (load-bearing for
+  keychain key / cache prefix / deep links). Incremental migration
+  picks up entries added via legacy `add_watched_folder` /
+  `add_remote_source` so the sidebar stays in sync. `watched_folders`
+  stays written for one release for rollback safety; v0.7.1 stops
+  writing it.
+- **`remove_source` dual cleanup**: drops the mirror watched_folders
+  entry + keychain creds + scan cache + (for cache-and-scan kinds)
+  the SFTP / WebDAV / Dropbox / Azure keychain entry too. Prevents
+  the incremental migration from resurrecting the source with a
+  fresh UUID on next load.
 
-## [Unreleased] — F45 S3-compatible endpoints
+### F43 — SFTP
 
-DuckDB httpfs already speaks the S3 wire protocol; the only thing
-missing was a UX path to point that S3 client at non-AWS endpoints.
-F45 adds the optional `endpoint_url` + `url_style` fields to S3
-credentials, threads them through the DuckDB SET statements, and
-wires up the AddSourceModal protocol picker so 4 of the 7 previous
-"Coming soon" tiles become real:
+- `SourceKind::Sftp { host, port, username, base_path }` variant.
+- Auth: password OR SSH private-key path (with optional passphrase).
+- Backed by `ssh2` (libssh2) with vendored OpenSSL — no
+  `brew install libssh2` needed for release builds.
+- Pre-flight: real handshake + SFTP-channel-open before save —
+  bad host / bad creds / SFTP-disabled-on-server all surface
+  inline, not as silent empty rescan minutes later.
+- Rescan: walks `base_path` (10k file cap), filters to scanner-
+  supported extensions, downloads via streaming chunks to
+  `~/.seryai/sftp-cache/<source_id>/`, then runs the existing local
+  scanner against the cache. Per-file failures logged + skipped;
+  the rest of the tree is still useful.
 
-### Added
+### F44 — WebDAV
 
-- **Backblaze B2** — picker tile pre-fills `s3.us-west-002.backblazeb2.com`
-  endpoint, path-style URLs, region `us-west-002`. User pastes their
-  bucket URL + B2 application key (Access key ID + Secret).
-- **Wasabi** — picker tile pre-fills `s3.wasabisys.com`, vhost-style.
-- **Cloudflare R2** — picker tile, path-style, `auto` region. Endpoint
-  is per-account so the user pastes from the Cloudflare dashboard.
-- **Google Cloud Storage (S3 interop)** — picker tile pre-fills
-  `storage.googleapis.com`, path-style, `auto` region. Requires
-  HMAC keys via the Cloud Console (not the OAuth Drive flow).
-- **Manual endpoint field** in the AWS creds form — a disclosure
-  with two inputs (endpoint host + URL style) for any other
-  S3-compatible service (MinIO, SeaweedFS, etc.). Empty = AWS default.
-- **Endpoint editor** in the existing "Edit credentials…" dialog so
-  users can add an endpoint to an existing AWS-shaped S3 source
-  without removing + re-adding.
+- `SourceKind::WebDav { server_url, base_path }` variant.
+- Auth: Anonymous, Basic (Nextcloud / ownCloud app passwords), or
+  Digest (legacy servers).
+- Backed by `reqwest_dav` — wraps reqwest with PROPFIND + multistatus
+  XML parsing. Compatible with our existing reqwest 0.11.
+- Pre-flight: PROPFIND Depth=0 against the server root.
+- Rescan: PROPFIND Depth=Infinity, file-only filter, mirror-download
+  to `~/.seryai/webdav-cache/<source_id>/`.
 
-### Backend
+### F45 — S3-compatible endpoints
 
-- `S3Credentials` gains `endpoint_url: Option<String>` and
-  `url_style: Option<String>` (both `serde(default)` +
-  `skip_serializing_if = None` for back-compat).
+- `S3Credentials` gains optional `endpoint_url` + `url_style` fields
+  (`serde(default)` + `skip_serializing_if = None` for back-compat).
 - `duckdb_setters` emits `SET s3_endpoint='…'` and
-  `SET s3_url_style='…'` when present. Empty / whitespace strings
-  treated as None to keep AWS defaults.
-- The endpoint string is normalized: leading `http://` / `https://`
-  is stripped before emit, since DuckDB rejects values with the
-  scheme. Pasting a full URL from a provider's docs page works.
-- Pre-F45 keychain entries deserialize cleanly with both new fields
-  as None (no migration needed).
+  `SET s3_url_style='…'` when present. Endpoint is scheme-stripped
+  before emit (DuckDB rejects values with `https://`).
+- 4 new picker presets unlock 4 of the 7 previous "Coming soon"
+  tiles via DuckDB's existing S3 client: **Backblaze B2**, **Wasabi**,
+  **Cloudflare R2**, **Google Cloud Storage** (S3 interop).
+- Manual endpoint disclosure in the AWS creds form for any other
+  S3-compatible service (MinIO, SeaweedFS, etc.).
+- Endpoint editor added to the existing "Edit credentials…" dialog
+  for S3.
 
-### Tests
+### F46 — Azure Blob Storage
 
-- 5 new in `remote_creds::tests` covering present/absent/empty/none
-  endpoint, https-scheme stripping, and back-compat deserialization.
-  222 lib tests green (up from 217).
+- `SourceKind::AzureBlob { account_url, prefix }` variant.
+- Auth: SAS token (Shared Access Signature). Long-lived, scopable,
+  least-privilege. Storage account keys + Azure AD OAuth deferred.
+- Backed by `roxmltree` for parsing the `EnumerationResults` XML.
+  Tiny pure-rust parser, ~25 kB compiled.
+- SAS token normalisation: leading `?` stripped so users can paste
+  either the bare query string or the full token from the portal.
+- Rescan: List Blobs + paginate via `<NextMarker>`, mirror-download
+  to `~/.seryai/azure-cache/<source_id>/`.
 
-### Out of scope for F45
+### F48 — Dropbox
 
-- B2-specific source kind variants — all S3-compatible providers
-  ride on `SourceKind::S3` with the endpoint on creds. If we ever
-  need provider-specific quirks (B2 application-key auth oddities,
-  R2 token auth) we add variants then.
-- SFTP / WebDAV / Azure Blob / Dropbox / OneDrive — these need
-  custom Rust adapter work (ssh2 / WebDAV crate / azure DuckDB
-  extension / OAuth flows). Stay in "Coming soon" for v0.7.0.
+- `SourceKind::Dropbox { base_path }` variant.
+- Auth: Personal Access Token (PAT) only for v0.7. User generates
+  the token at `dropbox.com/developers/apps`. OAuth Connect-with-
+  Dropbox flow follows in a later release; the keychain shape is
+  forward-compatible (could grow `refresh_token` / `expires_at`
+  fields without breaking PAT entries).
+- Backed by direct Dropbox HTTP API calls via reqwest (no extra
+  crate). Cursor pagination via `/files/list_folder/continue`;
+  Dropbox quirks handled (root is empty string not "/", path_lower
+  used as the stable per-file key).
+- Rescan: list + mirror-download to
+  `~/.seryai/dropbox-cache/<source_id>/`.
 
-### Migration (transparent)
+### Incremental sync (all 4 cache-and-scan kinds)
 
-- `Config::load` runs `migrate_sources_if_needed` on every load,
-  populating the new `sources: Vec<DataSource>` from legacy
-  `watched_folders` on first launch after upgrade. Idempotent: the
-  same source IDs survive subsequent loads (load-bearing for
-  keychain key / cache prefix / deep links).
-- **Incremental migration** picks up entries added via the legacy
-  `add_watched_folder` / `add_remote_source` commands so the
-  Sources sidebar stays in sync with the Folders tab without
-  dual-writing at the call sites.
-- `watched_folders` is still written to disk for one release for
-  rollback safety. v0.7.1 stops writing it; v0.8.0 removes the
-  field entirely.
-- Drive accounts (`gdrive_watched_folders`) are NOT migrated —
-  they rewire when the Drive adapter itself moves to `DataSource`.
+- New `sync_manifest.rs` module owns a JSON file at
+  `<cache_dir>/.sery-manifest.json` keyed on protocol-stable
+  per-file ids → `{ size_bytes, mtime_marker }`.
+- Every `walk_and_download` (SFTP / WebDAV / Dropbox / Azure):
+    1. Loads the manifest (default empty on missing/corrupt — safer
+       to redownload than serve stale data).
+    2. Skips download when manifest entry matches AND local cached
+       file still exists.
+    3. Records every successful download.
+    4. Drops manifest entries (and deletes their local cache files)
+       for remote paths no longer present — removed-from-server
+       files don't linger in scan results.
+    5. Saves the updated manifest.
+- Turns repeat rescans from "wait every time" into "wait once,
+  ~instant for unchanged files."
+
+### Edit credentials… for SFTP / WebDAV / Dropbox / Azure
+
+- New unified `EditCredentialsDialog` switches form per kind.
+- 8 new Tauri commands: `get_*_credentials_for_source` +
+  `update_*_credentials` for each cache-and-scan kind. Each
+  `update_*` re-runs the protocol's pre-flight before persisting.
+- Existing S3 dialog stays — its shape is different (works on URL
+  not source_id) and predates the cache-and-scan generalisation.
+- SFTP edit form: host/port/username read-only; only the auth
+  payload (password or SSH key) is editable. Endpoint changes go
+  through Remove + Re-add.
 
 ### Fixed
 
-- **`remove_source` cleans up the mirror `watched_folders` entry +
-  S3 keychain creds + scan cache.** Without this, removing via the
-  Sources sidebar would leave the legacy entry behind, and the
-  incremental migration would re-create the source on next load
-  with a fresh UUID — defeating the user's "remove" entirely.
-
-### Backend (additive Tauri commands)
-
-- `rename_source(id, new_name)` — sets the display name.
-- `set_source_group(id, group)` — moves to a named group, or `null`
-  to move to top level.
-- `remove_source(id)` — drops the source + mirror watched_folder +
-  S3 keychain entry + scan cache.
-- `reorder_sources(ordered_ids)` — full-list reorder; missing IDs
-  appended at the tail in their existing relative order.
-- `scanner::scan_source(&DataSource, …)` — kind-aware scan dispatch
-  wrapper (used by future kind-specific add commands).
+- **`remove_source` dual cleanup** — see F42 above; was a real bug
+  where Remove + the migration round-trip resurrected the source
+  with a fresh UUID.
 
 ### Tests
 
-- 213 sery-link Rust lib tests green (up from 191 pre-F42). New
-  coverage in `config::tests` for migration semantics, mutation
-  helpers, mirror-cleanup invariants; in `sources::tests` for the
-  6-fixture WatchedFolder→DataSource migration; in
-  `scanner::scan_source_tests` for the kind→path/url projection.
+- **258 sery-link Rust lib tests green** (up from 191 pre-F42).
+  Per-protocol coverage:
+    - `sftp::tests` — 8 (creds validation, password / SSH key,
+      serde tagged enum, default port, tilde expansion).
+    - `webdav::tests` — 5 (anonymous / basic / digest validation,
+      tagged enum shape, missing url rejection).
+    - `azure_blob::tests` — 10 (creds validation, SAS normalisation,
+      list URL construction, blob URL encoding, full XML parser
+      coverage including pagination + bad root rejection).
+    - `dropbox::tests` — 4 (creds validation, list_folder JSON
+      parse with file / folder / deleted entries).
+    - `sync_manifest::tests` — 9 (unknown / matched / size-changed
+      / mtime-changed needs_download paths, drop_missing,
+      save+load round-trip, missing-file + corrupt-file
+      graceful-empty fallbacks).
+    - `remote_creds::tests` — 5 added for F45 endpoint behavior.
+    - `config::tests` — extended for migration + mutation +
+      mirror-cleanup invariants.
+- TypeScript + vite production build clean on every merge.
 
 ### Out of scope for v0.7.0
 
-- Cross-bucket drag-reorder (move source between groups via DnD)
-  — use "Move to group…" action.
-- Kind-specific `add_*_source` Tauri commands + credential keying
-  refactor (URL-key → source_id-key per spec §2.4) — the existing
-  `add_remote_source` command + URL-keyed creds keep working;
-  refactor lands when F43 SFTP needs source_id-keyed creds.
-- Drive scan via the new abstraction (still walks via
-  `gdrive_walker`; `scan_source(GoogleDrive)` returns `Ok(vec![])`
-  pending the adapter rewire).
+- **OneDrive** — only remaining "coming soon" tile. Microsoft Graph
+  API has no PAT equivalent; needs full OAuth 2.0 PKCE flow with
+  refresh tokens + deep-link callback. Same scaffolding will let
+  us migrate Dropbox from PAT to OAuth.
+- **Streaming downloads** for WebDAV / Dropbox / Azure (currently
+  buffer full body — fine for typical files, memory-heavy on
+  multi-GB).
+- **Live `scan_progress` events during the cache-and-scan walk
+  phase** — the StatusPill doesn't tick during downloads (only
+  during the local-scanner phase that follows). Toast confirmation
+  is the only user-facing feedback today.
+- **Concurrent downloads** within each walk — currently serial.
+- **Drive scan via DataSource** — still walks via `gdrive_walker`;
+  `scan_source(GoogleDrive)` returns `Ok(vec![])` pending the
+  adapter rewire.
+- **Cross-bucket drag-reorder** — moving a source between groups
+  via DnD; use "Move to group…" action instead.
 
 ## [0.6.3] — 2026-05-01
 
