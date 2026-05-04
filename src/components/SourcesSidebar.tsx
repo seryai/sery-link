@@ -225,12 +225,12 @@ export function SourcesSidebar() {
     );
   };
 
-  // ─── Drag-reorder (top-level / ungrouped only) ─────────────────
-  // Within-group reorder + cross-bucket drag are deliberately out
-  // of scope for v0.7.0 — the ungrouped section is where users
-  // actually want their daily-use sources, and contained scope
-  // ships sooner. Cross-bucket moves use the existing
-  // "Move to group…" action.
+  // ─── Drag-reorder (within each bucket) ─────────────────────────
+  // Each bucket — the ungrouped section and each named group —
+  // is its own DndContext, so dragging reorders within that bucket
+  // only. Cross-bucket drag (drop onto a foreign group) is out of
+  // scope; users move sources between groups via the
+  // "Move to group…" action which has clearer semantics.
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, {
@@ -238,46 +238,64 @@ export function SourcesSidebar() {
     }),
   );
 
-  const onDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
+  const reorderWithinBucket = async (
+    bucket: DataSource[],
+    oldIndex: number,
+    newIndex: number,
+  ) => {
+    const newBucketOrder = arrayMove(bucket, oldIndex, newIndex);
+    // Detect which visual bucket was reordered (the ungrouped section
+    // or one specific named group) by reference identity against the
+    // already-grouped state.
+    const isUngrouped =
+      bucket.length === ungrouped.length &&
+      bucket.every((s, i) => s.id === ungrouped[i].id);
 
-    const oldIndex = ungrouped.findIndex((s) => s.id === active.id);
-    const newIndex = ungrouped.findIndex((s) => s.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
+    // Rebuild the full sources list in the same visual order:
+    // ungrouped first, then each named group alphabetical. The
+    // bucket whose drag fired gets its new in-order list; the other
+    // buckets are passed through untouched.
+    const newUngrouped = isUngrouped ? newBucketOrder : ungrouped;
+    const newNamed = namedGroups.map(([_gname, members]) => {
+      const isThisGroup =
+        !isUngrouped &&
+        bucket.length === members.length &&
+        bucket.every((s, i) => s.id === members[i].id);
+      return isThisGroup ? newBucketOrder : members;
+    });
+    const finalSources = [...newUngrouped, ...newNamed.flatMap((m) => m)];
 
-    // Optimistic local reorder so the UI doesn't snap back during
-    // the round-trip. The Rust side is authoritative on persistence;
-    // a failed commit triggers a reloadConfig that snaps to truth.
-    const reordered = arrayMove(ungrouped, oldIndex, newIndex);
+    // Optimistic local re-stamp so the UI doesn't snap during the
+    // round-trip. The Rust side is authoritative; a failed commit
+    // triggers reloadConfig which snaps to truth.
     if (config) {
-      const reorderedIds = new Set(reordered.map((s) => s.id));
-      const otherSources = sources.filter((s) => !reorderedIds.has(s.id));
-      // Re-stamp sort_order locally to match the post-server state:
-      // ungrouped first (in new order), grouped after (relative order
-      // preserved by sorting on existing sort_order).
-      otherSources.sort((a, b) => a.sort_order - b.sort_order);
-      const nextSources = [
-        ...reordered.map((s, i) => ({ ...s, sort_order: i })),
-        ...otherSources.map((s, i) => ({
-          ...s,
-          sort_order: reordered.length + i,
-        })),
-      ];
-      setConfig({ ...config, sources: nextSources });
+      const stamped = finalSources.map((s, i) => ({
+        ...s,
+        sort_order: i,
+      }));
+      setConfig({ ...config, sources: stamped });
     }
 
-    // Persist. The Rust impl appends ungrouped IDs first then keeps
-    // grouped IDs at the tail in their existing relative order — same
-    // shape as the optimistic local reorder above, so the snap-on-
-    // reload is a no-op when the call succeeds.
+    // Persist the full ID order. The Rust impl rewrites sort_order
+    // based on this list; matching shape means the post-reload is a
+    // no-op when the call succeeds.
     try {
-      await reorderSources(reordered.map((s) => s.id));
+      await reorderSources(finalSources.map((s) => s.id));
     } catch (err) {
       toast.error(`Couldn't save new order: ${err}`);
       await reloadConfig();
     }
   };
+
+  const makeBucketDragHandler =
+    (bucket: DataSource[]) => async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = bucket.findIndex((s) => s.id === active.id);
+      const newIndex = bucket.findIndex((s) => s.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
+      await reorderWithinBucket(bucket, oldIndex, newIndex);
+    };
 
   if (sources.length === 0) {
     return (
@@ -330,12 +348,13 @@ export function SourcesSidebar() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {/* Ungrouped section — sortable via @dnd-kit */}
+        {/* Ungrouped section — its own DndContext so drag reorders
+            within the ungrouped bucket only. */}
         {ungrouped.length > 0 && (
           <DndContext
             sensors={dndSensors}
             collisionDetection={closestCenter}
-            onDragEnd={onDragEnd}
+            onDragEnd={makeBucketDragHandler(ungrouped)}
           >
             <SortableContext
               items={ungrouped.map((s) => s.id)}
@@ -347,15 +366,18 @@ export function SourcesSidebar() {
             </SortableContext>
           </DndContext>
         )}
-        {/* Named groups — collapsible header + rows. Drag-reorder
-            within a group is out of scope for v0.7.0; cross-bucket
-            moves use the "Move to group…" action. */}
+        {/* Named groups — each gets its OWN DndContext so within-
+            group drag works but cross-bucket drag doesn't (cross-
+            bucket moves use the "Move to group…" action which has
+            clearer semantics for the group-membership change). */}
         {namedGroups.map(([groupName, members]) => (
           <SourceGroupSection
             key={groupName}
             groupName={groupName}
             sources={members}
-            renderRow={(s) => renderRow(s, false)}
+            sensors={dndSensors}
+            onDragEnd={makeBucketDragHandler(members)}
+            renderRow={(s) => renderRow(s, true)}
           />
         ))}
       </div>
@@ -476,12 +498,16 @@ function SourceRow({
 interface SourceGroupSectionProps {
   groupName: string;
   sources: DataSource[];
+  sensors: ReturnType<typeof useSensors>;
+  onDragEnd: (event: DragEndEvent) => void;
   renderRow: (source: DataSource) => React.ReactNode;
 }
 
 function SourceGroupSection({
   groupName,
   sources,
+  sensors,
+  onDragEnd,
   renderRow,
 }: SourceGroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -496,7 +522,20 @@ function SourceGroupSection({
           {collapsed ? '+' : '−'} {sources.length}
         </span>
       </button>
-      {!collapsed && <div className="space-y-1">{sources.map(renderRow)}</div>}
+      {!collapsed && (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+        >
+          <SortableContext
+            items={sources.map((s) => s.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-1">{sources.map(renderRow)}</div>
+          </SortableContext>
+        </DndContext>
+      )}
     </div>
   );
 }
