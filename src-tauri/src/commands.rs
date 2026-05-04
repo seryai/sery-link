@@ -3198,7 +3198,8 @@ pub async fn add_sftp_source(
 /// useful debug datapoint that's lost after the local scan
 /// re-tabulates dataset_count).
 #[tauri::command]
-pub async fn rescan_sftp_source(
+pub async fn rescan_sftp_source<R: Runtime>(
+    app: AppHandle<R>,
     source_id: String,
 ) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
@@ -3230,14 +3231,33 @@ pub async fn rescan_sftp_source(
                 .to_string()
         })?;
 
-    // Phase 1: walk + download.
+    // Phase 1: walk + download. Emits scan_progress events keyed
+    // on the source_id so the StatusPill ticks live during downloads
+    // (not just optimistically). Frontend already keys scansInFlight
+    // on source.id for cache-and-scan kinds — so the events flow
+    // into the same map entry the optimistic update populated.
     let creds_for_walk = creds.clone();
     let source_id_for_walk = source_id.clone();
+    let app_for_progress = app.clone();
+    let progress_id = source_id.clone();
+    let progress_cb: crate::sftp::WalkProgressCb =
+        Box::new(move |current, total, file_label| {
+            crate::events::emit_scan_progress(
+                &app_for_progress,
+                crate::events::ScanProgress {
+                    folder: progress_id.clone(),
+                    current,
+                    total,
+                    current_file: file_label.to_string(),
+                },
+            );
+        });
     let (cache_dir, downloaded) = tokio::task::spawn_blocking(move || {
         crate::sftp::walk_and_download_blocking(
             &creds_for_walk,
             &base_path,
             &source_id_for_walk,
+            Some(progress_cb),
         )
     })
     .await
@@ -3501,7 +3521,8 @@ pub async fn add_onedrive_source(
 /// if expired, walks via Graph API, downloads to cache, runs
 /// scanner.
 #[tauri::command]
-pub async fn rescan_onedrive_source(
+pub async fn rescan_onedrive_source<R: Runtime>(
+    app: AppHandle<R>,
     source_id: String,
 ) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
@@ -3530,10 +3551,28 @@ pub async fn rescan_onedrive_source(
                 .to_string()
         })?;
 
-    let (cache_dir, downloaded) =
-        crate::onedrive::walk_and_download(&mut creds, &base_path, &source_id)
-            .await
-            .map_err(|e| e.to_string())?;
+    let app_for_progress = app.clone();
+    let progress_id = source_id.clone();
+    let progress_cb: crate::onedrive::WalkProgressCb =
+        Box::new(move |current, total, file_label| {
+            crate::events::emit_scan_progress(
+                &app_for_progress,
+                crate::events::ScanProgress {
+                    folder: progress_id.clone(),
+                    current,
+                    total,
+                    current_file: file_label.to_string(),
+                },
+            );
+        });
+    let (cache_dir, downloaded) = crate::onedrive::walk_and_download(
+        &mut creds,
+        &base_path,
+        &source_id,
+        Some(progress_cb),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // Persist any token refresh that happened during the walk.
     crate::onedrive_creds::save(&source_id, &creds)
@@ -3641,7 +3680,8 @@ pub async fn add_azure_blob_source(
 
 /// F46 — full rescan of an Azure Blob source.
 #[tauri::command]
-pub async fn rescan_azure_blob_source(
+pub async fn rescan_azure_blob_source<R: Runtime>(
+    app: AppHandle<R>,
     source_id: String,
 ) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
@@ -3674,11 +3714,26 @@ pub async fn rescan_azure_blob_source(
                 .to_string()
         })?;
 
+    let app_for_progress = app.clone();
+    let progress_id = source_id.clone();
+    let progress_cb: crate::azure_blob::WalkProgressCb =
+        Box::new(move |current, total, file_label| {
+            crate::events::emit_scan_progress(
+                &app_for_progress,
+                crate::events::ScanProgress {
+                    folder: progress_id.clone(),
+                    current,
+                    total,
+                    current_file: file_label.to_string(),
+                },
+            );
+        });
     let (cache_dir, downloaded) = crate::azure_blob::walk_and_download(
         &account_url,
         &creds,
         &prefix,
         &source_id,
+        Some(progress_cb),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -3785,7 +3840,8 @@ pub async fn add_dropbox_source(
 /// `~/.seryai/dropbox-cache/<source_id>/` then run the local
 /// scanner.
 #[tauri::command]
-pub async fn rescan_dropbox_source(
+pub async fn rescan_dropbox_source<R: Runtime>(
+    app: AppHandle<R>,
     source_id: String,
 ) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
@@ -3815,10 +3871,28 @@ pub async fn rescan_dropbox_source(
                 .to_string()
         })?;
 
-    let (cache_dir, downloaded) =
-        crate::dropbox::walk_and_download(&creds, &base_path, &source_id)
-            .await
-            .map_err(|e| e.to_string())?;
+    let app_for_progress = app.clone();
+    let progress_id = source_id.clone();
+    let progress_cb: crate::dropbox::WalkProgressCb =
+        Box::new(move |current, total, file_label| {
+            crate::events::emit_scan_progress(
+                &app_for_progress,
+                crate::events::ScanProgress {
+                    folder: progress_id.clone(),
+                    current,
+                    total,
+                    current_file: file_label.to_string(),
+                },
+            );
+        });
+    let (cache_dir, downloaded) = crate::dropbox::walk_and_download(
+        &creds,
+        &base_path,
+        &source_id,
+        Some(progress_cb),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     let cache_path_str = cache_dir.to_string_lossy().to_string();
     let datasets = crate::scanner::scan_folder(&cache_path_str)
@@ -3927,7 +4001,8 @@ pub async fn add_webdav_source(
 /// `~/.seryai/webdav-cache/<source_id>/` then run the local
 /// scanner. Full re-download every call.
 #[tauri::command]
-pub async fn rescan_webdav_source(
+pub async fn rescan_webdav_source<R: Runtime>(
+    app: AppHandle<R>,
     source_id: String,
 ) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
@@ -3957,10 +4032,28 @@ pub async fn rescan_webdav_source(
                 .to_string()
         })?;
 
-    let (cache_dir, downloaded) =
-        crate::webdav::walk_and_download(&creds, &base_path, &source_id)
-            .await
-            .map_err(|e| e.to_string())?;
+    let app_for_progress = app.clone();
+    let progress_id = source_id.clone();
+    let progress_cb: crate::webdav::WalkProgressCb =
+        Box::new(move |current, total, file_label| {
+            crate::events::emit_scan_progress(
+                &app_for_progress,
+                crate::events::ScanProgress {
+                    folder: progress_id.clone(),
+                    current,
+                    total,
+                    current_file: file_label.to_string(),
+                },
+            );
+        });
+    let (cache_dir, downloaded) = crate::webdav::walk_and_download(
+        &creds,
+        &base_path,
+        &source_id,
+        Some(progress_cb),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     let cache_path_str = cache_dir.to_string_lossy().to_string();
     let datasets = crate::scanner::scan_folder(&cache_path_str)

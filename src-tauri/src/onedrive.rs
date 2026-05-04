@@ -547,12 +547,18 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Per-file progress callback. Same shape as the other cache-and-
+/// scan kinds.
+pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// Walk + download. Same incremental-sync shape as the other
-/// cache-and-scan kinds.
+/// cache-and-scan kinds. `progress` (if Some) fires once per
+/// supported file considered.
 pub async fn walk_and_download(
     creds: &mut OneDriveCredentials,
     base_path: &str,
     source_id: &str,
+    progress: Option<WalkProgressCb>,
 ) -> Result<(PathBuf, usize)> {
     use crate::sync_manifest::SyncManifest;
     use std::collections::HashSet;
@@ -568,7 +574,18 @@ pub async fn walk_and_download(
 
     let mut manifest = SyncManifest::load(&cache_dir);
     let listing = list_recursive(creds, base_path, MAX_ONEDRIVE_FILES).await?;
+    let total_supported = listing
+        .iter()
+        .filter(|f| {
+            PathBuf::from(&f.path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .count();
     let mut downloaded = 0usize;
+    let mut considered = 0usize;
     let mut current_keys: HashSet<String> = HashSet::new();
 
     let normalized_base = base_path.trim_end_matches('/').to_string();
@@ -610,24 +627,30 @@ pub async fn walk_and_download(
             file.path.trim_start_matches('/').to_string()
         };
         let local_path = cache_dir.join(&rel);
+        let label = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
 
-        if !manifest.needs_download(&key, file.size_bytes, &mtime_marker)
-            && local_path.exists()
+        if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
+            || !local_path.exists()
         {
-            continue;
+            match download_file(creds, &file.id, &local_path).await {
+                Ok(_) => {
+                    downloaded += 1;
+                    manifest.record(key, file.size_bytes, mtime_marker);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[onedrive] download failed for {}: {} — skipping",
+                        file.path, e
+                    );
+                }
+            }
         }
-
-        match download_file(creds, &file.id, &local_path).await {
-            Ok(_) => {
-                downloaded += 1;
-                manifest.record(key, file.size_bytes, mtime_marker);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[onedrive] download failed for {}: {} — skipping",
-                    file.path, e
-                );
-            }
+        considered += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(considered, total_supported, label);
         }
     }
 

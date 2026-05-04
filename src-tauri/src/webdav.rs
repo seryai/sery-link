@@ -234,16 +234,22 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Per-file progress callback. Same signature as
+/// `sftp::WalkProgressCb`.
+pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// Walk the remote `base_path` and download every supported tabular
 /// / document file under it to the local cache dir. Mirrors the
 /// remote hierarchy. Skips files whose remote size + mtime match
 /// the manifest from the previous walk (incremental sync).
 ///
-/// Bounded by `MAX_WEBDAV_FILES` (10k).
+/// Bounded by `MAX_WEBDAV_FILES` (10k). `progress` (if Some) fires
+/// once per supported file considered.
 pub async fn walk_and_download(
     creds: &WebDavCredentials,
     base_path: &str,
     source_id: &str,
+    progress: Option<WalkProgressCb>,
 ) -> Result<(PathBuf, usize)> {
     use crate::sync_manifest::SyncManifest;
     use std::collections::HashSet;
@@ -261,7 +267,18 @@ pub async fn walk_and_download(
 
     let listing = list_recursive(creds, base_path, MAX_WEBDAV_FILES).await?;
     let base_pb = PathBuf::from(base_path);
+    let total_supported = listing
+        .iter()
+        .filter(|f| {
+            PathBuf::from(&f.remote_href)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .count();
     let mut downloaded = 0usize;
+    let mut considered = 0usize;
     let mut current_keys: HashSet<String> = HashSet::new();
 
     for file in listing.iter() {
@@ -287,6 +304,11 @@ pub async fn walk_and_download(
         };
         let local_path = cache_dir.join(&relative);
 
+        let label = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
         // Manifest key = remote href. Mtime marker = the Unix
         // timestamp from the WebDAV multistatus response (already
         // an i64; stringify for byte-comparison).
@@ -297,23 +319,25 @@ pub async fn walk_and_download(
             .unwrap_or_else(|| "0".to_string());
         current_keys.insert(key.clone());
 
-        if !manifest.needs_download(&key, file.size_bytes, &mtime_marker)
-            && local_path.exists()
+        if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
+            || !local_path.exists()
         {
-            continue;
+            match download_file(creds, &file.remote_href, &local_path).await {
+                Ok(_) => {
+                    downloaded += 1;
+                    manifest.record(key, file.size_bytes, mtime_marker);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[webdav] download failed for {}: {} — skipping",
+                        file.remote_href, e
+                    );
+                }
+            }
         }
-
-        match download_file(creds, &file.remote_href, &local_path).await {
-            Ok(_) => {
-                downloaded += 1;
-                manifest.record(key, file.size_bytes, mtime_marker);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[webdav] download failed for {}: {} — skipping",
-                    file.remote_href, e
-                );
-            }
+        considered += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(considered, total_supported, label);
         }
     }
 

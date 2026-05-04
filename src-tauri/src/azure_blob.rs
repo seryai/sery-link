@@ -321,14 +321,20 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Per-file progress callback. Same shape as the other cache-and-
+/// scan kinds.
+pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// Walk + download every supported blob under `prefix`. Skips
 /// blobs whose size + Last-Modified match the manifest from the
-/// previous walk (incremental sync).
+/// previous walk (incremental sync). `progress` (if Some) fires
+/// once per supported blob considered.
 pub async fn walk_and_download(
     account_url: &str,
     creds: &AzureBlobCredentials,
     prefix: &str,
     source_id: &str,
+    progress: Option<WalkProgressCb>,
 ) -> Result<(PathBuf, usize)> {
     use crate::sync_manifest::SyncManifest;
     use std::collections::HashSet;
@@ -350,7 +356,18 @@ pub async fn walk_and_download(
         MAX_AZURE_FILES,
     )
     .await?;
+    let total_supported = listing
+        .iter()
+        .filter(|b| {
+            PathBuf::from(&b.name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .count();
     let mut downloaded = 0usize;
+    let mut considered = 0usize;
     let mut current_keys: HashSet<String> = HashSet::new();
 
     let normalized_prefix = prefix.trim_start_matches('/').trim_end_matches('/').to_string();
@@ -385,6 +402,10 @@ pub async fn walk_and_download(
             blob.name.clone()
         };
         let local_path = cache_dir.join(&rel);
+        let label = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
 
         // Key = blob name (container-relative, stable). Mtime
         // marker = Last-Modified header from Azure (HTTP-date format).
@@ -395,23 +416,25 @@ pub async fn walk_and_download(
             .unwrap_or_else(|| "".to_string());
         current_keys.insert(key.clone());
 
-        if !manifest.needs_download(&key, blob.size_bytes, &mtime_marker)
-            && local_path.exists()
+        if manifest.needs_download(&key, blob.size_bytes, &mtime_marker)
+            || !local_path.exists()
         {
-            continue;
+            match download_blob(account_url, creds, &blob.name, &local_path).await {
+                Ok(_) => {
+                    downloaded += 1;
+                    manifest.record(key, blob.size_bytes, mtime_marker);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[azure] download failed for {}: {} — skipping",
+                        blob.name, e
+                    );
+                }
+            }
         }
-
-        match download_blob(account_url, creds, &blob.name, &local_path).await {
-            Ok(_) => {
-                downloaded += 1;
-                manifest.record(key, blob.size_bytes, mtime_marker);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[azure] download failed for {}: {} — skipping",
-                    blob.name, e
-                );
-            }
+        considered += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(considered, total_supported, label);
         }
     }
 

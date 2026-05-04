@@ -310,6 +310,15 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Per-file progress callback used by `walk_and_download_blocking`.
+/// Signature: `(current, total, file_label)`. Fires once per file
+/// considered (downloaded OR skipped via the manifest), so the
+/// frontend's progress bar tracks total walk completion not just
+/// download count. `file_label` is the remote path's basename for
+/// display ("sales.csv"); the empty string when no specific file
+/// applies.
+pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// F43 slice 2 + slice 3: walk the remote base_path, download every
 /// supported tabular / document file under it to the local cache
 /// dir, mirroring the remote directory hierarchy. Skips files whose
@@ -321,12 +330,16 @@ fn sanitize_path_component(s: &str) -> String {
 ///
 /// Bounded by `MAX_SFTP_FILES` (10k) to prevent runaway downloads.
 ///
+/// `progress` (if Some) fires once per supported file considered —
+/// useful for live UI updates.
+///
 /// Returns `(cache_dir, downloaded_count)`. `downloaded_count` is
 /// just the new+changed files; unchanged files don't bump it.
 pub fn walk_and_download_blocking(
     creds: &SftpCredentials,
     base_path: &str,
     source_id: &str,
+    progress: Option<WalkProgressCb>,
 ) -> Result<(PathBuf, usize)> {
     use crate::sync_manifest::SyncManifest;
     use std::collections::HashSet;
@@ -345,8 +358,23 @@ pub fn walk_and_download_blocking(
     let sess = connect_blocking(creds)?;
     let listing = list_recursive_blocking(&sess, base_path, MAX_SFTP_FILES)?;
 
+    // Pre-count supported files so progress callbacks have a stable
+    // total to report against (the listing includes unsupported
+    // extensions we'll skip).
+    let total_supported = listing
+        .iter()
+        .filter(|f| {
+            f.remote_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .count();
+
     let base_pb = PathBuf::from(base_path);
     let mut downloaded = 0usize;
+    let mut considered = 0usize;
     let mut current_keys: HashSet<String> = HashSet::new();
 
     for file in listing.iter() {
@@ -385,24 +413,35 @@ pub fn walk_and_download_blocking(
         // (or some other process) deleting the cache file between
         // scans — manifest-only would skip the redownload and the
         // scanner would see nothing.
-        if !manifest.needs_download(&key, file.size_bytes, &mtime_marker)
-            && local_path.exists()
-        {
-            continue;
-        }
+        let label = file
+            .remote_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
 
-        match download_blocking(&sess, &file.remote_path, &local_path) {
-            Ok(_) => {
-                downloaded += 1;
-                manifest.record(key, file.size_bytes, mtime_marker);
+        if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
+            || !local_path.exists()
+        {
+            match download_blocking(&sess, &file.remote_path, &local_path) {
+                Ok(_) => {
+                    downloaded += 1;
+                    manifest.record(key, file.size_bytes, mtime_marker);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[sftp] download failed for {}: {} — skipping",
+                        file.remote_path.display(),
+                        e
+                    );
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "[sftp] download failed for {}: {} — skipping",
-                    file.remote_path.display(),
-                    e
-                );
-            }
+        }
+        // Bump considered for every supported file (downloaded OR
+        // skipped via manifest) so the progress bar tracks total
+        // walk completion, not just new downloads.
+        considered += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(considered, total_supported, label);
         }
     }
 

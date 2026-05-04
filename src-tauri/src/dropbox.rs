@@ -309,13 +309,19 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
+/// Per-file progress callback. Same shape as the other cache-and-
+/// scan kinds.
+pub type WalkProgressCb = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// Walk + download every supported file under `base_path`. Skips
 /// files whose size + server_modified match the previous walk's
-/// manifest (incremental sync).
+/// manifest (incremental sync). `progress` (if Some) fires once
+/// per supported file considered.
 pub async fn walk_and_download(
     creds: &DropboxCredentials,
     base_path: &str,
     source_id: &str,
+    progress: Option<WalkProgressCb>,
 ) -> Result<(PathBuf, usize)> {
     use crate::sync_manifest::SyncManifest;
     use std::collections::HashSet;
@@ -332,7 +338,18 @@ pub async fn walk_and_download(
     let mut manifest = SyncManifest::load(&cache_dir);
 
     let listing = list_recursive(creds, base_path, MAX_DROPBOX_FILES).await?;
+    let total_supported = listing
+        .iter()
+        .filter(|f| {
+            PathBuf::from(&f.path_lower)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .count();
     let mut downloaded = 0usize;
+    let mut considered = 0usize;
     let mut current_keys: HashSet<String> = HashSet::new();
 
     let base_normalized = if base_path == "/" || base_path.is_empty() {
@@ -366,6 +383,10 @@ pub async fn walk_and_download(
             }
         };
         let local_path = cache_dir.join(&rel_str);
+        let label = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
 
         // Key = path_lower (Dropbox guarantees stability).
         // Mtime marker = server_modified (RFC 3339 string from API);
@@ -377,23 +398,25 @@ pub async fn walk_and_download(
             .unwrap_or_else(|| "".to_string());
         current_keys.insert(key.clone());
 
-        if !manifest.needs_download(&key, file.size, &mtime_marker)
-            && local_path.exists()
+        if manifest.needs_download(&key, file.size, &mtime_marker)
+            || !local_path.exists()
         {
-            continue;
+            match download_file(creds, &file.path_lower, &local_path).await {
+                Ok(_) => {
+                    downloaded += 1;
+                    manifest.record(key, file.size, mtime_marker);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[dropbox] download failed for {}: {} — skipping",
+                        file.path_lower, e
+                    );
+                }
+            }
         }
-
-        match download_file(creds, &file.path_lower, &local_path).await {
-            Ok(_) => {
-                downloaded += 1;
-                manifest.record(key, file.size, mtime_marker);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[dropbox] download failed for {}: {} — skipping",
-                    file.path_lower, e
-                );
-            }
+        considered += 1;
+        if let Some(cb) = progress.as_ref() {
+            cb(considered, total_supported, label);
         }
     }
 
