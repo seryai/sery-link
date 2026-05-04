@@ -5,20 +5,21 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Sources sidebar + 4 new storage protocols
+## [Unreleased] — Sources sidebar + 5 new storage protocols
 
 A two-part release. **Part one (F42)** rebuilds the sidebar around a
 unified `Sources` surface so every connected place — local folders,
 S3 buckets, HTTPS URLs, Drive accounts, future protocols — appears
 as one bookmark row with consistent right-click ops. The marketing-
 page promise made real, and the foundation every protocol adapter
-plugs into. **Part two (F43–F48)** ships four genuinely new storage
-protocols on top of that foundation: SFTP, WebDAV, Dropbox, and
-Azure Blob, plus four S3-compatible presets (B2 / Wasabi / R2 / GCS).
+plugs into. **Part two (F43–F49)** ships five genuinely new storage
+protocols on top of that foundation: SFTP, WebDAV, Dropbox, Azure
+Blob, and OneDrive, plus four S3-compatible presets (B2 / Wasabi /
+R2 / GCS).
 
-Picker now: **8 implemented** (Local · HTTPS · S3 · Drive · SFTP ·
-WebDAV · Dropbox · Azure Blob) + **4 S3-compatible presets** + **1
-coming soon** (OneDrive — needs full OAuth, no PAT shortcut).
+Picker is **feature-complete**: **9 implemented** (Local · HTTPS ·
+S3 · Drive · SFTP · WebDAV · Dropbox · Azure Blob · OneDrive) +
+**4 S3-compatible presets** + **0 coming soon**.
 
 See `datalake/SPEC_F42_SOURCES_SIDEBAR.md` for the foundation
 design.
@@ -128,12 +129,39 @@ design.
 - Rescan: list + mirror-download to
   `~/.seryai/dropbox-cache/<source_id>/`.
 
-### Incremental sync (all 4 cache-and-scan kinds)
+### F49 — OneDrive
+
+- `SourceKind::OneDrive { base_path }` variant.
+- Auth: **device code OAuth flow**. App requests a code from
+  Microsoft; the modal shows it big-and-monospaced; user opens
+  `microsoft.com/devicelogin` in any browser, enters the code,
+  signs in. App polls until completion. Avoids the deep-link
+  callback complexity of full PKCE while still being a first-class
+  Microsoft auth grant.
+- Backed by direct Microsoft Graph API calls via reqwest. BFS over
+  folders via `/me/drive/root:/<path>:/children`, follows
+  `@odata.nextLink` for pagination. Refresh-on-expiry runs
+  automatically before each Graph call (~60s pre-expiry to dodge
+  race conditions). Honors Microsoft's token rotation when a new
+  refresh_token is issued.
+- access_token + refresh_token + expires_at all live in the OS
+  keychain via `onedrive_creds`, keyed on source_id.
+- Rescan: walk + mirror-download to
+  `~/.seryai/onedrive-cache/<source_id>/`. Manifest key = item id
+  (stable across renames).
+- **Manual ops step before this works:** `MICROSOFT_CLIENT_ID` in
+  `src-tauri/src/onedrive.rs` is a placeholder. Founder needs to
+  register a Microsoft Entra app per
+  `datalake/SETUP_MICROSOFT_OAUTH.md` and replace it. Until then,
+  `start_device_code_flow` returns a clear configuration error.
+
+### Incremental sync (all 5 cache-and-scan kinds)
 
 - New `sync_manifest.rs` module owns a JSON file at
   `<cache_dir>/.sery-manifest.json` keyed on protocol-stable
   per-file ids → `{ size_bytes, mtime_marker }`.
-- Every `walk_and_download` (SFTP / WebDAV / Dropbox / Azure):
+- Every `walk_and_download` (SFTP / WebDAV / Dropbox / Azure /
+  OneDrive):
     1. Loads the manifest (default empty on missing/corrupt — safer
        to redownload than serve stale data).
     2. Skips download when manifest entry matches AND local cached
@@ -150,13 +178,17 @@ design.
 
 - New unified `EditCredentialsDialog` switches form per kind.
 - 8 new Tauri commands: `get_*_credentials_for_source` +
-  `update_*_credentials` for each cache-and-scan kind. Each
+  `update_*_credentials` for each of the 4 kinds. Each
   `update_*` re-runs the protocol's pre-flight before persisting.
 - Existing S3 dialog stays — its shape is different (works on URL
   not source_id) and predates the cache-and-scan generalisation.
 - SFTP edit form: host/port/username read-only; only the auth
   payload (password or SSH key) is editable. Endpoint changes go
   through Remove + Re-add.
+- OneDrive deliberately not wired in here — a "Re-authorize…"
+  context menu entry (re-running the device code flow) would be
+  better UX than editing tokens directly. Defer until users hit
+  refresh-token revocation in practice.
 
 ### Fixed
 
@@ -166,7 +198,7 @@ design.
 
 ### Tests
 
-- **258 sery-link Rust lib tests green** (up from 191 pre-F42).
+- **265 sery-link Rust lib tests green** (up from 191 pre-F42).
   Per-protocol coverage:
     - `sftp::tests` — 8 (creds validation, password / SSH key,
       serde tagged enum, default port, tilde expansion).
@@ -177,6 +209,10 @@ design.
       coverage including pagination + bad root rejection).
     - `dropbox::tests` — 4 (creds validation, list_folder JSON
       parse with file / folder / deleted entries).
+    - `onedrive::tests` — 7 (creds validation, expiry detection
+      with parseable/unparseable/past/future timestamps, Graph
+      children response parse with files + folders + pagination
+      link).
     - `sync_manifest::tests` — 9 (unknown / matched / size-changed
       / mtime-changed needs_download paths, drop_missing,
       save+load round-trip, missing-file + corrupt-file
@@ -188,13 +224,13 @@ design.
 
 ### Out of scope for v0.7.0
 
-- **OneDrive** — only remaining "coming soon" tile. Microsoft Graph
-  API has no PAT equivalent; needs full OAuth 2.0 PKCE flow with
-  refresh tokens + deep-link callback. Same scaffolding will let
-  us migrate Dropbox from PAT to OAuth.
-- **Streaming downloads** for WebDAV / Dropbox / Azure (currently
-  buffer full body — fine for typical files, memory-heavy on
-  multi-GB).
+- **Connect-with-Dropbox OAuth** — Dropbox ships today with PAT
+  auth (user generates token in their developer dashboard).
+  The OneDrive device-code scaffolding could be adapted to
+  Dropbox in a future slice for friendlier consumer UX.
+- **Streaming downloads** for WebDAV / Dropbox / Azure / OneDrive
+  (currently buffer full body — fine for typical files, memory-
+  heavy on multi-GB).
 - **Live `scan_progress` events during the cache-and-scan walk
   phase** — the StatusPill doesn't tick during downloads (only
   during the local-scanner phase that follows). Toast confirmation
@@ -205,6 +241,9 @@ design.
   adapter rewire.
 - **Cross-bucket drag-reorder** — moving a source between groups
   via DnD; use "Move to group…" action instead.
+- **OneDrive Re-authorize… context menu entry** — better UX than
+  Edit credentials for token rotation; defer until users hit
+  refresh-token revocation in practice.
 
 ## [0.6.3] — 2026-05-01
 
