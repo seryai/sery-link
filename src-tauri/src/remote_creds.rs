@@ -40,6 +40,20 @@ pub struct S3Credentials {
     pub region: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_token: Option<String>,
+    /// F45: S3-compatible endpoint host (no scheme), e.g.
+    /// `s3.us-west-002.backblazeb2.com` for Backblaze B2,
+    /// `s3.wasabisys.com` for Wasabi, `<account>.r2.cloudflarestorage.com`
+    /// for Cloudflare R2, `storage.googleapis.com` for GCS-S3.
+    /// `None` = AWS S3 default endpoint. The DuckDB httpfs extension
+    /// reads this via `s3_endpoint` which must NOT include the
+    /// `https://` scheme — strip it on save if the user pasted one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    /// F45: URL style for the S3-compatible endpoint. `path` for B2 +
+    /// R2 + MinIO; `vhost` for AWS + Wasabi (default). DuckDB reads
+    /// this via `s3_url_style`. `None` = DuckDB default (vhost).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url_style: Option<String>,
 }
 
 impl S3Credentials {
@@ -162,7 +176,38 @@ pub fn duckdb_setters(creds: &S3Credentials) -> String {
             ));
         }
     }
+    // F45: S3-compatible endpoints. DuckDB requires the bare host
+    // (no scheme) for s3_endpoint — strip https:// or http:// if
+    // the user pasted a full URL on the way in. Empty string means
+    // "AWS default" — same as None.
+    if let Some(ep) = creds.endpoint_url.as_deref() {
+        let host = strip_scheme(ep.trim()).trim_end_matches('/');
+        if !host.is_empty() {
+            out.push_str(&format!(
+                "SET s3_endpoint='{}';\n",
+                escape_sql(host)
+            ));
+        }
+    }
+    if let Some(style) = creds.url_style.as_deref() {
+        let s = style.trim();
+        if !s.is_empty() {
+            out.push_str(&format!(
+                "SET s3_url_style='{}';\n",
+                escape_sql(s)
+            ));
+        }
+    }
     out
+}
+
+/// Strip a leading `http://` or `https://` if present. Idempotent on
+/// already-bare hosts. Used for the S3 endpoint normalisation since
+/// DuckDB rejects values that include the scheme.
+fn strip_scheme(s: &str) -> &str {
+    s.strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s)
 }
 
 fn escape_sql(s: &str) -> String {
@@ -180,6 +225,8 @@ mod tests {
             secret_access_key: "secret".to_string(),
             region: "us-east-1".to_string(),
             session_token: None,
+            endpoint_url: None,
+            url_style: None,
         };
         assert!(base.is_valid());
 
@@ -203,6 +250,8 @@ mod tests {
             secret_access_key: "secret".to_string(),
             region: "us-east-1".to_string(),
             session_token: None,
+            endpoint_url: None,
+            url_style: None,
         };
         let sql = duckdb_setters(&creds);
         assert!(sql.contains("SET s3_region='us-east-1'"));
@@ -218,9 +267,101 @@ mod tests {
             secret_access_key: "secret".to_string(),
             region: "us-east-1".to_string(),
             session_token: Some("FwoGZ...".to_string()),
+            endpoint_url: None,
+            url_style: None,
         };
         let sql = duckdb_setters(&creds);
         assert!(sql.contains("SET s3_session_token='FwoGZ...'"));
+    }
+
+    // ─── F45: S3-compatible endpoint tests ─────────────────────────
+
+    #[test]
+    fn duckdb_setters_emits_endpoint_when_present() {
+        let creds = S3Credentials {
+            access_key_id: "AKIA".to_string(),
+            secret_access_key: "secret".to_string(),
+            region: "us-west-002".to_string(),
+            session_token: None,
+            endpoint_url: Some("s3.us-west-002.backblazeb2.com".to_string()),
+            url_style: Some("path".to_string()),
+        };
+        let sql = duckdb_setters(&creds);
+        assert!(
+            sql.contains("SET s3_endpoint='s3.us-west-002.backblazeb2.com'"),
+            "expected s3_endpoint statement, got: {sql}"
+        );
+        assert!(sql.contains("SET s3_url_style='path'"));
+    }
+
+    #[test]
+    fn duckdb_setters_strips_https_scheme_from_endpoint() {
+        // Users often paste a full URL from the provider's docs page.
+        // DuckDB rejects values that include the scheme — accepting
+        // both "host" and "https://host" is much friendlier than a
+        // cryptic IO_ERROR three seconds in.
+        let creds = S3Credentials {
+            access_key_id: "AKIA".to_string(),
+            secret_access_key: "secret".to_string(),
+            region: "us-east-1".to_string(),
+            session_token: None,
+            endpoint_url: Some("https://s3.wasabisys.com/".to_string()),
+            url_style: None,
+        };
+        let sql = duckdb_setters(&creds);
+        assert!(
+            sql.contains("SET s3_endpoint='s3.wasabisys.com'"),
+            "expected scheme-stripped endpoint, got: {sql}"
+        );
+        assert!(!sql.contains("https://"));
+    }
+
+    #[test]
+    fn duckdb_setters_omits_endpoint_when_empty() {
+        // Empty string is treated as None — preserves AWS default.
+        let creds = S3Credentials {
+            access_key_id: "AKIA".to_string(),
+            secret_access_key: "secret".to_string(),
+            region: "us-east-1".to_string(),
+            session_token: None,
+            endpoint_url: Some("".to_string()),
+            url_style: Some("   ".to_string()),
+        };
+        let sql = duckdb_setters(&creds);
+        assert!(!sql.contains("s3_endpoint"));
+        assert!(!sql.contains("s3_url_style"));
+    }
+
+    #[test]
+    fn duckdb_setters_omits_endpoint_when_none() {
+        let creds = S3Credentials {
+            access_key_id: "AKIA".to_string(),
+            secret_access_key: "secret".to_string(),
+            region: "us-east-1".to_string(),
+            session_token: None,
+            endpoint_url: None,
+            url_style: None,
+        };
+        let sql = duckdb_setters(&creds);
+        assert!(!sql.contains("s3_endpoint"));
+        assert!(!sql.contains("s3_url_style"));
+    }
+
+    #[test]
+    fn s3_credentials_back_compat_deserialise_without_new_fields() {
+        // Pre-F45 keychain entries don't have endpoint_url or
+        // url_style. Must still deserialise cleanly with both as None
+        // — otherwise existing users see "Couldn't load credentials"
+        // on every S3 source after upgrade.
+        let json = r#"{
+            "access_key_id": "AKIA",
+            "secret_access_key": "secret",
+            "region": "us-east-1"
+        }"#;
+        let creds: S3Credentials = serde_json::from_str(json).unwrap();
+        assert!(creds.endpoint_url.is_none());
+        assert!(creds.url_style.is_none());
+        assert!(creds.is_valid());
     }
 
     #[test]
@@ -234,6 +375,8 @@ mod tests {
             secret_access_key: "secret".to_string(),
             region: "us-east-1".to_string(),
             session_token: None,
+            endpoint_url: None,
+            url_style: None,
         };
         let sql = duckdb_setters(&creds);
         assert!(sql.contains("SET s3_access_key_id='AKIA''injected'"));

@@ -46,20 +46,21 @@ interface S3Credentials {
   secret_access_key: string;
   region: string;
   session_token?: string;
+  endpoint_url?: string;
+  url_style?: 'path' | 'vhost';
 }
 
 type ImplementedKind = 'local' | 'https' | 's3' | 'gdrive';
+type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
 type ComingSoonKind =
   | 'sftp'
   | 'webdav'
-  | 'b2'
   | 'azure'
-  | 'gcs'
   | 'dropbox'
   | 'onedrive';
 
 interface ProtocolTile {
-  kind: ImplementedKind | ComingSoonKind;
+  kind: ImplementedKind | S3CompatibleKind | ComingSoonKind;
   label: string;
   description: string;
 }
@@ -71,19 +72,68 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'gdrive', label: 'Google Drive', description: 'Folder via OAuth' },
 ];
 
+// F45: S3-compatible providers route to the URL stage with the
+// endpoint + url_style + region pre-filled. DuckDB httpfs talks to
+// these the same way as AWS S3 once `s3_endpoint` is set.
+const S3_COMPATIBLE: ProtocolTile[] = [
+  { kind: 'b2', label: 'Backblaze B2', description: 'S3-compatible' },
+  { kind: 'wasabi', label: 'Wasabi', description: 'S3-compatible' },
+  { kind: 'r2', label: 'Cloudflare R2', description: 'S3-compatible' },
+  { kind: 'gcs', label: 'Google Cloud Storage', description: 'S3 interop' },
+];
+
 const COMING_SOON: ProtocolTile[] = [
   { kind: 'sftp', label: 'SFTP', description: 'Coming in v0.7+' },
   { kind: 'webdav', label: 'WebDAV', description: 'Coming in v0.7+' },
-  { kind: 'b2', label: 'Backblaze B2', description: 'Coming in v0.7+' },
   { kind: 'azure', label: 'Azure Blob', description: 'Coming in v0.7+' },
-  { kind: 'gcs', label: 'Google Cloud Storage', description: 'Coming in v0.7+' },
   { kind: 'dropbox', label: 'Dropbox', description: 'Coming in v0.7+' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Coming in v0.7+' },
 ];
 
+/** Per-S3-compatible-provider presets for the UrlStage form. The
+ *  endpoint is the host DuckDB needs (no scheme); the placeholder
+ *  shows the typical bucket URL format the user will paste; the
+ *  region default is the provider's "you probably mean this" pick.
+ *  Users can override any of these in the form before submit. */
+const PRESETS: Record<S3CompatibleKind, UrlStageInitial> = {
+  b2: {
+    endpointUrl: 's3.us-west-002.backblazeb2.com',
+    urlStyle: 'path',
+    region: 'us-west-002',
+    urlPlaceholder: 's3://your-bucket/prefix/',
+    providerLabel: 'Backblaze B2',
+  },
+  wasabi: {
+    endpointUrl: 's3.wasabisys.com',
+    urlStyle: 'vhost',
+    region: 'us-east-1',
+    urlPlaceholder: 's3://your-bucket/prefix/',
+    providerLabel: 'Wasabi',
+  },
+  r2: {
+    // R2's endpoint is per-account; users must replace the placeholder.
+    // Empty string means "no preset" so the field appears empty rather
+    // than showing a misleading example URL.
+    endpointUrl: '',
+    urlStyle: 'path',
+    region: 'auto',
+    urlPlaceholder: 's3://your-bucket/prefix/',
+    providerLabel: 'Cloudflare R2',
+  },
+  gcs: {
+    endpointUrl: 'storage.googleapis.com',
+    urlStyle: 'path',
+    region: 'auto',
+    urlPlaceholder: 's3://your-bucket/prefix/',
+    providerLabel: 'Google Cloud Storage',
+  },
+};
+
 type Stage =
   | { kind: 'picker' }
-  | { kind: 'url' }       // HTTPS or S3 (form auto-detects)
+  // 'url' covers HTTPS, S3, and S3-compatible providers (the form
+  // auto-detects S3 by URL scheme; presets fill endpoint/region).
+  | { kind: 'url'; initial?: UrlStageInitial }
   | { kind: 'gdrive' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
@@ -163,10 +213,14 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickLocal={onPickLocal}
               onPickUrl={() => setStage({ kind: 'url' })}
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
+              onPickS3Compatible={(preset) =>
+                setStage({ kind: 'url', initial: PRESETS[preset] })
+              }
             />
           )}
           {stage.kind === 'url' && (
             <UrlStage
+              initial={stage.initial}
               onAdded={() => {
                 onAdded();
                 closeAll();
@@ -194,17 +248,23 @@ function ModalHeader({
   onBack: () => void;
   onClose: () => void;
 }) {
+  const providerLabel =
+    stage.kind === 'url' ? stage.initial?.providerLabel : undefined;
   const title =
     stage.kind === 'picker'
       ? 'Add a source'
       : stage.kind === 'url'
-        ? 'Add an HTTPS or S3 source'
+        ? providerLabel
+          ? `Add a ${providerLabel} source`
+          : 'Add an HTTPS or S3 source'
         : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
       : stage.kind === 'url'
-        ? 'Public URLs and S3 buckets read schema locally. Credentials live in your OS keychain — never on Sery servers.'
+        ? providerLabel
+          ? `${providerLabel} speaks the S3 protocol — Sery talks to it via DuckDB's S3 client. Credentials live in your OS keychain.`
+          : 'Public URLs and S3 buckets read schema locally. Credentials live in your OS keychain — never on Sery servers.'
         : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
@@ -245,11 +305,13 @@ function PickerStage({
   onPickLocal,
   onPickUrl,
   onPickGdrive,
+  onPickS3Compatible,
 }: {
   busy: boolean;
   onPickLocal: () => void;
   onPickUrl: () => void;
   onPickGdrive: () => void;
+  onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
     <>
@@ -276,6 +338,27 @@ function PickerStage({
           />
         ))}
       </div>
+      {/* F45: S3-compatible providers — DuckDB httpfs talks to all of
+          these the same way once s3_endpoint is set. The presets
+          fill in the right host + url_style + region so the user
+          only types their bucket URL + creds. */}
+      <div className="mt-6">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          S3-compatible
+        </h3>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {S3_COMPATIBLE.map((tile) => (
+            <ProtocolCard
+              key={tile.kind}
+              tile={tile}
+              disabled={busy}
+              onClick={() =>
+                onPickS3Compatible(tile.kind as S3CompatibleKind)
+              }
+            />
+          ))}
+        </div>
+      </div>
       <div className="mt-6">
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Coming in v0.7+
@@ -292,19 +375,42 @@ function PickerStage({
 
 // ─── Stage B — URL / S3 inline form ────────────────────────────────
 
+/** Initial form state for the URL stage. Per-preset variants pre-fill
+ *  the endpoint so users picking "Backblaze B2" land on a form that's
+ *  ready to take their bucket URL + creds without first looking up
+ *  the endpoint host on the provider's docs page. */
+interface UrlStageInitial {
+  endpointUrl?: string;
+  urlStyle?: 'path' | 'vhost';
+  region?: string;
+  /** Hint text rendered below the URL input — provider-specific
+   *  reminder of the bucket-URL format. */
+  urlPlaceholder?: string;
+  /** Branded label for the form heading + button — "Add a Backblaze
+   *  B2 source" reads more confidently than "Add an HTTPS or S3
+   *  source" when the user explicitly picked B2 from the picker. */
+  providerLabel?: string;
+}
+
 function UrlStage({
   onAdded,
   onCancel,
+  initial,
 }: {
   onAdded: () => void;
   onCancel: () => void;
+  initial?: UrlStageInitial;
 }) {
   const toast = useToast();
   const [url, setUrl] = useState('');
   const [accessKey, setAccessKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
-  const [region, setRegion] = useState('us-east-1');
+  const [region, setRegion] = useState(initial?.region ?? 'us-east-1');
   const [sessionToken, setSessionToken] = useState('');
+  const [endpointUrl, setEndpointUrl] = useState(initial?.endpointUrl ?? '');
+  const [urlStyle, setUrlStyle] = useState<'path' | 'vhost'>(
+    initial?.urlStyle ?? 'vhost',
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -331,6 +437,8 @@ function UrlStage({
           secret_access_key: secretKey.trim(),
           region: region.trim(),
           session_token: sessionToken.trim() || undefined,
+          endpoint_url: endpointUrl.trim() || undefined,
+          url_style: endpointUrl.trim() ? urlStyle : undefined,
         };
       }
       const normalised = await invoke<string>('add_remote_source', args);
@@ -363,7 +471,10 @@ function UrlStage({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && canSubmit) submit();
         }}
-        placeholder="https://… (CSV / Parquet / Excel) or s3://bucket/prefix/"
+        placeholder={
+          initial?.urlPlaceholder ??
+          'https://… (CSV / Parquet / Excel) or s3://bucket/prefix/'
+        }
         className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
       />
       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -419,6 +530,44 @@ function UrlStage({
               placeholder="Only for temporary STS creds"
               type="password"
             />
+          </div>
+          <div className="mt-3 border-t border-purple-200/70 pt-3 dark:border-purple-900/50">
+            <details
+              open={Boolean(initial?.endpointUrl) || endpointUrl !== ''}
+              className="group"
+            >
+              <summary className="cursor-pointer text-[11px] font-medium uppercase tracking-wide text-purple-700 hover:text-purple-900 dark:text-purple-200 dark:hover:text-purple-50">
+                S3-compatible endpoint (B2 / Wasabi / R2 / GCS / MinIO)
+              </summary>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <CredField
+                  label="Endpoint URL"
+                  value={endpointUrl}
+                  onChange={setEndpointUrl}
+                  placeholder="leave blank for AWS S3"
+                />
+                <label className="block">
+                  <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    URL style
+                  </span>
+                  <select
+                    value={urlStyle}
+                    onChange={(e) =>
+                      setUrlStyle(e.target.value as 'path' | 'vhost')
+                    }
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    <option value="vhost">vhost (AWS, Wasabi)</option>
+                    <option value="path">path (B2, R2, MinIO)</option>
+                  </select>
+                </label>
+              </div>
+              <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+                Paste the host from your provider's docs (with or without
+                <span className="font-mono"> https:// </span>—either works).
+                Most providers also tell you which URL style to use.
+              </p>
+            </details>
           </div>
         </div>
       )}
@@ -528,7 +677,7 @@ function ProtocolCard({
 }
 
 function legacyIconKindForTile(
-  kind: ImplementedKind | ComingSoonKind,
+  kind: ImplementedKind | S3CompatibleKind | ComingSoonKind,
 ): 'local' | 'http' | 's3' | 'gdrive' | null {
   switch (kind) {
     case 'local':
@@ -536,6 +685,13 @@ function legacyIconKindForTile(
     case 'https':
       return 'http';
     case 's3':
+    // S3-compatible providers all use the S3 icon — they speak the
+    // same wire protocol DuckDB already supports.
+    // eslint-disable-next-line no-fallthrough
+    case 'b2':
+    case 'wasabi':
+    case 'r2':
+    case 'gcs':
       return 's3';
     case 'gdrive':
       return 'gdrive';

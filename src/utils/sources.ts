@@ -21,6 +21,14 @@ export interface S3Credentials {
   secret_access_key: string;
   region: string;
   session_token?: string;
+  /** F45: S3-compatible endpoint host (no scheme) for B2 / Wasabi /
+   *  R2 / GCS / MinIO. Leave undefined for AWS S3. The Rust side
+   *  strips http(s):// schemes automatically — pasting a full URL
+   *  from the provider's docs page works. */
+  endpoint_url?: string;
+  /** F45: `path` for B2 / R2 / MinIO; `vhost` for AWS / Wasabi
+   *  (default). Most providers' docs say which one. */
+  url_style?: 'path' | 'vhost';
 }
 
 /** Rename a source by id. Throws if no source matches. */
