@@ -3030,6 +3030,20 @@ pub async fn reorder_sources(ordered_ids: Vec<String>) -> Result<(), String> {
     config.save().map_err(|e| e.to_string())
 }
 
+/// Load the stored S3 credentials for a URL — used by the
+/// "Edit credentials…" flow on S3 sources so the dialog can
+/// pre-populate fields with the user's existing values. Returns
+/// None if no entry exists for that URL (the source was added
+/// without creds, or creds were never saved). The secret is
+/// included; Tauri IPC is local-only so this doesn't cross any
+/// process boundary the credential isn't already trusted with.
+#[tauri::command]
+pub async fn get_s3_credentials_for_url(
+    url: String,
+) -> Result<Option<crate::remote_creds::S3Credentials>, String> {
+    crate::remote_creds::load(&url).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod search_tests {
     use super::{rank_matches, SearchMatchReason};

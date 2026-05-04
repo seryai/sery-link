@@ -16,6 +16,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { DataSource } from '../types/events';
 
+export interface S3Credentials {
+  access_key_id: string;
+  secret_access_key: string;
+  region: string;
+  session_token?: string;
+}
+
 /** Rename a source by id. Throws if no source matches. */
 export function renameSource(id: string, newName: string): Promise<void> {
   return invoke<void>('rename_source', { id, newName });
@@ -42,6 +49,16 @@ export function removeSource(id: string): Promise<void> {
  *  pre-call relative order — defensive against a partial list. */
 export function reorderSources(orderedIds: string[]): Promise<void> {
   return invoke<void>('reorder_sources', { orderedIds });
+}
+
+/** Load existing S3 credentials for a URL. Returns null when no
+ *  entry exists (source was added without creds, or creds were
+ *  never saved). Used by the Edit credentials… flow to pre-populate
+ *  the dialog. */
+export function getS3CredentialsForUrl(
+  url: string,
+): Promise<S3Credentials | null> {
+  return invoke<S3Credentials | null>('get_s3_credentials_for_url', { url });
 }
 
 /** Sort a sources list by sort_order for stable rendering. */
