@@ -3044,6 +3044,49 @@ pub async fn get_s3_credentials_for_url(
     crate::remote_creds::load(&url).map_err(|e| e.to_string())
 }
 
+/// F42 Day 4 slice 2 — kind-specific add for Local sources.
+///
+/// Writes the new source DIRECTLY to `config.sources` (with a fresh
+/// UUID + auto-incremented sort_order) instead of going through
+/// watched_folders + waiting for the migration on next Config::load.
+/// Also writes the watched_folders mirror entry so the legacy
+/// FolderList UI + the path-keyed scanner continue to find the
+/// folder unchanged.
+///
+/// Returns the new source's id so the frontend can navigate to it
+/// (future: /sources/:id deep link, F42 §3.1 spec).
+///
+/// Idempotent on path: re-adding the same path returns the existing
+/// source id without creating a duplicate.
+#[tauri::command]
+pub async fn add_local_source(
+    path: String,
+    recursive: Option<bool>,
+) -> Result<String, String> {
+    use std::path::PathBuf;
+    let recursive = recursive.unwrap_or(true);
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    // Build the DataSource using the convenience constructor; it
+    // derives a sensible default name from the basename of the path.
+    let new_source = crate::sources::DataSource::new_local(
+        PathBuf::from(&path),
+        recursive,
+    );
+    let new_id = config.add_source(new_source);
+
+    // Mirror into watched_folders so the path-keyed scanner +
+    // FolderList legacy UI keep working unchanged. Idempotent on
+    // path via the existing add_watched_folder helper.
+    config.add_watched_folder(path, recursive);
+
+    config.save().map_err(|e| e.to_string())?;
+
+    let _ = restart_file_watcher().await;
+    Ok(new_id)
+}
+
 #[cfg(test)]
 mod search_tests {
     use super::{rank_matches, SearchMatchReason};
