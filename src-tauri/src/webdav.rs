@@ -158,15 +158,23 @@ pub async fn list_recursive(
     Ok(out)
 }
 
-/// Download a single remote file to a local path. Async — uses
-/// reqwest's stream feature to avoid loading whole files in memory.
+/// Download a single remote file to a local path.
+///
+/// Uses our project-level reqwest (which has the `stream` feature
+/// enabled) directly rather than reqwest_dav's re-exported one. The
+/// list+PROPFIND path still goes through reqwest_dav for its XML
+/// parsing; we only bypass it here to get bytes_stream() so multi-GB
+/// WebDAV files don't OOM the app.
+///
+/// Auth construction is built manually (Basic / Digest header for
+/// the appropriate WebDavAuth variant) since we're not going through
+/// reqwest_dav's Auth abstraction here. Anonymous mode just sends
+/// no auth header.
 pub async fn download_file(
     creds: &WebDavCredentials,
     remote_href: &str,
     local_path: &Path,
 ) -> Result<u64> {
-    let client = build_client(creds)?;
-
     if let Some(parent) = local_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             AgentError::FileSystem(format!(
@@ -176,28 +184,112 @@ pub async fn download_file(
         })?;
     }
 
-    // get_raw returns a reqwest Response, which gives us streaming
-    // access to the body via bytes_stream().
-    let response = client.get(remote_href).await.map_err(|e| {
-        AgentError::Network(format!(
-            "WebDAV GET {remote_href}: {e}"
+    // The href returned by PROPFIND can be either a full URL or
+    // an absolute path; resolve relative to the server_url either way.
+    let url = resolve_dav_url(&creds.server_url, remote_href);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| AgentError::Network(format!("reqwest build: {e}")))?;
+
+    let mut req = client.get(&url);
+    match &creds.auth {
+        WebDavAuth::Anonymous => {}
+        WebDavAuth::Basic { username, password } => {
+            req = req.basic_auth(username, Some(password));
+        }
+        WebDavAuth::Digest { .. } => {
+            // Digest auth requires a challenge round-trip (server
+            // sends WWW-Authenticate; client computes response).
+            // reqwest doesn't have a built-in Digest auth; for now,
+            // fall back through reqwest_dav for Digest sources by
+            // calling the original buffered path. Most modern
+            // Nextcloud / ownCloud installs use Basic with app
+            // passwords, so this affects a small minority.
+            return download_file_buffered(creds, remote_href, local_path).await;
+        }
+    }
+
+    let response = req.send().await.map_err(|e| {
+        AgentError::Network(format!("WebDAV GET {url}: {e}"))
+    })?;
+    if !response.status().is_success() {
+        return Err(AgentError::Network(format!(
+            "WebDAV GET {url}: HTTP {}",
+            response.status()
+        )));
+    }
+
+    let mut local = tokio::fs::File::create(local_path).await.map_err(|e| {
+        AgentError::FileSystem(format!(
+            "create local {}: {e}",
+            local_path.display()
         ))
     })?;
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut total: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            AgentError::Network(format!("read chunk: {e}"))
+        })?;
+        local.write_all(&chunk).await.map_err(|e| {
+            AgentError::FileSystem(format!("write local: {e}"))
+        })?;
+        total += chunk.len() as u64;
+    }
+    local.flush().await.map_err(|e| {
+        AgentError::FileSystem(format!("flush local: {e}"))
+    })?;
+    Ok(total)
+}
 
+/// Resolve an href returned by PROPFIND against the server base URL.
+/// Servers may return absolute URLs (`https://nc.example/foo/bar`),
+/// absolute paths (`/foo/bar`), or relative paths (`bar`); handle
+/// each.
+fn resolve_dav_url(server_url: &str, href: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        return href.to_string();
+    }
+    let trimmed_server = server_url.trim_end_matches('/');
+    if href.starts_with('/') {
+        // Absolute path — replace the path on the server URL.
+        match url::Url::parse(server_url) {
+            Ok(u) => format!(
+                "{}://{}{}",
+                u.scheme(),
+                u.host_str().unwrap_or(""),
+                href
+            ),
+            Err(_) => format!("{}{}", trimmed_server, href),
+        }
+    } else {
+        format!("{}/{}", trimmed_server, href)
+    }
+}
+
+/// Buffered fallback used for WebDavAuth::Digest, which our
+/// stream path doesn't yet support (reqwest has no built-in
+/// Digest helper). reqwest_dav handles Digest via its own
+/// challenge-response logic, so we keep using it for those
+/// sources at the cost of buffering the whole body.
+async fn download_file_buffered(
+    creds: &WebDavCredentials,
+    remote_href: &str,
+    local_path: &Path,
+) -> Result<u64> {
+    let client = build_client(creds)?;
+    let response = client.get(remote_href).await.map_err(|e| {
+        AgentError::Network(format!("WebDAV GET {remote_href}: {e}"))
+    })?;
     if !response.status().is_success() {
         return Err(AgentError::Network(format!(
             "WebDAV GET {remote_href}: HTTP {}",
             response.status()
         )));
     }
-
-    // Buffer the full body. reqwest_dav's re-exported reqwest
-    // doesn't enable the `stream` feature, so we don't have
-    // bytes_stream() — buffer-then-write is simpler anyway. For
-    // typical WebDAV files (configs, docs, CSVs under a few hundred
-    // MB) the memory hit is acceptable; if users hit this against
-    // multi-GB files we'd switch to a custom client built on our
-    // own reqwest with stream enabled.
     let body = response.bytes().await.map_err(|e| {
         AgentError::Network(format!("read body: {e}"))
     })?;
