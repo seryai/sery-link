@@ -2953,6 +2953,53 @@ pub async fn read_file(path: String) -> Result<String, String> {
 
 // SQL Recipe Executor was removed in the v0.5.0 pivot. The module,
 // example recipe JSONs, and frontend surfaces have all been deleted.
+
+// ─── F42 Day 4: source mutation commands ───────────────────────────
+//
+// Thin wrappers around Config::{rename_source, set_source_group,
+// remove_source, reorder_sources}. The frontend Sources sidebar
+// (Day 5-6) calls these via Tauri.invoke; the load/save loop is
+// handled here so callers don't have to. Add-source + rescan-source
+// commands come in a follow-on slice that includes the credential
+// keying refactor.
+
+#[tauri::command]
+pub async fn rename_source(id: String, new_name: String) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config
+        .rename_source(&id, new_name)
+        .map_err(|e| e.to_string())?;
+    config.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_source_group(
+    id: String,
+    group: Option<String>,
+) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config
+        .set_source_group(&id, group)
+        .map_err(|e| e.to_string())?;
+    config.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn remove_source(id: String) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.remove_source(&id).map_err(|e| e.to_string())?;
+    config.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reorder_sources(ordered_ids: Vec<String>) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config
+        .reorder_sources(&ordered_ids)
+        .map_err(|e| e.to_string())?;
+    config.save().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod search_tests {
     use super::{rank_matches, SearchMatchReason};
