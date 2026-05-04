@@ -478,6 +478,20 @@ pub async fn download_file(
     if creds.access_token_expired_or_expiring() {
         refresh_access_token(creds).await?;
     }
+    download_file_with_token(&creds.access_token, item_id, local_path).await
+}
+
+/// Internal: download with an explicit access token, no creds
+/// mutation. Used by `walk_and_download` so concurrent tasks can
+/// share an immutable token snapshot — the up-front refresh in
+/// list_recursive guarantees the token is fresh for the duration
+/// of the walk (typical walks complete well inside the token's
+/// 1-hour validity window).
+async fn download_file_with_token(
+    access_token: &str,
+    item_id: &str,
+    local_path: &Path,
+) -> Result<u64> {
     if let Some(parent) = local_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             AgentError::FileSystem(format!(
@@ -491,7 +505,7 @@ pub async fn download_file(
     let url = format!("{GRAPH_BASE}/me/drive/items/{item_id}/content");
     let resp = http_client()
         .get(&url)
-        .bearer_auth(&creds.access_token)
+        .bearer_auth(access_token)
         .send()
         .await
         .map_err(|e| {
@@ -573,86 +587,128 @@ pub async fn walk_and_download(
     })?;
 
     let mut manifest = SyncManifest::load(&cache_dir);
+    // list_recursive does its own up-front refresh-if-needed via
+    // &mut creds; after it returns, creds.access_token is fresh.
+    // We snapshot it for the concurrent download phase. Rationale:
+    // OneDrive access tokens last 1 hour; typical walks complete
+    // well within that window. If a download mid-walk fails with
+    // 401 we surface the error and the user retries — a future
+    // polish could add per-task refresh via Arc<TokioMutex<creds>>
+    // but the added complexity isn't justified yet.
     let listing = list_recursive(creds, base_path, MAX_ONEDRIVE_FILES).await?;
-    let total_supported = listing
-        .iter()
-        .filter(|f| {
-            PathBuf::from(&f.path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
-                .unwrap_or(false)
-        })
-        .count();
-    let mut downloaded = 0usize;
-    let mut considered = 0usize;
-    let mut current_keys: HashSet<String> = HashSet::new();
+    let access_token = creds.access_token.clone();
 
     let normalized_base = base_path.trim_end_matches('/').to_string();
 
-    for file in listing.iter() {
-        let p = PathBuf::from(&file.path);
-        let ext = p
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        let supported = ext
-            .as_deref()
-            .map(crate::scanner::is_supported_ext)
-            .unwrap_or(false);
-        if !supported {
-            continue;
-        }
-
-        // Manifest key = item id (stable across renames). Mtime
-        // marker = lastModifiedDateTime.
-        let key = file.id.clone();
-        let mtime_marker = file.mtime.clone().unwrap_or_default();
-        current_keys.insert(key.clone());
-
-        // Mirror local path under cache dir using the file's
-        // OneDrive-relative path (stripping the user's base_path).
-        let rel = if normalized_base.is_empty() || normalized_base == "/" {
-            file.path.trim_start_matches('/').to_string()
-        } else if let Some(s) =
-            file.path.strip_prefix(&format!("{}/", normalized_base))
-        {
-            s.to_string()
-        } else if file.path == normalized_base {
-            p.file_name()
+    struct Work {
+        id: String,
+        local_path: PathBuf,
+        label: String,
+        key: String,
+        mtime_marker: String,
+        size: u64,
+    }
+    let work: Vec<Work> = listing
+        .iter()
+        .filter_map(|f| {
+            let p = PathBuf::from(&f.path);
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase());
+            if !ext
+                .as_deref()
+                .map(crate::scanner::is_supported_ext)
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            let rel = if normalized_base.is_empty() || normalized_base == "/" {
+                f.path.trim_start_matches('/').to_string()
+            } else if let Some(s) =
+                f.path.strip_prefix(&format!("{}/", normalized_base))
+            {
+                s.to_string()
+            } else if f.path == normalized_base {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&f.path)
+                    .to_string()
+            } else {
+                f.path.trim_start_matches('/').to_string()
+            };
+            let local_path = cache_dir.join(&rel);
+            let label = p
+                .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or(&file.path)
-                .to_string()
-        } else {
-            file.path.trim_start_matches('/').to_string()
-        };
-        let local_path = cache_dir.join(&rel);
-        let label = p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
+            Some(Work {
+                id: f.id.clone(),
+                local_path,
+                label,
+                key: f.id.clone(),
+                mtime_marker: f.mtime.clone().unwrap_or_default(),
+                size: f.size_bytes,
+            })
+        })
+        .collect();
 
-        if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
-            || !local_path.exists()
-        {
-            match download_file(creds, &file.id, &local_path).await {
-                Ok(_) => {
-                    downloaded += 1;
-                    manifest.record(key, file.size_bytes, mtime_marker);
+    let total_supported = work.len();
+    let current_keys: HashSet<String> =
+        work.iter().map(|w| w.key.clone()).collect();
+
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    const MAX_CONCURRENT: usize = 4;
+
+    let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
+    let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let considered_ct = std::sync::Arc::new(AtomicUsize::new(0));
+    let access_token = std::sync::Arc::new(access_token);
+
+    futures::stream::iter(work)
+        .for_each_concurrent(MAX_CONCURRENT, |w| {
+            let token = access_token.clone();
+            let manifest = manifest_mu.clone();
+            let downloaded = downloaded_ct.clone();
+            let considered = considered_ct.clone();
+            let progress = progress.clone();
+            async move {
+                let needs = {
+                    let m = manifest.lock().expect("manifest poisoned");
+                    m.needs_download(&w.key, w.size, &w.mtime_marker)
+                        || !w.local_path.exists()
+                };
+                if needs {
+                    match download_file_with_token(&token, &w.id, &w.local_path).await {
+                        Ok(_) => {
+                            downloaded.fetch_add(1, Ordering::Relaxed);
+                            let mut m = manifest.lock().expect("manifest poisoned");
+                            m.record(w.key.clone(), w.size, w.mtime_marker.clone());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[onedrive] download failed for {}: {} — skipping",
+                                w.id, e
+                            );
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "[onedrive] download failed for {}: {} — skipping",
-                        file.path, e
-                    );
+                let n = considered.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress.as_ref() {
+                    cb(n, total_supported, &w.label);
                 }
             }
-        }
-        considered += 1;
-        if let Some(cb) = progress.as_ref() {
-            cb(considered, total_supported, label);
-        }
-    }
+        })
+        .await;
+
+    let downloaded = downloaded_ct.load(Ordering::Relaxed);
+    let mut manifest = std::sync::Arc::try_unwrap(manifest_mu)
+        .expect("manifest still referenced")
+        .into_inner()
+        .expect("manifest poisoned");
 
     let stale = manifest.drop_missing(&current_keys);
     // The manifest key is the Drive item id, not a path — we don't
