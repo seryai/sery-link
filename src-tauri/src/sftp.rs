@@ -310,29 +310,26 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
-/// F43 slice 2: walk the remote base_path, download every supported
-/// tabular / document file under it to the local cache dir, mirroring
-/// the remote directory hierarchy. Returns the cache dir + the count
-/// of files downloaded.
+/// F43 slice 2 + slice 3: walk the remote base_path, download every
+/// supported tabular / document file under it to the local cache
+/// dir, mirroring the remote directory hierarchy. Skips files whose
+/// remote size + mtime match the manifest from the previous walk
+/// (incremental sync).
 ///
 /// Filtering: only files whose extension is in the path-keyed
-/// scanner's supported set get downloaded. The supported list comes
-/// from `scanner::is_supported_ext` so we don't bloat the cache with
-/// images / executables / random binaries that the scanner would
-/// skip anyway.
+/// scanner's supported set get downloaded.
 ///
-/// Strategy: full re-download every call. Incremental sync (mtime
-/// diff against a manifest) is a follow-up slice — F43 slice 3 if
-/// users with big datasets actually hit the wait time. For datasets
-/// up to a few GB the full-re-download is correct and simple.
+/// Bounded by `MAX_SFTP_FILES` (10k) to prevent runaway downloads.
 ///
-/// Bounded by `MAX_SFTP_FILES` (10k) to prevent runaway downloads
-/// on misconfigured base_paths pointing at, say, /var/log.
+/// Returns `(cache_dir, downloaded_count)`. `downloaded_count` is
+/// just the new+changed files; unchanged files don't bump it.
 pub fn walk_and_download_blocking(
     creds: &SftpCredentials,
     base_path: &str,
     source_id: &str,
 ) -> Result<(PathBuf, usize)> {
+    use crate::sync_manifest::SyncManifest;
+    use std::collections::HashSet;
     const MAX_SFTP_FILES: usize = 10_000;
 
     let cache_dir = cache_dir_for_source(source_id)?;
@@ -343,15 +340,16 @@ pub fn walk_and_download_blocking(
         ))
     })?;
 
+    let mut manifest = SyncManifest::load(&cache_dir);
+
     let sess = connect_blocking(creds)?;
     let listing = list_recursive_blocking(&sess, base_path, MAX_SFTP_FILES)?;
 
     let base_pb = PathBuf::from(base_path);
     let mut downloaded = 0usize;
+    let mut current_keys: HashSet<String> = HashSet::new();
 
     for file in listing.iter() {
-        // Path-keyed scanner skips unsupported extensions; don't
-        // waste bandwidth pulling them.
         let ext = file
             .remote_path
             .extension()
@@ -365,19 +363,38 @@ pub fn walk_and_download_blocking(
             continue;
         }
 
-        // Mirror the remote relative path inside the cache dir.
-        // Strip the base_path prefix; if it doesn't start with
-        // base_path (shouldn't happen — the listing came from base
-        // — but defensively) skip the file.
         let relative = match file.remote_path.strip_prefix(&base_pb) {
             Ok(r) => r.to_path_buf(),
             Err(_) => continue,
         };
         let local_path = cache_dir.join(&relative);
 
+        // Manifest key = remote absolute path. Stable across walks.
+        let key = file.remote_path.to_string_lossy().to_string();
+        // Mtime marker: SFTP gives us Unix epoch seconds. Stringify
+        // for the byte-comparison contract; "0" sentinel when None
+        // (some servers don't return mtime).
+        let mtime_marker = file
+            .mtime_unix
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "0".to_string());
+        current_keys.insert(key.clone());
+
+        // Skip if manifest matches AND the local cached file still
+        // exists. The local-existence check guards against the user
+        // (or some other process) deleting the cache file between
+        // scans — manifest-only would skip the redownload and the
+        // scanner would see nothing.
+        if !manifest.needs_download(&key, file.size_bytes, &mtime_marker)
+            && local_path.exists()
+        {
+            continue;
+        }
+
         match download_blocking(&sess, &file.remote_path, &local_path) {
             Ok(_) => {
                 downloaded += 1;
+                manifest.record(key, file.size_bytes, mtime_marker);
             }
             Err(e) => {
                 eprintln!(
@@ -385,12 +402,23 @@ pub fn walk_and_download_blocking(
                     file.remote_path.display(),
                     e
                 );
-                // Continue past per-file failures — the rest of the
-                // tree is still useful. Frontend sees a
-                // best-effort scan.
             }
         }
     }
+
+    // Drop manifest entries + cache files for remote paths no
+    // longer present. Otherwise removed-from-server files keep
+    // showing up in scan results.
+    let stale = manifest.drop_missing(&current_keys);
+    for stale_key in &stale {
+        let stale_path = PathBuf::from(stale_key);
+        if let Ok(rel) = stale_path.strip_prefix(&base_pb) {
+            let local = cache_dir.join(rel);
+            let _ = std::fs::remove_file(&local);
+        }
+    }
+
+    let _ = manifest.save(&cache_dir);
 
     Ok((cache_dir, downloaded))
 }

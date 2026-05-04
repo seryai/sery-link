@@ -313,13 +313,17 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
-/// Walk + download every supported blob under `prefix`.
+/// Walk + download every supported blob under `prefix`. Skips
+/// blobs whose size + Last-Modified match the manifest from the
+/// previous walk (incremental sync).
 pub async fn walk_and_download(
     account_url: &str,
     creds: &AzureBlobCredentials,
     prefix: &str,
     source_id: &str,
 ) -> Result<(PathBuf, usize)> {
+    use crate::sync_manifest::SyncManifest;
+    use std::collections::HashSet;
     const MAX_AZURE_FILES: usize = 10_000;
     let cache_dir = cache_dir_for_source(source_id)?;
     tokio::fs::create_dir_all(&cache_dir).await.map_err(|e| {
@@ -329,6 +333,8 @@ pub async fn walk_and_download(
         ))
     })?;
 
+    let mut manifest = SyncManifest::load(&cache_dir);
+
     let listing = list_recursive(
         account_url,
         creds,
@@ -337,6 +343,7 @@ pub async fn walk_and_download(
     )
     .await?;
     let mut downloaded = 0usize;
+    let mut current_keys: HashSet<String> = HashSet::new();
 
     let normalized_prefix = prefix.trim_start_matches('/').trim_end_matches('/').to_string();
 
@@ -354,9 +361,6 @@ pub async fn walk_and_download(
             continue;
         }
 
-        // Mirror relative path under cache dir. Strip the prefix
-        // since blob names are container-relative and may include
-        // the user's prefix as their first segments.
         let rel = if normalized_prefix.is_empty() {
             blob.name.clone()
         } else if let Some(s) = blob
@@ -365,20 +369,34 @@ pub async fn walk_and_download(
         {
             s.to_string()
         } else if blob.name == normalized_prefix {
-            // Single blob exactly equal to prefix — keep its basename.
             path.file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(&blob.name)
                 .to_string()
         } else {
-            // Fallback — keep the full name.
             blob.name.clone()
         };
         let local_path = cache_dir.join(&rel);
 
+        // Key = blob name (container-relative, stable). Mtime
+        // marker = Last-Modified header from Azure (HTTP-date format).
+        let key = blob.name.clone();
+        let mtime_marker = blob
+            .last_modified
+            .clone()
+            .unwrap_or_else(|| "".to_string());
+        current_keys.insert(key.clone());
+
+        if !manifest.needs_download(&key, blob.size_bytes, &mtime_marker)
+            && local_path.exists()
+        {
+            continue;
+        }
+
         match download_blob(account_url, creds, &blob.name, &local_path).await {
             Ok(_) => {
                 downloaded += 1;
+                manifest.record(key, blob.size_bytes, mtime_marker);
             }
             Err(e) => {
                 eprintln!(
@@ -388,6 +406,22 @@ pub async fn walk_and_download(
             }
         }
     }
+
+    // Drop stale entries + their cached files.
+    let stale = manifest.drop_missing(&current_keys);
+    for stale_key in &stale {
+        let rel = if normalized_prefix.is_empty() {
+            stale_key.clone()
+        } else if let Some(s) = stale_key.strip_prefix(&format!("{}/", normalized_prefix)) {
+            s.to_string()
+        } else {
+            continue;
+        };
+        let local = cache_dir.join(&rel);
+        let _ = tokio::fs::remove_file(&local).await;
+    }
+
+    let _ = manifest.save(&cache_dir);
 
     Ok((cache_dir, downloaded))
 }

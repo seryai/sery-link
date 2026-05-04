@@ -1101,7 +1101,8 @@ function AzureBlobStage({
         <span className="font-mono">
           ~/.seryai/azure-cache/&lt;id&gt;/
         </span>{' '}
-        and indexes them locally. Each rescan is a full re-download.
+        and indexes them locally. Subsequent rescans skip files
+        whose remote size + mtime are unchanged (incremental sync).
       </div>
 
       <div className="mt-6 flex items-center justify-between gap-2">
@@ -1239,7 +1240,8 @@ function DropboxStage({
         <span className="font-mono">
           ~/.seryai/dropbox-cache/&lt;id&gt;/
         </span>{' '}
-        and indexes them locally. Each rescan is a full re-download.
+        and indexes them locally. Subsequent rescans skip files
+        whose remote size + mtime are unchanged (incremental sync).
       </div>
 
       <div className="mt-6 flex items-center justify-between gap-2">
@@ -1484,7 +1486,8 @@ function WebDavStage({
         <span className="font-mono">
           ~/.seryai/webdav-cache/&lt;id&gt;/
         </span>{' '}
-        and indexes them locally. Each rescan is a full re-download.
+        and indexes them locally. Subsequent rescans skip files
+        whose remote size + mtime are unchanged (incremental sync).
       </div>
 
       <div className="mt-6 flex items-center justify-between gap-2">

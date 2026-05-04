@@ -236,17 +236,17 @@ fn sanitize_path_component(s: &str) -> String {
 
 /// Walk the remote `base_path` and download every supported tabular
 /// / document file under it to the local cache dir. Mirrors the
-/// remote hierarchy under the cache dir.
+/// remote hierarchy. Skips files whose remote size + mtime match
+/// the manifest from the previous walk (incremental sync).
 ///
-/// Strategy: full re-download every call. Same trade-off as SFTP —
-/// simple, correct, slow on large trees. Slice 3 adds incremental.
-///
-/// Bounded by `MAX_WEBDAV_FILES` (10k) to prevent runaway downloads.
+/// Bounded by `MAX_WEBDAV_FILES` (10k).
 pub async fn walk_and_download(
     creds: &WebDavCredentials,
     base_path: &str,
     source_id: &str,
 ) -> Result<(PathBuf, usize)> {
+    use crate::sync_manifest::SyncManifest;
+    use std::collections::HashSet;
     const MAX_WEBDAV_FILES: usize = 10_000;
 
     let cache_dir = cache_dir_for_source(source_id)?;
@@ -257,12 +257,14 @@ pub async fn walk_and_download(
         ))
     })?;
 
+    let mut manifest = SyncManifest::load(&cache_dir);
+
     let listing = list_recursive(creds, base_path, MAX_WEBDAV_FILES).await?;
     let base_pb = PathBuf::from(base_path);
     let mut downloaded = 0usize;
+    let mut current_keys: HashSet<String> = HashSet::new();
 
     for file in listing.iter() {
-        // Filter by extension to avoid downloading unsupported files.
         let path = PathBuf::from(&file.remote_href);
         let ext = path
             .extension()
@@ -276,12 +278,8 @@ pub async fn walk_and_download(
             continue;
         }
 
-        // Mirror the remote relative path inside the cache dir.
         let relative = match path.strip_prefix(&base_pb) {
             Ok(r) => r.to_path_buf(),
-            // If the href doesn't start with base_path (server may
-            // return absolute hrefs), keep just the basename so we
-            // get SOMETHING usable. Loses dir structure for those.
             Err(_) => match path.file_name() {
                 Some(name) => PathBuf::from(name),
                 None => continue,
@@ -289,9 +287,26 @@ pub async fn walk_and_download(
         };
         let local_path = cache_dir.join(&relative);
 
+        // Manifest key = remote href. Mtime marker = the Unix
+        // timestamp from the WebDAV multistatus response (already
+        // an i64; stringify for byte-comparison).
+        let key = file.remote_href.clone();
+        let mtime_marker = file
+            .mtime_unix
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "0".to_string());
+        current_keys.insert(key.clone());
+
+        if !manifest.needs_download(&key, file.size_bytes, &mtime_marker)
+            && local_path.exists()
+        {
+            continue;
+        }
+
         match download_file(creds, &file.remote_href, &local_path).await {
             Ok(_) => {
                 downloaded += 1;
+                manifest.record(key, file.size_bytes, mtime_marker);
             }
             Err(e) => {
                 eprintln!(
@@ -301,6 +316,17 @@ pub async fn walk_and_download(
             }
         }
     }
+
+    let stale = manifest.drop_missing(&current_keys);
+    for stale_key in &stale {
+        let stale_path = PathBuf::from(stale_key);
+        if let Ok(rel) = stale_path.strip_prefix(&base_pb) {
+            let local = cache_dir.join(rel);
+            let _ = tokio::fs::remove_file(&local).await;
+        }
+    }
+
+    let _ = manifest.save(&cache_dir);
 
     Ok((cache_dir, downloaded))
 }
