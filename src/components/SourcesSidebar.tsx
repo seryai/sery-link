@@ -23,10 +23,13 @@ import {
   legacyKindStringOf,
   removeSource,
   renameSource,
+  scanKeyOf,
   setSourceGroup,
   sourceKindLabel,
 } from '../utils/sources';
 import type { AgentConfig, DataSource } from '../types/events';
+
+type SourceStatus = 'scanning' | 'online' | 'pending';
 
 interface RowMenuState {
   sourceId: string;
@@ -34,8 +37,25 @@ interface RowMenuState {
   y: number;
 }
 
+/** Compute the visible status of a source from its scan history +
+ *  any in-flight scan. "scanning" wins over the static state because
+ *  it's the freshest signal. */
+function statusOf(
+  source: DataSource,
+  scansInFlight: Record<string, unknown>,
+): SourceStatus {
+  const key = scanKeyOf(source);
+  if (key && key in scansInFlight) {
+    return 'scanning';
+  }
+  if (source.last_scan_at) {
+    return 'online';
+  }
+  return 'pending';
+}
+
 export function SourcesSidebar() {
-  const { config, setConfig } = useAgentStore();
+  const { config, setConfig, scansInFlight } = useAgentStore();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
@@ -136,6 +156,7 @@ export function SourcesSidebar() {
     <SourceRow
       key={source.id}
       source={source}
+      status={statusOf(source, scansInFlight)}
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
@@ -204,10 +225,11 @@ export function SourcesSidebar() {
 
 interface SourceRowProps {
   source: DataSource;
+  status: SourceStatus;
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
-function SourceRow({ source, onContextMenu }: SourceRowProps) {
+function SourceRow({ source, status, onContextMenu }: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
   const datasetCount = source.last_scan_stats?.datasets ?? null;
   return (
@@ -226,9 +248,12 @@ function SourceRow({ source, onContextMenu }: SourceRowProps) {
         <div className="truncate font-medium text-slate-800 dark:text-slate-100">
           {source.name}
         </div>
-        <div className="truncate text-xs text-slate-500 dark:text-slate-400">
-          {sourceKindLabel(source)}
-          {datasetCount !== null && ` · ${datasetCount.toLocaleString()} files`}
+        <div className="flex items-center gap-1.5 truncate text-xs text-slate-500 dark:text-slate-400">
+          <StatusPill status={status} />
+          <span className="truncate">
+            {sourceKindLabel(source)}
+            {datasetCount !== null && ` · ${datasetCount.toLocaleString()} files`}
+          </span>
         </div>
       </div>
       <button
@@ -337,4 +362,37 @@ function MenuItem({
       {children}
     </button>
   );
+}
+
+/** Tiny colored dot that hints whether the source is healthy /
+ *  scanning / waiting for its first scan. Plays the same role as
+ *  the per-folder spinner on the Folders cards but in a denser
+ *  one-line shape that fits the sidebar row. */
+function StatusPill({ status }: { status: SourceStatus }) {
+  switch (status) {
+    case 'scanning':
+      return (
+        <span
+          className="inline-flex h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-blue-500"
+          aria-label="Scanning"
+          title="Scanning"
+        />
+      );
+    case 'online':
+      return (
+        <span
+          className="inline-flex h-2 w-2 flex-shrink-0 rounded-full bg-emerald-500"
+          aria-label="Online"
+          title="Last scan succeeded"
+        />
+      );
+    case 'pending':
+      return (
+        <span
+          className="inline-flex h-2 w-2 flex-shrink-0 rounded-full bg-slate-400"
+          aria-label="Pending"
+          title="No scan yet"
+        />
+      );
+  }
 }
