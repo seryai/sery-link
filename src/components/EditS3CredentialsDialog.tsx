@@ -44,6 +44,8 @@ export function EditS3CredentialsDialog({ source, onClose, onSaved }: Props) {
   const [secretKey, setSecretKey] = useState('');
   const [region, setRegion] = useState('');
   const [sessionToken, setSessionToken] = useState('');
+  const [endpointUrl, setEndpointUrl] = useState('');
+  const [urlStyle, setUrlStyle] = useState<'path' | 'vhost'>('vhost');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,6 +66,12 @@ export function EditS3CredentialsDialog({ source, onClose, onSaved }: Props) {
           setSecretKey(creds.secret_access_key);
           setRegion(creds.region);
           setSessionToken(creds.session_token ?? '');
+          setEndpointUrl(creds.endpoint_url ?? '');
+          // Pre-F45 keychain entries don't store url_style; default
+          // to vhost (the AWS default + Wasabi default). If users
+          // are on B2/R2/MinIO they'll need to flip this once during
+          // the upgrade flow.
+          setUrlStyle((creds.url_style as 'path' | 'vhost') ?? 'vhost');
         } else {
           setError(
             "Couldn't find existing credentials for this source. " +
@@ -124,6 +132,8 @@ export function EditS3CredentialsDialog({ source, onClose, onSaved }: Props) {
         secret_access_key: secretKey.trim(),
         region: region.trim(),
         session_token: sessionToken.trim() || undefined,
+        endpoint_url: endpointUrl.trim() || undefined,
+        url_style: endpointUrl.trim() ? urlStyle : undefined,
       };
       // add_remote_source's pre-flight runs DuckDB-side region/auth
       // verification before persisting — so bad keys surface here
@@ -206,6 +216,37 @@ export function EditS3CredentialsDialog({ source, onClose, onSaved }: Props) {
                 type="password"
                 placeholder="Only for temporary STS creds"
               />
+              <details
+                open={endpointUrl !== ''}
+                className="rounded-md border border-slate-200 p-2 dark:border-slate-700"
+              >
+                <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                  S3-compatible endpoint (B2 / Wasabi / R2 / GCS / MinIO)
+                </summary>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <CredField
+                    label="Endpoint URL"
+                    value={endpointUrl}
+                    onChange={setEndpointUrl}
+                    placeholder="leave blank for AWS S3"
+                  />
+                  <label className="block">
+                    <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      URL style
+                    </span>
+                    <select
+                      value={urlStyle}
+                      onChange={(e) =>
+                        setUrlStyle(e.target.value as 'path' | 'vhost')
+                      }
+                      className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="vhost">vhost (AWS, Wasabi)</option>
+                      <option value="path">path (B2, R2, MinIO)</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Pre-flight tested before save — bad keys surface here,
                 not later as a silent empty rescan. Old keychain entry
