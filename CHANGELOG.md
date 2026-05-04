@@ -5,6 +5,97 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — F42 Sources sidebar
+
+The "Folders" sidebar surface gains a sibling: **Sources**, a unified
+list of every connected place — local folders, S3 buckets, HTTPS
+URLs, Google Drive accounts — with one row per bookmark, kind icon,
+status pill, and a right-click menu for daily ops. The marketing-page
+promise made real, and the foundation every future protocol adapter
+(F43–F50) plugs into. See `datalake/SPEC_F42_SOURCES_SIDEBAR.md`
+for the full design.
+
+### Added
+
+- **`/sources` route + Sources sidebar** (`SourcesSidebar`) with
+  kind icon, name, protocol label, dataset count, and live status
+  pill (scanning / online / pending — driven by `scansInFlight`).
+  Coexists with the legacy Folders tab for v0.7.0; FolderList comes
+  out in v0.7.1.
+- **Right-click context menu per row**: Rescan now / Rename… /
+  Move to group… / Remove source. Rename is inline (Finder-style:
+  Enter commits, Esc cancels, blur commits). Move-to-group opens
+  a real picker with chip-style options for existing groups + an
+  inline "Create new" input — replaces the old `window.prompt`.
+- **Drag-reorder via @dnd-kit/sortable**. Each visual bucket — the
+  ungrouped section and each named group — is its own DndContext,
+  so drag reorders within a bucket. Cross-bucket moves still go
+  through the "Move to group…" action. Pointer + keyboard reorder
+  both supported.
+- **`+ Add source` button + `AddSourceModal`** unified entry point.
+  Stage A is a tile grid showing every protocol Sery Link can
+  register: 4 active (Local, HTTPS, S3, Drive) + 7 "Coming soon"
+  (SFTP, WebDAV, B2, Azure, GCS, Dropbox, OneDrive). Stage B is
+  the kind-specific form INLINE in the same modal — no jolt-handoff.
+  Initial scan auto-kicks in the background after add.
+
+### Migration (transparent)
+
+- `Config::load` runs `migrate_sources_if_needed` on every load,
+  populating the new `sources: Vec<DataSource>` from legacy
+  `watched_folders` on first launch after upgrade. Idempotent: the
+  same source IDs survive subsequent loads (load-bearing for
+  keychain key / cache prefix / deep links).
+- **Incremental migration** picks up entries added via the legacy
+  `add_watched_folder` / `add_remote_source` commands so the
+  Sources sidebar stays in sync with the Folders tab without
+  dual-writing at the call sites.
+- `watched_folders` is still written to disk for one release for
+  rollback safety. v0.7.1 stops writing it; v0.8.0 removes the
+  field entirely.
+- Drive accounts (`gdrive_watched_folders`) are NOT migrated —
+  they rewire when the Drive adapter itself moves to `DataSource`.
+
+### Fixed
+
+- **`remove_source` cleans up the mirror `watched_folders` entry +
+  S3 keychain creds + scan cache.** Without this, removing via the
+  Sources sidebar would leave the legacy entry behind, and the
+  incremental migration would re-create the source on next load
+  with a fresh UUID — defeating the user's "remove" entirely.
+
+### Backend (additive Tauri commands)
+
+- `rename_source(id, new_name)` — sets the display name.
+- `set_source_group(id, group)` — moves to a named group, or `null`
+  to move to top level.
+- `remove_source(id)` — drops the source + mirror watched_folder +
+  S3 keychain entry + scan cache.
+- `reorder_sources(ordered_ids)` — full-list reorder; missing IDs
+  appended at the tail in their existing relative order.
+- `scanner::scan_source(&DataSource, …)` — kind-aware scan dispatch
+  wrapper (used by future kind-specific add commands).
+
+### Tests
+
+- 213 sery-link Rust lib tests green (up from 191 pre-F42). New
+  coverage in `config::tests` for migration semantics, mutation
+  helpers, mirror-cleanup invariants; in `sources::tests` for the
+  6-fixture WatchedFolder→DataSource migration; in
+  `scanner::scan_source_tests` for the kind→path/url projection.
+
+### Out of scope for v0.7.0
+
+- Cross-bucket drag-reorder (move source between groups via DnD)
+  — use "Move to group…" action.
+- Kind-specific `add_*_source` Tauri commands + credential keying
+  refactor (URL-key → source_id-key per spec §2.4) — the existing
+  `add_remote_source` command + URL-keyed creds keep working;
+  refactor lands when F43 SFTP needs source_id-keyed creds.
+- Drive scan via the new abstraction (still walks via
+  `gdrive_walker`; `scan_source(GoogleDrive)` returns `Ok(vec![])`
+  pending the adapter rewire).
+
 ## [0.6.3] — 2026-05-01
 
 Audit-driven cleanup release. After the post-website-rewrite UI
