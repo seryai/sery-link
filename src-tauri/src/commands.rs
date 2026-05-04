@@ -3007,6 +3007,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             // URL-keyed mirror to invalidate.
             crate::sources::SourceKind::Sftp { .. } => None,
             crate::sources::SourceKind::WebDav { .. } => None,
+            crate::sources::SourceKind::Dropbox { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3024,6 +3025,10 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     let is_webdav = matches!(
         &removed_kind,
         Some(crate::sources::SourceKind::WebDav { .. })
+    );
+    let is_dropbox = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::Dropbox { .. })
     );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
@@ -3044,6 +3049,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     if is_webdav {
         let _ = crate::webdav_creds::delete(&id);
+    }
+    if is_dropbox {
+        let _ = crate::dropbox_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
     Ok(())
@@ -3235,6 +3243,143 @@ pub async fn rescan_sftp_source(
     let duration_ms = started.elapsed().as_millis() as u64;
 
     // Phase 3: persist the stats on the source itself.
+    if let Ok(mut config) = Config::load() {
+        config.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
+    }
+
+    Ok(serde_json::json!({
+        "datasets": dataset_count,
+        "columns": column_count,
+        "total_bytes": total_bytes,
+        "duration_ms": duration_ms,
+        "downloaded": downloaded,
+        "cache_dir": cache_path_str,
+    }))
+}
+
+/// F48 — pre-flight test for a Dropbox PAT. Hits
+/// /users/get_current_account.
+#[tauri::command]
+pub async fn test_dropbox_credentials(
+    access_token: String,
+) -> Result<(), String> {
+    let creds = crate::dropbox::DropboxCredentials {
+        access_token: access_token.trim().to_string(),
+    };
+    crate::dropbox::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// F48 — kind-specific add for a Dropbox source.
+#[tauri::command]
+pub async fn add_dropbox_source(
+    base_path: String,
+    access_token: String,
+) -> Result<String, String> {
+    let creds = crate::dropbox::DropboxCredentials {
+        access_token: access_token.trim().to_string(),
+    };
+    if !creds.is_valid() {
+        return Err("Dropbox credentials need an access token".to_string());
+    }
+    crate::dropbox::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let trimmed_base = base_path.trim().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: if trimmed_base.is_empty() || trimmed_base == "/" {
+            "Dropbox".to_string()
+        } else {
+            format!("Dropbox · {}", trimmed_base)
+        },
+        kind: crate::sources::SourceKind::Dropbox {
+            base_path: trimmed_base,
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+
+    if returned_id == source_id {
+        crate::dropbox_creds::save(&source_id, &creds)
+            .map_err(|e| e.to_string())?;
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+/// F48 — full rescan of a Dropbox source. Walk + download to
+/// `~/.seryai/dropbox-cache/<source_id>/` then run the local
+/// scanner.
+#[tauri::command]
+pub async fn rescan_dropbox_source(
+    source_id: String,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("No source with id {source_id:?}"))?
+        .clone();
+    let base_path = match &source.kind {
+        crate::sources::SourceKind::Dropbox { base_path } => base_path.clone(),
+        _ => {
+            return Err(format!(
+                "Source {source_id:?} is not a Dropbox source"
+            ))
+        }
+    };
+    drop(config);
+
+    let creds = crate::dropbox_creds::load(&source_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "No Dropbox credentials stored for this source — re-add or use \
+             Edit credentials"
+                .to_string()
+        })?;
+
+    let (cache_dir, downloaded) =
+        crate::dropbox::walk_and_download(&creds, &base_path, &source_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let datasets = crate::scanner::scan_folder(&cache_path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let dataset_count = datasets.len() as u64;
+    let column_count: u64 = datasets
+        .iter()
+        .map(|d| d.schema.len() as u64)
+        .sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let duration_ms = started.elapsed().as_millis() as u64;
+
     if let Ok(mut config) = Config::load() {
         config.update_source_scan_stats(
             &source_id,

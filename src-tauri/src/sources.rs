@@ -79,7 +79,19 @@ pub enum SourceKind {
         /// walk the entire tree.
         base_path: String,
     },
-    // F46-F49 add new variants here.
+
+    /// F48: Dropbox. v0.7.0 ships PAT auth only — the access token
+    /// lives in the keychain via `dropbox_creds`, keyed on
+    /// source_id. OAuth + refresh comes in a later slice. Files
+    /// are downloaded to `~/.seryai/dropbox-cache/<source_id>/`
+    /// on rescan.
+    Dropbox {
+        /// Path inside the user's Dropbox to walk recursively.
+        /// Use `/` (or empty) for the root.
+        base_path: String,
+    },
+    // F46, F47, F49 add new variants here (Azure, GCS native,
+    // OneDrive). GCS via S3 interop already works through F45.
 }
 
 fn default_sftp_port() -> u16 {
@@ -234,6 +246,14 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| server_url.clone());
             format!("{}{}", host, base_path)
+        }
+        SourceKind::Dropbox { base_path } => {
+            // Friendly default: "Dropbox · /path"
+            if base_path.is_empty() || base_path == "/" {
+                "Dropbox".to_string()
+            } else {
+                format!("Dropbox · {}", base_path)
+            }
         }
     }
 }

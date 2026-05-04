@@ -111,6 +111,8 @@ export function sourceKindLabel(source: DataSource): string {
       return 'SFTP';
     case 'web_dav':
       return 'WebDAV';
+    case 'dropbox':
+      return 'Dropbox';
   }
 }
 
@@ -163,6 +165,10 @@ export function legacyKindStringOf(
       // Fallback to 'http' (globe) since WebDAV is HTTP-based.
       // Future: dedicated WebDAV mark.
       return 'http';
+    case 'dropbox':
+      // Fallback to 'http' (globe). Future: dedicated Dropbox blue
+      // box mark.
+      return 'http';
   }
 }
 
@@ -181,6 +187,7 @@ export function scanKeyOf(source: DataSource): string | null {
     case 'google_drive':
     case 'sftp':
     case 'web_dav':
+    case 'dropbox':
       return null;
   }
 }

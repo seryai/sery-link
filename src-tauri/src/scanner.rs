@@ -238,6 +238,8 @@ pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String
         // rescan_webdav_source which downloads to webdav-cache and
         // runs the local scanner there.
         SourceKind::WebDav { .. } => None,
+        // F48: same pattern — Dropbox via rescan_dropbox_source.
+        SourceKind::Dropbox { .. } => None,
     }
 }
 

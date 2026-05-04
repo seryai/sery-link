@@ -381,6 +381,7 @@ impl Config {
                 // interaction.
                 SourceKind::Sftp { .. } => None,
                 SourceKind::WebDav { .. } => None,
+                SourceKind::Dropbox { .. } => None,
             })
             .collect();
 
@@ -572,6 +573,9 @@ impl Config {
                 server_url,
                 base_path,
             } => Some(format!("webdav::{}|{}", server_url, base_path)),
+            SourceKind::Dropbox { base_path } => {
+                Some(format!("dropbox::{}", base_path))
+            }
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -587,6 +591,9 @@ impl Config {
                     server_url,
                     base_path,
                 } => format!("webdav::{}|{}", server_url, base_path) == *p,
+                SourceKind::Dropbox { base_path } => {
+                    format!("dropbox::{}", base_path) == *p
+                }
             }) {
                 return existing.id.clone();
             }
@@ -673,6 +680,7 @@ impl Config {
             SourceKind::GoogleDrive { .. } => None,
             SourceKind::Sftp { .. } => None,
             SourceKind::WebDav { .. } => None,
+            SourceKind::Dropbox { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);
