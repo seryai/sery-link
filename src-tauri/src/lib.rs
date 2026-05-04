@@ -31,6 +31,8 @@ mod scanner;
 mod sftp;
 mod sftp_creds;
 mod sources;
+mod dropbox;
+mod dropbox_creds;
 mod webdav;
 mod webdav_creds;
 mod url;
@@ -223,6 +225,9 @@ pub fn run() {
             commands::add_webdav_source,
             commands::test_webdav_credentials,
             commands::rescan_webdav_source,
+            commands::add_dropbox_source,
+            commands::test_dropbox_credentials,
+            commands::rescan_dropbox_source,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

@@ -57,9 +57,10 @@ type ImplementedKind =
   | 's3'
   | 'gdrive'
   | 'sftp'
-  | 'webdav';
+  | 'webdav'
+  | 'dropbox';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
-type ComingSoonKind = 'azure' | 'dropbox' | 'onedrive';
+type ComingSoonKind = 'azure' | 'onedrive';
 
 interface ProtocolTile {
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind;
@@ -74,6 +75,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'gdrive', label: 'Google Drive', description: 'Folder via OAuth' },
   { kind: 'sftp', label: 'SFTP', description: 'Password or SSH key' },
   { kind: 'webdav', label: 'WebDAV', description: 'Nextcloud / ownCloud / generic' },
+  { kind: 'dropbox', label: 'Dropbox', description: 'Access token (PAT)' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -88,7 +90,6 @@ const S3_COMPATIBLE: ProtocolTile[] = [
 
 const COMING_SOON: ProtocolTile[] = [
   { kind: 'azure', label: 'Azure Blob', description: 'Coming in v0.7+' },
-  { kind: 'dropbox', label: 'Dropbox', description: 'Coming in v0.7+' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Coming in v0.7+' },
 ];
 
@@ -138,7 +139,8 @@ type Stage =
   | { kind: 'url'; initial?: UrlStageInitial }
   | { kind: 'gdrive' }
   | { kind: 'sftp' }
-  | { kind: 'webdav' };
+  | { kind: 'webdav' }
+  | { kind: 'dropbox' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -219,6 +221,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
               onPickSftp={() => setStage({ kind: 'sftp' })}
               onPickWebDav={() => setStage({ kind: 'webdav' })}
+              onPickDropbox={() => setStage({ kind: 'dropbox' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -248,6 +251,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           )}
           {stage.kind === 'webdav' && (
             <WebDavStage
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'dropbox' && (
+            <DropboxStage
               onAdded={() => {
                 onAdded();
                 closeAll();
@@ -285,7 +297,9 @@ function ModalHeader({
           ? 'Add an SFTP source'
           : stage.kind === 'webdav'
             ? 'Add a WebDAV source'
-            : 'Connect Google Drive';
+            : stage.kind === 'dropbox'
+              ? 'Add a Dropbox source'
+              : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -297,7 +311,9 @@ function ModalHeader({
           ? "Files are pulled to a local cache via SSH; the connection's auth credentials live in your OS keychain."
           : stage.kind === 'webdav'
             ? 'Works with Nextcloud, ownCloud, and any generic WebDAV server. Files cache locally; auth lives in your OS keychain.'
-            : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+            : stage.kind === 'dropbox'
+              ? 'v0.7 ships Personal Access Token auth. OAuth Connect-with-Dropbox follows in a later release.'
+              : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -339,6 +355,7 @@ function PickerStage({
   onPickGdrive,
   onPickSftp,
   onPickWebDav,
+  onPickDropbox,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -347,6 +364,7 @@ function PickerStage({
   onPickGdrive: () => void;
   onPickSftp: () => void;
   onPickWebDav: () => void;
+  onPickDropbox: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -374,6 +392,9 @@ function PickerStage({
                   break;
                 case 'webdav':
                   onPickWebDav();
+                  break;
+                case 'dropbox':
+                  onPickDropbox();
                   break;
               }
             }}
@@ -933,6 +954,144 @@ function SftpStage({
   );
 }
 
+// ─── Stage B — Dropbox form ────────────────────────────────────────
+
+function DropboxStage({
+  onAdded,
+  onCancel,
+}: {
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [accessToken, setAccessToken] = useState('');
+  const [basePath, setBasePath] = useState('/');
+  const [busy, setBusy] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit =
+    !busy && accessToken.trim() !== '' && basePath.trim() !== '';
+
+  const test = async () => {
+    setError(null);
+    setTestStatus(null);
+    setBusy(true);
+    try {
+      await invoke<void>('test_dropbox_credentials', {
+        accessToken: accessToken.trim(),
+      });
+      setTestStatus('ok');
+      toast.success('Token OK');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_dropbox_source', {
+        basePath: basePath.trim(),
+        accessToken: accessToken.trim(),
+      });
+      toast.success('Dropbox source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <CredField
+        label="Access token"
+        value={accessToken}
+        onChange={(v) => {
+          setAccessToken(v);
+          setTestStatus(null);
+        }}
+        type="password"
+        placeholder="sl.B…"
+      />
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Generate at{' '}
+        <span className="font-mono">
+          dropbox.com/developers/apps
+        </span>{' '}
+        → New app → Scoped access → Full Dropbox → Settings →
+        Generated access token. Stored in your OS keychain; never
+        sent to Sery servers.
+      </p>
+
+      <div className="mt-3">
+        <CredField
+          label="Base path"
+          value={basePath}
+          onChange={setBasePath}
+          placeholder="/ (whole Dropbox) or /Subfolder"
+        />
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {testStatus === 'ok' && !error && (
+        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Token OK — ready to save.
+        </div>
+      )}
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Rescan downloads matching files (CSV / Parquet / Excel /
+        docs) to{' '}
+        <span className="font-mono">
+          ~/.seryai/dropbox-cache/&lt;id&gt;/
+        </span>{' '}
+        and indexes them locally. Each rescan is a full re-download.
+      </div>
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <button
+          onClick={test}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          {busy && testStatus !== 'ok' && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          Test token
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Add Dropbox source
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Stage B — WebDAV form ─────────────────────────────────────────
 
 function WebDavStage({
@@ -1253,6 +1412,9 @@ function legacyIconKindForTile(
     case 'webdav':
       // Globe icon since WebDAV is HTTP-based. Polish slice can
       // add a dedicated mark.
+      return 'http';
+    case 'dropbox':
+      // Globe icon for now. Polish slice adds the Dropbox blue-box mark.
       return 'http';
     default:
       return null;

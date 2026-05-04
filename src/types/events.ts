@@ -293,6 +293,12 @@ export type SourceKind =
       kind: 'web_dav';
       server_url: string;
       base_path: string;
+    }
+  | {
+      // F48: Dropbox. Personal Access Token in the keychain via
+      // dropbox_creds; only base_path here.
+      kind: 'dropbox';
+      base_path: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */
