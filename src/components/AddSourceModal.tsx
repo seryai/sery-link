@@ -58,9 +58,10 @@ type ImplementedKind =
   | 'gdrive'
   | 'sftp'
   | 'webdav'
-  | 'dropbox';
+  | 'dropbox'
+  | 'azure';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
-type ComingSoonKind = 'azure' | 'onedrive';
+type ComingSoonKind = 'onedrive';
 
 interface ProtocolTile {
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind;
@@ -76,6 +77,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'sftp', label: 'SFTP', description: 'Password or SSH key' },
   { kind: 'webdav', label: 'WebDAV', description: 'Nextcloud / ownCloud / generic' },
   { kind: 'dropbox', label: 'Dropbox', description: 'Access token (PAT)' },
+  { kind: 'azure', label: 'Azure Blob', description: 'SAS token' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -89,7 +91,6 @@ const S3_COMPATIBLE: ProtocolTile[] = [
 ];
 
 const COMING_SOON: ProtocolTile[] = [
-  { kind: 'azure', label: 'Azure Blob', description: 'Coming in v0.7+' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Coming in v0.7+' },
 ];
 
@@ -140,7 +141,8 @@ type Stage =
   | { kind: 'gdrive' }
   | { kind: 'sftp' }
   | { kind: 'webdav' }
-  | { kind: 'dropbox' };
+  | { kind: 'dropbox' }
+  | { kind: 'azure' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -222,6 +224,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickSftp={() => setStage({ kind: 'sftp' })}
               onPickWebDav={() => setStage({ kind: 'webdav' })}
               onPickDropbox={() => setStage({ kind: 'dropbox' })}
+              onPickAzure={() => setStage({ kind: 'azure' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -267,6 +270,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onCancel={() => setStage({ kind: 'picker' })}
             />
           )}
+          {stage.kind === 'azure' && (
+            <AzureBlobStage
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -299,7 +311,9 @@ function ModalHeader({
             ? 'Add a WebDAV source'
             : stage.kind === 'dropbox'
               ? 'Add a Dropbox source'
-              : 'Connect Google Drive';
+              : stage.kind === 'azure'
+                ? 'Add an Azure Blob source'
+                : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -313,7 +327,9 @@ function ModalHeader({
             ? 'Works with Nextcloud, ownCloud, and any generic WebDAV server. Files cache locally; auth lives in your OS keychain.'
             : stage.kind === 'dropbox'
               ? 'v0.7 ships Personal Access Token auth. OAuth Connect-with-Dropbox follows in a later release.'
-              : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+              : stage.kind === 'azure'
+                ? 'Generate a SAS token in the Azure portal scoped to your container with read-only permissions. Stored in your OS keychain.'
+                : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -356,6 +372,7 @@ function PickerStage({
   onPickSftp,
   onPickWebDav,
   onPickDropbox,
+  onPickAzure,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -365,6 +382,7 @@ function PickerStage({
   onPickSftp: () => void;
   onPickWebDav: () => void;
   onPickDropbox: () => void;
+  onPickAzure: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -395,6 +413,9 @@ function PickerStage({
                   break;
                 case 'dropbox':
                   onPickDropbox();
+                  break;
+                case 'azure':
+                  onPickAzure();
                   break;
               }
             }}
@@ -954,6 +975,168 @@ function SftpStage({
   );
 }
 
+// ─── Stage B — Azure Blob form ─────────────────────────────────────
+
+function AzureBlobStage({
+  onAdded,
+  onCancel,
+}: {
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [accountUrl, setAccountUrl] = useState('');
+  const [prefix, setPrefix] = useState('');
+  const [sasToken, setSasToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit =
+    !busy && accountUrl.trim() !== '' && sasToken.trim().length > 16;
+
+  const test = async () => {
+    setError(null);
+    setTestStatus(null);
+    setBusy(true);
+    try {
+      await invoke<void>('test_azure_blob_credentials', {
+        accountUrl: accountUrl.trim(),
+        sasToken: sasToken.trim(),
+      });
+      setTestStatus('ok');
+      toast.success('SAS token OK');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_azure_blob_source', {
+        accountUrl: accountUrl.trim(),
+        prefix: prefix.trim(),
+        sasToken: sasToken.trim(),
+      });
+      toast.success('Azure Blob source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <CredField
+        label="Container URL"
+        value={accountUrl}
+        onChange={(v) => {
+          setAccountUrl(v);
+          setTestStatus(null);
+        }}
+        placeholder="https://myaccount.blob.core.windows.net/mycontainer"
+      />
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Format:{' '}
+        <span className="font-mono">
+          https://&lt;account&gt;.blob.core.windows.net/&lt;container&gt;
+        </span>
+        . Find this in the Azure portal: Storage account → Containers
+        → click your container → URL.
+      </p>
+
+      <div className="mt-3">
+        <CredField
+          label="Path prefix (optional)"
+          value={prefix}
+          onChange={setPrefix}
+          placeholder="data/ (empty = whole container)"
+        />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          SAS token
+        </div>
+        <CredField
+          label="SAS token"
+          value={sasToken}
+          onChange={(v) => {
+            setSasToken(v);
+            setTestStatus(null);
+          }}
+          type="password"
+          placeholder="?sv=… or sv=…"
+        />
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Generate at: Storage account → Shared access tokens.
+          Permissions: <strong>Read + List</strong>. Set the expiry
+          long enough to outlive your typical scan rotation. Stored
+          in your OS keychain; never sent to Sery servers.
+        </p>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {testStatus === 'ok' && !error && (
+        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          SAS token OK — ready to save.
+        </div>
+      )}
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Rescan downloads matching files (CSV / Parquet / Excel /
+        docs) to{' '}
+        <span className="font-mono">
+          ~/.seryai/azure-cache/&lt;id&gt;/
+        </span>{' '}
+        and indexes them locally. Each rescan is a full re-download.
+      </div>
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <button
+          onClick={test}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          {busy && testStatus !== 'ok' && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          Test SAS token
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Add Azure source
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Stage B — Dropbox form ────────────────────────────────────────
 
 function DropboxStage({
@@ -1415,6 +1598,9 @@ function legacyIconKindForTile(
       return 'http';
     case 'dropbox':
       // Globe icon for now. Polish slice adds the Dropbox blue-box mark.
+      return 'http';
+    case 'azure':
+      // Globe icon for now. Polish slice adds the Azure cloud mark.
       return 'http';
     default:
       return null;

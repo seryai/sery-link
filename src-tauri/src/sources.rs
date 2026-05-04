@@ -90,8 +90,23 @@ pub enum SourceKind {
         /// Use `/` (or empty) for the root.
         base_path: String,
     },
-    // F46, F47, F49 add new variants here (Azure, GCS native,
-    // OneDrive). GCS via S3 interop already works through F45.
+
+    /// F46: Azure Blob Storage. v0.7.0 ships SAS-token auth (the
+    /// most user-friendly Azure auth — long-lived, scopable,
+    /// least-privilege). The SAS lives in the keychain via
+    /// `azure_blob_creds`, keyed on source_id. Files cache to
+    /// `~/.seryai/azure-cache/<source_id>/`.
+    AzureBlob {
+        /// Account + container URL — e.g.
+        /// `https://myaccount.blob.core.windows.net/mycontainer`.
+        /// The SAS is appended on every request.
+        account_url: String,
+        /// Optional path prefix inside the container. Empty = whole
+        /// container.
+        prefix: String,
+    },
+    // F49 adds OneDrive (needs full OAuth). GCS via S3 interop
+    // already works through F45.
 }
 
 fn default_sftp_port() -> u16 {
@@ -253,6 +268,32 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 "Dropbox".to_string()
             } else {
                 format!("Dropbox · {}", base_path)
+            }
+        }
+        SourceKind::AzureBlob {
+            account_url,
+            prefix,
+        } => {
+            // Friendly default: "<account>/<container> · prefix"
+            // Parse the account_url for a clean account/container
+            // display; fall back to the raw URL.
+            let host_path = url::Url::parse(account_url)
+                .ok()
+                .and_then(|u| {
+                    let host = u.host_str()?.to_string();
+                    let acct = host.split('.').next().unwrap_or(&host).to_string();
+                    let container = u.path().trim_matches('/').to_string();
+                    if container.is_empty() {
+                        Some(acct)
+                    } else {
+                        Some(format!("{}/{}", acct, container))
+                    }
+                })
+                .unwrap_or_else(|| account_url.clone());
+            if prefix.is_empty() {
+                format!("Azure · {}", host_path)
+            } else {
+                format!("Azure · {} · {}", host_path, prefix)
             }
         }
     }

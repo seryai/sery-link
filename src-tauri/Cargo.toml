@@ -117,6 +117,11 @@ ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 # XML parser by hand. Uses our existing reqwest 0.11 so no version
 # conflict.
 reqwest_dav = "0.1"
+# F46: Azure Blob List API returns XML. roxmltree is a small,
+# pure-rust read-only XML parser (one of the smallest XML deps
+# available — ~25 kB compiled). Used by `azure_blob.rs` to walk
+# the EnumerationResults document.
+roxmltree = "0.20"
 
 
 [dev-dependencies]

@@ -382,6 +382,7 @@ impl Config {
                 SourceKind::Sftp { .. } => None,
                 SourceKind::WebDav { .. } => None,
                 SourceKind::Dropbox { .. } => None,
+                SourceKind::AzureBlob { .. } => None,
             })
             .collect();
 
@@ -576,6 +577,10 @@ impl Config {
             SourceKind::Dropbox { base_path } => {
                 Some(format!("dropbox::{}", base_path))
             }
+            SourceKind::AzureBlob {
+                account_url,
+                prefix,
+            } => Some(format!("azure::{}|{}", account_url, prefix)),
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -594,6 +599,10 @@ impl Config {
                 SourceKind::Dropbox { base_path } => {
                     format!("dropbox::{}", base_path) == *p
                 }
+                SourceKind::AzureBlob {
+                    account_url,
+                    prefix,
+                } => format!("azure::{}|{}", account_url, prefix) == *p,
             }) {
                 return existing.id.clone();
             }
@@ -681,6 +690,7 @@ impl Config {
             SourceKind::Sftp { .. } => None,
             SourceKind::WebDav { .. } => None,
             SourceKind::Dropbox { .. } => None,
+            SourceKind::AzureBlob { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);

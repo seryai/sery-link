@@ -240,6 +240,8 @@ pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String
         SourceKind::WebDav { .. } => None,
         // F48: same pattern — Dropbox via rescan_dropbox_source.
         SourceKind::Dropbox { .. } => None,
+        // F46: Azure Blob via rescan_azure_blob_source.
+        SourceKind::AzureBlob { .. } => None,
     }
 }
 

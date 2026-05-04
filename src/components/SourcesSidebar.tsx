@@ -159,14 +159,17 @@ export function SourcesSidebar() {
     if (
       source.kind.kind === 'sftp' ||
       source.kind.kind === 'web_dav' ||
-      source.kind.kind === 'dropbox'
+      source.kind.kind === 'dropbox' ||
+      source.kind.kind === 'azure_blob'
     ) {
       const rescanCommand =
         source.kind.kind === 'sftp'
           ? 'rescan_sftp_source'
           : source.kind.kind === 'web_dav'
             ? 'rescan_webdav_source'
-            : 'rescan_dropbox_source';
+            : source.kind.kind === 'dropbox'
+              ? 'rescan_dropbox_source'
+              : 'rescan_azure_blob_source';
       setBusy(true);
       try {
         toast.success(`Rescanning "${source.name}" (downloading…)`);
@@ -230,12 +233,14 @@ export function SourcesSidebar() {
     const sftpTargets = sources.filter((s) => s.kind.kind === 'sftp');
     const webdavTargets = sources.filter((s) => s.kind.kind === 'web_dav');
     const dropboxTargets = sources.filter((s) => s.kind.kind === 'dropbox');
+    const azureTargets = sources.filter((s) => s.kind.kind === 'azure_blob');
     const pathTargets = sources
       .filter(
         (s) =>
           s.kind.kind !== 'sftp' &&
           s.kind.kind !== 'web_dav' &&
           s.kind.kind !== 'dropbox' &&
+          s.kind.kind !== 'azure_blob' &&
           s.kind.kind !== 'google_drive',
       )
       .map((s) => ({ source: s, key: scanKeyOf(s) }))
@@ -244,6 +249,7 @@ export function SourcesSidebar() {
       sftpTargets.length +
       webdavTargets.length +
       dropboxTargets.length +
+      azureTargets.length +
       pathTargets.length;
     if (total === 0) {
       toast.error('No scannable sources');
@@ -273,6 +279,13 @@ export function SourcesSidebar() {
       invoke('rescan_dropbox_source', { sourceId: source.id }).catch((err) => {
         console.error(`Scan-all Dropbox failed for ${source.id}:`, err);
       });
+    }
+    for (const source of azureTargets) {
+      invoke('rescan_azure_blob_source', { sourceId: source.id }).catch(
+        (err) => {
+          console.error(`Scan-all Azure failed for ${source.id}:`, err);
+        },
+      );
     }
   };
 
