@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use crate::error::{AgentError, Result};
+use crate::sources::{migrate_watched_folders_to_sources, DataSource};
 
 // ---------------------------------------------------------------------------
 // Auth modes
@@ -43,6 +44,13 @@ pub struct Config {
     /// files without any code in scanner.rs that knows about Drive.
     #[serde(default)]
     pub gdrive_watched_folders: Vec<GdriveWatchedFolder>,
+    /// F42: unified sources sidebar. Populated by migration from
+    /// `watched_folders` on first load after upgrade; new sources go
+    /// here directly. `watched_folders` is kept written for one
+    /// release (v0.7.0) for rollback safety, then read-only in v0.7.1,
+    /// then removed in v0.8.0. See SPEC_F42_SOURCES_SIDEBAR.md §2.3.
+    #[serde(default)]
+    pub sources: Vec<DataSource>,
 }
 
 /// One Drive folder the user has elected to watch. The `name` is
@@ -293,6 +301,7 @@ impl Default for Config {
             },
             watched_folders: Vec::new(),
             gdrive_watched_folders: Vec::new(),
+            sources: Vec::new(),
             cloud: CloudConfig {
                 api_url: default_api_url(),
                 websocket_url: default_websocket_url(),
@@ -314,15 +323,39 @@ impl Config {
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
 
-        if config_path.exists() {
+        let mut config: Self = if config_path.exists() {
             let contents = fs::read_to_string(&config_path)
                 .map_err(|e| AgentError::Config(format!("Failed to read config: {}", e)))?;
 
             serde_json::from_str(&contents)
-                .map_err(|e| AgentError::Config(format!("Failed to parse config: {}", e)))
+                .map_err(|e| AgentError::Config(format!("Failed to parse config: {}", e)))?
         } else {
-            Ok(Self::default())
+            Self::default()
+        };
+
+        config.migrate_sources_if_needed();
+        Ok(config)
+    }
+
+    /// F42 Day 2 wire-up: populate `sources` from legacy
+    /// `watched_folders` on first load after upgrade. Idempotent — if
+    /// `sources` already has any entries, the migration is skipped
+    /// (the user is post-v0.7.0; legacy entries stay on disk for one
+    /// release for rollback safety per SPEC_F42_SOURCES_SIDEBAR.md
+    /// §2.3 but they're no longer the source of truth).
+    ///
+    /// Drive accounts (`gdrive_watched_folders`) are NOT migrated
+    /// here — they rewire through this abstraction when the gdrive
+    /// adapter itself is refactored to use `DataSource`. This slice
+    /// is purely the WatchedFolder → DataSource bridge.
+    fn migrate_sources_if_needed(&mut self) {
+        if !self.sources.is_empty() {
+            return;
         }
+        if self.watched_folders.is_empty() {
+            return;
+        }
+        self.sources = migrate_watched_folders_to_sources(&self.watched_folders);
     }
 
     pub fn save(&self) -> Result<()> {
@@ -681,5 +714,162 @@ mod tests {
         assert!(folder.exclude_patterns.len() > 0);
         assert!(folder.last_scan_at.is_none());
         assert!(folder.last_scan_stats.is_none());
+    }
+
+    // ─── F42: Sources migration wiring ─────────────────────────────
+    //
+    // Per SPEC_F42_SOURCES_SIDEBAR.md §2.3 + §5: after upgrade,
+    // load() must transparently populate `sources` from legacy
+    // `watched_folders`, idempotent on subsequent loads, and preserve
+    // both fields on save (rollback safety for one release).
+
+    use crate::sources::SourceKind;
+
+    #[test]
+    fn migrate_sources_populates_from_watched_folders_on_first_load() {
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Documents".to_string(), true);
+        config.add_watched_folder("s3://my-bucket/data/".to_string(), true);
+
+        // Pre-state: legacy populated, sources empty
+        assert!(config.sources.is_empty());
+        assert_eq!(config.watched_folders.len(), 2);
+
+        config.migrate_sources_if_needed();
+
+        // Post-state: sources populated, legacy untouched
+        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.watched_folders.len(), 2);
+        assert!(matches!(config.sources[0].kind, SourceKind::Local { .. }));
+        assert!(matches!(config.sources[1].kind, SourceKind::S3 { .. }));
+    }
+
+    #[test]
+    fn migrate_sources_is_idempotent_when_sources_already_present() {
+        // User already on v0.7.x — sources is the source of truth;
+        // migration must NOT duplicate entries from watched_folders.
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Documents".to_string(), true);
+        // Simulate first migration already happened
+        config.migrate_sources_if_needed();
+        assert_eq!(config.sources.len(), 1);
+        let original_id = config.sources[0].id.clone();
+
+        // Add a NEW watched_folder (simulates a v0.6.x rollback that
+        // appended) — second migration call should NOT re-migrate.
+        config.add_watched_folder("/extra/path".to_string(), true);
+        config.migrate_sources_if_needed();
+
+        assert_eq!(
+            config.sources.len(),
+            1,
+            "second migration must be a no-op when sources is non-empty"
+        );
+        assert_eq!(
+            config.sources[0].id, original_id,
+            "existing source IDs must be preserved across re-load"
+        );
+    }
+
+    #[test]
+    fn migrate_sources_no_op_on_empty_legacy() {
+        // Fresh install — no watched_folders, no sources. Migration is
+        // a clean no-op; sources stays empty.
+        let mut config = Config::default();
+        config.migrate_sources_if_needed();
+        assert!(config.sources.is_empty());
+        assert!(config.watched_folders.is_empty());
+    }
+
+    #[test]
+    fn legacy_v06_config_json_loads_and_migrates() {
+        // Real-shape v0.6.x config (no `sources` field at all).
+        // serde_json::from_str + manual migrate proves the load path.
+        let json = r#"{
+            "agent": {
+                "name": "test",
+                "platform": "macos",
+                "hostname": "test-host",
+                "agent_id": null
+            },
+            "watched_folders": [
+                {
+                    "path": "/Users/me/Documents",
+                    "recursive": true,
+                    "exclude_patterns": [".git"],
+                    "max_file_size_mb": 1024,
+                    "last_scan_at": "2026-04-15T10:00:00Z",
+                    "last_scan_stats": null,
+                    "mcp_enabled": true
+                }
+            ],
+            "cloud": {
+                "api_url": "http://localhost:8000",
+                "websocket_url": "ws://localhost:8000",
+                "web_url": "http://localhost:3000"
+            },
+            "sync": {
+                "interval_seconds": 300,
+                "auto_sync_on_change": true,
+                "fallback_scan_interval_seconds": 3600,
+                "scan_tier_overrides": {},
+                "include_document_text": false
+            },
+            "app": {
+                "theme": "system",
+                "launch_at_login": true,
+                "auto_update": true,
+                "notifications_enabled": true,
+                "first_run_completed": false,
+                "window_hide_notified": false
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).expect("parse legacy config");
+
+        // Field defaulted on missing
+        assert!(config.sources.is_empty());
+
+        config.migrate_sources_if_needed();
+
+        assert_eq!(config.sources.len(), 1);
+        let src = &config.sources[0];
+        match &src.kind {
+            SourceKind::Local { path, recursive, .. } => {
+                assert_eq!(path, &PathBuf::from("/Users/me/Documents"));
+                assert!(*recursive);
+            }
+            other => panic!("expected Local, got {:?}", other),
+        }
+        // mcp_enabled + last_scan_at carry through
+        assert!(src.mcp_enabled);
+        assert_eq!(src.last_scan_at.as_deref(), Some("2026-04-15T10:00:00Z"));
+    }
+
+    #[test]
+    fn save_roundtrip_preserves_both_legacy_and_sources_fields() {
+        // SPEC §2.3: keep writing both for one release for rollback
+        // safety. Confirm the JSON serialization includes both arrays.
+        let mut config = Config::default();
+        config.add_watched_folder("/Users/me/Documents".to_string(), true);
+        config.migrate_sources_if_needed();
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        // Both arrays must appear in the on-disk payload
+        assert!(
+            json.contains("\"watched_folders\""),
+            "watched_folders must still serialize for rollback safety"
+        );
+        assert!(
+            json.contains("\"sources\""),
+            "sources must serialize so the next load reads it as authoritative"
+        );
+
+        // Round-trip the JSON: re-parse, run migration (idempotent),
+        // assert sources stayed at exactly one entry.
+        let mut reloaded: Config = serde_json::from_str(&json).expect("re-parse");
+        reloaded.migrate_sources_if_needed();
+        assert_eq!(reloaded.sources.len(), 1);
+        assert_eq!(reloaded.watched_folders.len(), 1);
     }
 }

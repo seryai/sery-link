@@ -240,6 +240,7 @@ mod tests {
             },
             watched_folders: vec![test_folder()],
             gdrive_watched_folders: Vec::new(),
+            sources: Vec::new(),
             cloud: crate::config::CloudConfig {
                 api_url: "http://localhost:8000".to_string(),
                 websocket_url: "ws://localhost:8000/ws".to_string(),
