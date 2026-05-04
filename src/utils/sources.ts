@@ -113,6 +113,8 @@ export function sourceKindLabel(source: DataSource): string {
       return 'WebDAV';
     case 'dropbox':
       return 'Dropbox';
+    case 'azure_blob':
+      return 'Azure Blob';
   }
 }
 
@@ -169,6 +171,9 @@ export function legacyKindStringOf(
       // Fallback to 'http' (globe). Future: dedicated Dropbox blue
       // box mark.
       return 'http';
+    case 'azure_blob':
+      // Fallback to 'http' (globe). Future: Azure cloud icon.
+      return 'http';
   }
 }
 
@@ -188,6 +193,7 @@ export function scanKeyOf(source: DataSource): string | null {
     case 'sftp':
     case 'web_dav':
     case 'dropbox':
+    case 'azure_blob':
       return null;
   }
 }

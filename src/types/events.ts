@@ -299,6 +299,13 @@ export type SourceKind =
       // dropbox_creds; only base_path here.
       kind: 'dropbox';
       base_path: string;
+    }
+  | {
+      // F46: Azure Blob Storage. SAS token in the keychain via
+      // azure_blob_creds.
+      kind: 'azure_blob';
+      account_url: string;
+      prefix: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */

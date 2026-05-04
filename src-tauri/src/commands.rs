@@ -3008,6 +3008,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::Sftp { .. } => None,
             crate::sources::SourceKind::WebDav { .. } => None,
             crate::sources::SourceKind::Dropbox { .. } => None,
+            crate::sources::SourceKind::AzureBlob { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3029,6 +3030,10 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     let is_dropbox = matches!(
         &removed_kind,
         Some(crate::sources::SourceKind::Dropbox { .. })
+    );
+    let is_azure = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::AzureBlob { .. })
     );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
@@ -3052,6 +3057,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     if is_dropbox {
         let _ = crate::dropbox_creds::delete(&id);
+    }
+    if is_azure {
+        let _ = crate::azure_blob_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
     Ok(())
@@ -3243,6 +3251,150 @@ pub async fn rescan_sftp_source(
     let duration_ms = started.elapsed().as_millis() as u64;
 
     // Phase 3: persist the stats on the source itself.
+    if let Ok(mut config) = Config::load() {
+        config.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: dataset_count,
+                columns: column_count,
+                errors: 0,
+                total_bytes,
+                duration_ms,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = config.save();
+    }
+
+    Ok(serde_json::json!({
+        "datasets": dataset_count,
+        "columns": column_count,
+        "total_bytes": total_bytes,
+        "duration_ms": duration_ms,
+        "downloaded": downloaded,
+        "cache_dir": cache_path_str,
+    }))
+}
+
+/// F46 — pre-flight test for Azure Blob credentials.
+#[tauri::command]
+pub async fn test_azure_blob_credentials(
+    account_url: String,
+    sas_token: String,
+) -> Result<(), String> {
+    let creds = crate::azure_blob::AzureBlobCredentials {
+        sas_token: sas_token.trim().to_string(),
+    };
+    crate::azure_blob::test_credentials(&account_url, &creds)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// F46 — kind-specific add for Azure Blob source.
+#[tauri::command]
+pub async fn add_azure_blob_source(
+    account_url: String,
+    prefix: String,
+    sas_token: String,
+) -> Result<String, String> {
+    let creds = crate::azure_blob::AzureBlobCredentials {
+        sas_token: sas_token.trim().to_string(),
+    };
+    if !creds.is_valid() {
+        return Err(
+            "Azure credentials need a SAS token with at least 17 chars"
+                .to_string(),
+        );
+    }
+    let trimmed_url = account_url.trim().to_string();
+    let trimmed_prefix = prefix.trim().to_string();
+    crate::azure_blob::test_credentials(&trimmed_url, &creds)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: format!("Azure · {}", trimmed_url),
+        kind: crate::sources::SourceKind::AzureBlob {
+            account_url: trimmed_url,
+            prefix: trimmed_prefix,
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+
+    if returned_id == source_id {
+        crate::azure_blob_creds::save(&source_id, &creds)
+            .map_err(|e| e.to_string())?;
+    }
+
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+/// F46 — full rescan of an Azure Blob source.
+#[tauri::command]
+pub async fn rescan_azure_blob_source(
+    source_id: String,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("No source with id {source_id:?}"))?
+        .clone();
+    let (account_url, prefix) = match &source.kind {
+        crate::sources::SourceKind::AzureBlob {
+            account_url,
+            prefix,
+        } => (account_url.clone(), prefix.clone()),
+        _ => {
+            return Err(format!(
+                "Source {source_id:?} is not an Azure Blob source"
+            ))
+        }
+    };
+    drop(config);
+
+    let creds = crate::azure_blob_creds::load(&source_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "No Azure credentials stored for this source — re-add or use \
+             Edit credentials"
+                .to_string()
+        })?;
+
+    let (cache_dir, downloaded) = crate::azure_blob::walk_and_download(
+        &account_url,
+        &creds,
+        &prefix,
+        &source_id,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let cache_path_str = cache_dir.to_string_lossy().to_string();
+    let datasets = crate::scanner::scan_folder(&cache_path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let dataset_count = datasets.len() as u64;
+    let column_count: u64 = datasets
+        .iter()
+        .map(|d| d.schema.len() as u64)
+        .sum();
+    let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
+    let duration_ms = started.elapsed().as_millis() as u64;
+
     if let Ok(mut config) = Config::load() {
         config.update_source_scan_stats(
             &source_id,

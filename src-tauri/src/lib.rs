@@ -31,6 +31,8 @@ mod scanner;
 mod sftp;
 mod sftp_creds;
 mod sources;
+mod azure_blob;
+mod azure_blob_creds;
 mod dropbox;
 mod dropbox_creds;
 mod webdav;
@@ -228,6 +230,9 @@ pub fn run() {
             commands::add_dropbox_source,
             commands::test_dropbox_credentials,
             commands::rescan_dropbox_source,
+            commands::add_azure_blob_source,
+            commands::test_azure_blob_credentials,
+            commands::rescan_azure_blob_source,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,
