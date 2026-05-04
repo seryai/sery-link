@@ -5,7 +5,7 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — F42 Sources sidebar
+## [Unreleased] — F42 Sources sidebar + F45 S3-compatible endpoints
 
 The "Folders" sidebar surface gains a sibling: **Sources**, a unified
 list of every connected place — local folders, S3 buckets, HTTPS
@@ -34,10 +34,79 @@ for the full design.
   both supported.
 - **`+ Add source` button + `AddSourceModal`** unified entry point.
   Stage A is a tile grid showing every protocol Sery Link can
-  register: 4 active (Local, HTTPS, S3, Drive) + 7 "Coming soon"
-  (SFTP, WebDAV, B2, Azure, GCS, Dropbox, OneDrive). Stage B is
-  the kind-specific form INLINE in the same modal — no jolt-handoff.
-  Initial scan auto-kicks in the background after add.
+  register: 4 active (Local, HTTPS, S3, Drive), **4 S3-compatible**
+  (Backblaze B2, Wasabi, Cloudflare R2, Google Cloud Storage —
+  see F45 below), and 5 "Coming soon" (SFTP, WebDAV, Azure,
+  Dropbox, OneDrive). Stage B is the kind-specific form INLINE in
+  the same modal — no jolt-handoff. Initial scan auto-kicks in
+  the background after add.
+- **Live status pill** colored dot per row (blue pulse = scanning,
+  green = online, slate = pending). Picks up `scansInFlight`
+  events without a refresh.
+- **"Scan all" button** in the sidebar header for bulk refresh of
+  every source (skips Drive, which walks via gdrive_walker).
+- **"Show in Finder"** context menu item for Local sources.
+- **"Edit credentials…"** dialog for S3 sources — pre-loads existing
+  creds from keychain, runs the same DuckDB-side pre-flight as
+  initial add, auto-rescans after save. Lets users rotate AWS keys
+  / STS tokens without losing the source's name / group / sort_order.
+
+## [Unreleased] — F45 S3-compatible endpoints
+
+DuckDB httpfs already speaks the S3 wire protocol; the only thing
+missing was a UX path to point that S3 client at non-AWS endpoints.
+F45 adds the optional `endpoint_url` + `url_style` fields to S3
+credentials, threads them through the DuckDB SET statements, and
+wires up the AddSourceModal protocol picker so 4 of the 7 previous
+"Coming soon" tiles become real:
+
+### Added
+
+- **Backblaze B2** — picker tile pre-fills `s3.us-west-002.backblazeb2.com`
+  endpoint, path-style URLs, region `us-west-002`. User pastes their
+  bucket URL + B2 application key (Access key ID + Secret).
+- **Wasabi** — picker tile pre-fills `s3.wasabisys.com`, vhost-style.
+- **Cloudflare R2** — picker tile, path-style, `auto` region. Endpoint
+  is per-account so the user pastes from the Cloudflare dashboard.
+- **Google Cloud Storage (S3 interop)** — picker tile pre-fills
+  `storage.googleapis.com`, path-style, `auto` region. Requires
+  HMAC keys via the Cloud Console (not the OAuth Drive flow).
+- **Manual endpoint field** in the AWS creds form — a disclosure
+  with two inputs (endpoint host + URL style) for any other
+  S3-compatible service (MinIO, SeaweedFS, etc.). Empty = AWS default.
+- **Endpoint editor** in the existing "Edit credentials…" dialog so
+  users can add an endpoint to an existing AWS-shaped S3 source
+  without removing + re-adding.
+
+### Backend
+
+- `S3Credentials` gains `endpoint_url: Option<String>` and
+  `url_style: Option<String>` (both `serde(default)` +
+  `skip_serializing_if = None` for back-compat).
+- `duckdb_setters` emits `SET s3_endpoint='…'` and
+  `SET s3_url_style='…'` when present. Empty / whitespace strings
+  treated as None to keep AWS defaults.
+- The endpoint string is normalized: leading `http://` / `https://`
+  is stripped before emit, since DuckDB rejects values with the
+  scheme. Pasting a full URL from a provider's docs page works.
+- Pre-F45 keychain entries deserialize cleanly with both new fields
+  as None (no migration needed).
+
+### Tests
+
+- 5 new in `remote_creds::tests` covering present/absent/empty/none
+  endpoint, https-scheme stripping, and back-compat deserialization.
+  222 lib tests green (up from 217).
+
+### Out of scope for F45
+
+- B2-specific source kind variants — all S3-compatible providers
+  ride on `SourceKind::S3` with the endpoint on creds. If we ever
+  need provider-specific quirks (B2 application-key auth oddities,
+  R2 token auth) we add variants then.
+- SFTP / WebDAV / Azure Blob / Dropbox / OneDrive — these need
+  custom Rust adapter work (ssh2 / WebDAV crate / azure DuckDB
+  extension / OAuth flows). Stay in "Coming soon" for v0.7.0.
 
 ### Migration (transparent)
 
