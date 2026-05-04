@@ -84,3 +84,23 @@ export function sourceKindLabel(source: DataSource): string {
       return 'Google Drive';
   }
 }
+
+/** Bridge from the new structured `SourceKind` to the legacy string
+ *  enum used by `<SourceIcon kind=...>`. The legacy enum predates
+ *  F42 and is still consumed by FolderList; we map across so the
+ *  Sources sidebar can reuse the same icon set without duplicating
+ *  the SVGs. */
+export function legacyKindStringOf(
+  source: DataSource,
+): 'local' | 's3' | 'gdrive' | 'http' {
+  switch (source.kind.kind) {
+    case 'local':
+      return 'local';
+    case 's3':
+      return 's3';
+    case 'google_drive':
+      return 'gdrive';
+    case 'https':
+      return 'http';
+  }
+}
