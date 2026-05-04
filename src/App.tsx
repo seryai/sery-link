@@ -17,6 +17,7 @@ import {
   ChevronDown,
   Folder,
   Laptop,
+  Layers,
   Loader2,
   Search,
   Settings as SettingsIcon,
@@ -32,6 +33,7 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
 import { FolderList } from './components/FolderList';
 import { FolderDetail } from './components/FolderDetail';
+import { SourcesSidebar } from './components/SourcesSidebar';
 import { FileDetail } from './components/FileDetail';
 import { SearchPage } from './components/SearchPage';
 import { History } from './components/History';
@@ -282,6 +284,19 @@ function AppInner() {
               Folders
             </NavLink>
             <NavLink
+              to="/sources"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Layers className="h-4 w-4" />
+              Sources
+            </NavLink>
+            <NavLink
               to="/results"
               className={({ isActive }) =>
                 `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -405,6 +420,7 @@ function AppInner() {
             <Route path="/search" element={<SearchPage />} />
             <Route path="/folders" element={<FolderList />} />
             <Route path="/folders/:folderId" element={<FolderDetail />} />
+            <Route path="/sources" element={<SourcesSidebar />} />
             <Route
               path="/folders/:folderId/files/:filePath"
               element={<FileDetail />}
