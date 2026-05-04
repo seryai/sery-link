@@ -59,6 +59,40 @@ import type { AgentConfig, DataSource } from '../types/events';
 
 type SourceStatus = 'scanning' | 'online' | 'pending';
 
+/** Shape returned by all 5 cache-and-scan rescan_*_source commands.
+ *  Built in commands.rs as a serde_json::json! literal — keep this
+ *  type in sync with the keys the backend writes. */
+interface RescanResult {
+  datasets: number;
+  columns: number;
+  total_bytes: number;
+  duration_ms: number;
+  /** Files actually pulled this rescan (excludes files skipped via
+   *  the incremental sync manifest). */
+  downloaded: number;
+  cache_dir: string;
+}
+
+/** Compact toast string for completed cache-and-scan rescans.
+ *  Surfaces the genuinely informative numbers: how many files we
+ *  pulled this round (vs total in the catalog) so the user knows
+ *  whether the incremental sync actually saved them anything. */
+function rescanCompletionMessage(name: string, r: RescanResult): string {
+  const total = r.datasets;
+  const fresh = r.downloaded;
+  const cached = Math.max(total - fresh, 0);
+  if (total === 0) {
+    return `Rescan complete for "${name}" — nothing matched`;
+  }
+  if (fresh === 0) {
+    return `Rescan complete for "${name}" — all ${total.toLocaleString()} unchanged`;
+  }
+  if (cached === 0) {
+    return `Rescan complete for "${name}" — ${fresh.toLocaleString()} downloaded`;
+  }
+  return `Rescan complete for "${name}" — ${fresh.toLocaleString()} downloaded, ${cached.toLocaleString()} unchanged`;
+}
+
 interface RowMenuState {
   sourceId: string;
   x: number;
@@ -208,9 +242,11 @@ export function SourcesSidebar() {
       });
       try {
         toast.success(`Rescanning "${source.name}" (downloading…)`);
-        await invoke(rescanCommand, { sourceId: source.id });
+        const result = await invoke<RescanResult>(rescanCommand, {
+          sourceId: source.id,
+        });
         await reloadConfig();
-        toast.success(`Rescan complete for "${source.name}"`);
+        toast.success(rescanCompletionMessage(source.name, result));
       } catch (err) {
         toast.error(`Rescan failed: ${err}`);
       } finally {
