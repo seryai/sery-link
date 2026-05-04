@@ -300,12 +300,16 @@ fn sanitize_path_component(s: &str) -> String {
         .collect()
 }
 
-/// Walk + download every supported file under `base_path`.
+/// Walk + download every supported file under `base_path`. Skips
+/// files whose size + server_modified match the previous walk's
+/// manifest (incremental sync).
 pub async fn walk_and_download(
     creds: &DropboxCredentials,
     base_path: &str,
     source_id: &str,
 ) -> Result<(PathBuf, usize)> {
+    use crate::sync_manifest::SyncManifest;
+    use std::collections::HashSet;
     const MAX_DROPBOX_FILES: usize = 10_000;
 
     let cache_dir = cache_dir_for_source(source_id)?;
@@ -316,12 +320,12 @@ pub async fn walk_and_download(
         ))
     })?;
 
+    let mut manifest = SyncManifest::load(&cache_dir);
+
     let listing = list_recursive(creds, base_path, MAX_DROPBOX_FILES).await?;
     let mut downloaded = 0usize;
+    let mut current_keys: HashSet<String> = HashSet::new();
 
-    // The base_path used to filter the listing's relative path
-    // mirroring. Dropbox uses lowercased absolute paths with leading
-    // '/'. We mirror under cache_dir/<rel-to-base>/.
     let base_normalized = if base_path == "/" || base_path.is_empty() {
         "".to_string()
     } else {
@@ -329,7 +333,6 @@ pub async fn walk_and_download(
     };
 
     for file in listing.iter() {
-        // Filter by extension.
         let path = PathBuf::from(&file.path_lower);
         let ext = path
             .extension()
@@ -343,17 +346,11 @@ pub async fn walk_and_download(
             continue;
         }
 
-        // Mirror the relative path inside the cache dir.
         let rel_str = if base_normalized.is_empty() {
-            // Strip leading '/' for root-listing sources so the
-            // cache dir mirrors the Dropbox root cleanly.
             file.path_lower.trim_start_matches('/').to_string()
         } else if let Some(s) = file.path_lower.strip_prefix(&base_normalized) {
             s.trim_start_matches('/').to_string()
         } else {
-            // Defensive: if the listing somehow returned a path
-            // outside base_path, keep just the basename so we still
-            // get the file (loses dir structure).
             match path.file_name().and_then(|n| n.to_str()) {
                 Some(name) => name.to_string(),
                 None => continue,
@@ -361,9 +358,26 @@ pub async fn walk_and_download(
         };
         let local_path = cache_dir.join(&rel_str);
 
+        // Key = path_lower (Dropbox guarantees stability).
+        // Mtime marker = server_modified (RFC 3339 string from API);
+        // empty sentinel when missing.
+        let key = file.path_lower.clone();
+        let mtime_marker = file
+            .server_modified
+            .clone()
+            .unwrap_or_else(|| "".to_string());
+        current_keys.insert(key.clone());
+
+        if !manifest.needs_download(&key, file.size, &mtime_marker)
+            && local_path.exists()
+        {
+            continue;
+        }
+
         match download_file(creds, &file.path_lower, &local_path).await {
             Ok(_) => {
                 downloaded += 1;
+                manifest.record(key, file.size, mtime_marker);
             }
             Err(e) => {
                 eprintln!(
@@ -373,6 +387,23 @@ pub async fn walk_and_download(
             }
         }
     }
+
+    // Drop stale entries + their cached files. Use the same path-
+    // resolution rule we used on the way in.
+    let stale = manifest.drop_missing(&current_keys);
+    for stale_key in &stale {
+        let rel_str = if base_normalized.is_empty() {
+            stale_key.trim_start_matches('/').to_string()
+        } else if let Some(s) = stale_key.strip_prefix(&base_normalized) {
+            s.trim_start_matches('/').to_string()
+        } else {
+            continue;
+        };
+        let local = cache_dir.join(&rel_str);
+        let _ = tokio::fs::remove_file(&local).await;
+    }
+
+    let _ = manifest.save(&cache_dir);
 
     Ok((cache_dir, downloaded))
 }

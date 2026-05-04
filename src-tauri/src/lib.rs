@@ -31,6 +31,7 @@ mod scanner;
 mod sftp;
 mod sftp_creds;
 mod sources;
+mod sync_manifest;
 mod azure_blob;
 mod azure_blob_creds;
 mod dropbox;
