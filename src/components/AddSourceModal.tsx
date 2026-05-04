@@ -23,7 +23,7 @@
 //
 // Spec ref: SPEC_F42_SOURCES_SIDEBAR.md §3.2
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { documentDir } from '@tauri-apps/api/path';
@@ -59,9 +59,14 @@ type ImplementedKind =
   | 'sftp'
   | 'webdav'
   | 'dropbox'
-  | 'azure';
+  | 'azure'
+  | 'onedrive';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
-type ComingSoonKind = 'onedrive';
+// All "coming soon" tiles have shipped — leaving this as a never
+// type would prevent the COMING_SOON array from being typed; use
+// `never` to express "no tiles in this tier today" while keeping
+// the type machinery intact for future additions.
+type ComingSoonKind = never;
 
 interface ProtocolTile {
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind;
@@ -78,6 +83,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'webdav', label: 'WebDAV', description: 'Nextcloud / ownCloud / generic' },
   { kind: 'dropbox', label: 'Dropbox', description: 'Access token (PAT)' },
   { kind: 'azure', label: 'Azure Blob', description: 'SAS token' },
+  { kind: 'onedrive', label: 'OneDrive', description: 'Microsoft device code' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -90,9 +96,9 @@ const S3_COMPATIBLE: ProtocolTile[] = [
   { kind: 'gcs', label: 'Google Cloud Storage', description: 'S3 interop' },
 ];
 
-const COMING_SOON: ProtocolTile[] = [
-  { kind: 'onedrive', label: 'OneDrive', description: 'Coming in v0.7+' },
-];
+// All "coming soon" tiles have shipped to Implemented. Section
+// stays so future protocol additions slot in cleanly.
+const COMING_SOON: ProtocolTile[] = [];
 
 /** Per-S3-compatible-provider presets for the UrlStage form. The
  *  endpoint is the host DuckDB needs (no scheme); the placeholder
@@ -142,7 +148,8 @@ type Stage =
   | { kind: 'sftp' }
   | { kind: 'webdav' }
   | { kind: 'dropbox' }
-  | { kind: 'azure' };
+  | { kind: 'azure' }
+  | { kind: 'onedrive' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -225,6 +232,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickWebDav={() => setStage({ kind: 'webdav' })}
               onPickDropbox={() => setStage({ kind: 'dropbox' })}
               onPickAzure={() => setStage({ kind: 'azure' })}
+              onPickOneDrive={() => setStage({ kind: 'onedrive' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -279,6 +287,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onCancel={() => setStage({ kind: 'picker' })}
             />
           )}
+          {stage.kind === 'onedrive' && (
+            <OneDriveStage
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -313,7 +330,9 @@ function ModalHeader({
               ? 'Add a Dropbox source'
               : stage.kind === 'azure'
                 ? 'Add an Azure Blob source'
-                : 'Connect Google Drive';
+                : stage.kind === 'onedrive'
+                  ? 'Add a OneDrive source'
+                  : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -329,7 +348,9 @@ function ModalHeader({
               ? 'v0.7 ships Personal Access Token auth. OAuth Connect-with-Dropbox follows in a later release.'
               : stage.kind === 'azure'
                 ? 'Generate a SAS token in the Azure portal scoped to your container with read-only permissions. Stored in your OS keychain.'
-                : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+                : stage.kind === 'onedrive'
+                  ? 'Sign in via the device code flow — Sery shows a code, you enter it on microsoft.com/devicelogin. Tokens stored in your OS keychain.'
+                  : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -373,6 +394,7 @@ function PickerStage({
   onPickWebDav,
   onPickDropbox,
   onPickAzure,
+  onPickOneDrive,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -383,6 +405,7 @@ function PickerStage({
   onPickWebDav: () => void;
   onPickDropbox: () => void;
   onPickAzure: () => void;
+  onPickOneDrive: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -417,6 +440,9 @@ function PickerStage({
                 case 'azure':
                   onPickAzure();
                   break;
+                case 'onedrive':
+                  onPickOneDrive();
+                  break;
               }
             }}
           />
@@ -443,16 +469,18 @@ function PickerStage({
           ))}
         </div>
       </div>
-      <div className="mt-6">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Coming in v0.7+
-        </h3>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {COMING_SOON.map((tile) => (
-            <ProtocolCard key={tile.kind} tile={tile} disabled />
-          ))}
+      {COMING_SOON.length > 0 && (
+        <div className="mt-6">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Coming in v0.7+
+          </h3>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {COMING_SOON.map((tile) => (
+              <ProtocolCard key={tile.kind} tile={tile} disabled />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </>
   );
 }
@@ -971,6 +999,256 @@ function SftpStage({
           </button>
         </div>
       </div>
+    </>
+  );
+}
+
+// ─── Stage B — OneDrive device code flow ───────────────────────────
+
+interface OneDriveCreds {
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+}
+
+interface DeviceCodeStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  message: string;
+}
+
+type OneDrivePollResult =
+  | { status: 'pending' }
+  | { status: 'slow_down' }
+  | { status: 'completed'; creds: OneDriveCreds };
+
+function OneDriveStage({
+  onAdded,
+  onCancel,
+}: {
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [phase, setPhase] = useState<
+    | { kind: 'idle' }
+    | { kind: 'starting' }
+    | {
+        kind: 'polling';
+        deviceCode: string;
+        userCode: string;
+        verificationUri: string;
+        intervalMs: number;
+      }
+    | { kind: 'completed'; creds: OneDriveCreds }
+  >({ kind: 'idle' });
+  const [basePath, setBasePath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Poll loop. Mounts/unmounts on phase changes.
+  useEffect(() => {
+    if (phase.kind !== 'polling') return;
+    let cancelled = false;
+    let interval = phase.intervalMs;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const result = await invoke<OneDrivePollResult>('poll_onedrive_auth', {
+          deviceCode: phase.deviceCode,
+        });
+        if (cancelled) return;
+        if (result.status === 'completed') {
+          setPhase({ kind: 'completed', creds: result.creds });
+          return;
+        }
+        if (result.status === 'slow_down') {
+          interval = Math.min(interval * 2, 30_000);
+        }
+        setTimeout(tick, interval);
+      } catch (err) {
+        if (cancelled) return;
+        setError(String(err));
+        setPhase({ kind: 'idle' });
+      }
+    };
+    setTimeout(tick, interval);
+    return () => {
+      cancelled = true;
+    };
+  }, [phase]);
+
+  const startAuth = async () => {
+    setError(null);
+    setBusy(true);
+    setPhase({ kind: 'starting' });
+    try {
+      const start = await invoke<DeviceCodeStart>('start_onedrive_auth');
+      setPhase({
+        kind: 'polling',
+        deviceCode: start.device_code,
+        userCode: start.user_code,
+        verificationUri: start.verification_uri,
+        intervalMs: Math.max(start.interval, 1) * 1000,
+      });
+    } catch (err) {
+      setError(String(err));
+      setPhase({ kind: 'idle' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (phase.kind !== 'completed') return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_onedrive_source', {
+        basePath: basePath.trim(),
+        creds: phase.creds,
+      });
+      toast.success('OneDrive source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      {phase.kind === 'idle' && (
+        <>
+          <p className="text-sm text-slate-700 dark:text-slate-300">
+            Sign in once via Microsoft's device code flow:
+          </p>
+          <ol className="ml-4 list-decimal space-y-1 text-sm text-slate-700 dark:text-slate-300">
+            <li>Click "Start sign-in" below.</li>
+            <li>
+              Sery shows a code like <span className="font-mono">XXXX-XXXX</span>.
+            </li>
+            <li>
+              Open{' '}
+              <span className="font-mono">microsoft.com/devicelogin</span>{' '}
+              in any browser, paste the code, sign in.
+            </li>
+            <li>Come back here — auth completes automatically.</li>
+          </ol>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Tokens (access + refresh) live in your OS keychain.
+            Refreshes happen automatically; you only sign in once.
+          </p>
+          {error && (
+            <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+              {error}
+            </div>
+          )}
+          <div className="mt-6 flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={startAuth}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Start sign-in
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase.kind === 'starting' && (
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Requesting device code from Microsoft…
+        </div>
+      )}
+
+      {phase.kind === 'polling' && (
+        <>
+          <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 text-center dark:border-purple-900/60 dark:bg-purple-950/30">
+            <p className="text-xs uppercase tracking-wide text-purple-700 dark:text-purple-200">
+              Enter this code at{' '}
+              <span className="font-mono">{phase.verificationUri}</span>
+            </p>
+            <p className="mt-2 font-mono text-3xl font-bold tracking-widest text-purple-900 dark:text-purple-100">
+              {phase.userCode}
+            </p>
+          </div>
+          <p className="mt-3 flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Waiting for sign-in to complete…
+          </p>
+          <div className="mt-6 flex justify-end">
+            <button
+              onClick={() => setPhase({ kind: 'idle' })}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Cancel sign-in
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase.kind === 'completed' && (
+        <>
+          <div className="rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+            Signed in. Pick the OneDrive folder to bookmark and click
+            Add.
+          </div>
+          <div className="mt-3">
+            <CredField
+              label="Base path"
+              value={basePath}
+              onChange={setBasePath}
+              placeholder="empty for whole OneDrive, or /Documents"
+            />
+          </div>
+          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+            Rescan downloads matching files (CSV / Parquet / Excel /
+            docs) to{' '}
+            <span className="font-mono">
+              ~/.seryai/onedrive-cache/&lt;id&gt;/
+            </span>{' '}
+            and indexes them locally. Subsequent rescans skip files
+            whose remote size + mtime are unchanged.
+          </div>
+          {error && (
+            <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+              {error}
+            </div>
+          )}
+          <div className="mt-6 flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={submit}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Add OneDrive source
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -1604,6 +1882,9 @@ function legacyIconKindForTile(
       return 'http';
     case 'azure':
       // Globe icon for now. Polish slice adds the Azure cloud mark.
+      return 'http';
+    case 'onedrive':
+      // Globe icon for now. Polish slice adds the OneDrive mark.
       return 'http';
     default:
       return null;

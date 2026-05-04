@@ -143,6 +143,8 @@ export function sourceKindLabel(source: DataSource): string {
       return 'Dropbox';
     case 'azure_blob':
       return 'Azure Blob';
+    case 'one_drive':
+      return 'OneDrive';
   }
 }
 
@@ -202,6 +204,9 @@ export function legacyKindStringOf(
     case 'azure_blob':
       // Fallback to 'http' (globe). Future: Azure cloud icon.
       return 'http';
+    case 'one_drive':
+      // Fallback to 'http' (globe). Future: OneDrive cloud icon.
+      return 'http';
   }
 }
 
@@ -222,6 +227,7 @@ export function scanKeyOf(source: DataSource): string | null {
     case 'web_dav':
     case 'dropbox':
     case 'azure_blob':
+    case 'one_drive':
       return null;
   }
 }

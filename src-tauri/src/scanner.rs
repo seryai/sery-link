@@ -242,6 +242,8 @@ pub fn resolve_source_path(source: &crate::sources::DataSource) -> Option<String
         SourceKind::Dropbox { .. } => None,
         // F46: Azure Blob via rescan_azure_blob_source.
         SourceKind::AzureBlob { .. } => None,
+        // F49: OneDrive via rescan_onedrive_source.
+        SourceKind::OneDrive { .. } => None,
     }
 }
 

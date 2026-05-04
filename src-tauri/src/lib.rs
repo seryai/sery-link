@@ -36,6 +36,8 @@ mod azure_blob;
 mod azure_blob_creds;
 mod dropbox;
 mod dropbox_creds;
+mod onedrive;
+mod onedrive_creds;
 mod webdav;
 mod webdav_creds;
 mod url;
@@ -234,6 +236,10 @@ pub fn run() {
             commands::add_azure_blob_source,
             commands::test_azure_blob_credentials,
             commands::rescan_azure_blob_source,
+            commands::start_onedrive_auth,
+            commands::poll_onedrive_auth,
+            commands::add_onedrive_source,
+            commands::rescan_onedrive_source,
             commands::get_sftp_credentials_for_source,
             commands::get_webdav_credentials_for_source,
             commands::get_dropbox_credentials_for_source,

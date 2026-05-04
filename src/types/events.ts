@@ -306,6 +306,12 @@ export type SourceKind =
       kind: 'azure_blob';
       account_url: string;
       prefix: string;
+    }
+  | {
+      // F49: OneDrive via Microsoft Graph + device code OAuth.
+      // access + refresh tokens in the keychain via onedrive_creds.
+      kind: 'one_drive';
+      base_path: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */

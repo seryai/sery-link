@@ -105,8 +105,17 @@ pub enum SourceKind {
         /// container.
         prefix: String,
     },
-    // F49 adds OneDrive (needs full OAuth). GCS via S3 interop
-    // already works through F45.
+
+    /// F49: OneDrive via Microsoft Graph + device code OAuth.
+    /// access_token + refresh_token live in the keychain via
+    /// `onedrive_creds`. Files cache to
+    /// `~/.seryai/onedrive-cache/<source_id>/`. Refresh-on-expiry
+    /// is automatic on each Graph API call.
+    OneDrive {
+        /// Path inside the user's OneDrive to walk recursively.
+        /// Use empty string for the root.
+        base_path: String,
+    },
 }
 
 fn default_sftp_port() -> u16 {
@@ -268,6 +277,13 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 "Dropbox".to_string()
             } else {
                 format!("Dropbox · {}", base_path)
+            }
+        }
+        SourceKind::OneDrive { base_path } => {
+            if base_path.is_empty() || base_path == "/" {
+                "OneDrive".to_string()
+            } else {
+                format!("OneDrive · {}", base_path)
             }
         }
         SourceKind::AzureBlob {
