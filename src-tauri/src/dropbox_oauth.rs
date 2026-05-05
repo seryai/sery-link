@@ -21,8 +21,11 @@
 //! (a stolen client_id alone can't redeem tokens without the
 //! verifier from the user's session).
 //!
-//! `DROPBOX_APP_KEY` must be set to the founder's Dropbox app key.
-//! See datalake/SETUP_DROPBOX_OAUTH.md for the registration steps.
+//! Build-time gating: `DROPBOX_APP_KEY` env var must be set at
+//! `cargo build` time (option_env!). Builds without it leave OAuth
+//! disabled — start_oauth_flow surfaces a "not configured" error.
+//! Same pattern as gdrive_oauth's GOOGLE_OAUTH_CLIENT_ID. See
+//! datalake/SETUP_DROPBOX_OAUTH.md for app registration steps.
 
 use crate::error::{AgentError, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -30,16 +33,24 @@ use sha2::{Digest, Sha256};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-/// Dropbox app key from the developer dashboard. Public identifier
-/// — safe to embed (Dropbox docs explicitly support this for
-/// PKCE-grant apps that don't store a client_secret).
+/// Dropbox app key from the developer dashboard, embedded at build
+/// time via the `DROPBOX_APP_KEY` env var. Public identifier — safe
+/// to embed (Dropbox docs explicitly support this for PKCE-grant
+/// apps that don't store a client_secret).
 ///
-/// REPLACE before shipping: register a new app at
-/// https://www.dropbox.com/developers/apps → Create app → Scoped
-/// access → Full Dropbox. Required scopes: `files.content.read`,
-/// `files.metadata.read`. Allow "PKCE (recommended for mobile and
-/// desktop apps)" in the OAuth 2 settings.
-const DROPBOX_APP_KEY: &str = "REPLACE_WITH_REAL_DROPBOX_APP_KEY";
+/// Builds without the env var leave this as `None`; callers must
+/// surface a "not configured" error to the UI. Same pattern as
+/// `gdrive_oauth::client_id()` for Google Drive.
+///
+/// To register: https://www.dropbox.com/developers/apps → Create
+/// app → Scoped access → Full Dropbox. Required scopes:
+/// `files.content.read`, `files.metadata.read`. Allow "PKCE
+/// (recommended for mobile and desktop apps)" in OAuth 2 settings.
+/// See `datalake/SETUP_DROPBOX_OAUTH.md` for the full runbook.
+fn app_key() -> Option<&'static str> {
+    option_env!("DROPBOX_APP_KEY")
+        .filter(|s| !s.is_empty() && *s != "REPLACE_WITH_REAL_DROPBOX_APP_KEY")
+}
 
 const AUTHORIZE_URL: &str = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL: &str = "https://api.dropboxapi.com/oauth2/token";
@@ -102,21 +113,22 @@ fn generate_pkce_pair() -> (String, String) {
 /// Step 1 of the OAuth flow. Builds the authorize URL the frontend
 /// opens in the user's browser. Returns the URL + verifier.
 pub fn start_oauth_flow() -> Result<DropboxAuthStart> {
-    if DROPBOX_APP_KEY == "REPLACE_WITH_REAL_DROPBOX_APP_KEY" {
-        return Err(AgentError::Config(
-            "Dropbox OAuth not yet configured — the founder needs to \
-             register a Dropbox app and set DROPBOX_APP_KEY. See \
+    let key = app_key().ok_or_else(|| {
+        AgentError::Config(
+            "Dropbox OAuth not yet configured — this build was \
+             produced without DROPBOX_APP_KEY. Rebuild Sery Link \
+             with the env var set. See \
              datalake/SETUP_DROPBOX_OAUTH.md."
                 .to_string(),
-        ));
-    }
+        )
+    })?;
     let (verifier, challenge) = generate_pkce_pair();
     // token_access_type=offline → Dropbox issues a refresh_token
     // alongside the access_token. Without this the access_token
     // expires after 4 hours with no recovery path.
     let url = format!(
         "{AUTHORIZE_URL}?client_id={}&response_type=code&token_access_type=offline&code_challenge={}&code_challenge_method=S256",
-        DROPBOX_APP_KEY,
+        key,
         urlencoding::encode(&challenge)
     );
     Ok(DropboxAuthStart {
@@ -151,12 +163,15 @@ pub async fn complete_oauth_flow(
     code: &str,
     code_verifier: &str,
 ) -> Result<DropboxOAuthTokens> {
+    let key = app_key().ok_or_else(|| {
+        AgentError::Config("Dropbox OAuth not configured (DROPBOX_APP_KEY)".to_string())
+    })?;
     let resp = http_client()
         .post(TOKEN_URL)
         .form(&[
             ("code", code.trim()),
             ("grant_type", "authorization_code"),
-            ("client_id", DROPBOX_APP_KEY),
+            ("client_id", key),
             ("code_verifier", code_verifier),
         ])
         .send()
@@ -202,12 +217,15 @@ pub async fn complete_oauth_flow(
 /// Refresh an expired access_token using the stored refresh_token.
 /// Mutates the supplied tokens in place.
 pub async fn refresh_access_token(tokens: &mut DropboxOAuthTokens) -> Result<()> {
+    let key = app_key().ok_or_else(|| {
+        AgentError::Config("Dropbox OAuth not configured (DROPBOX_APP_KEY)".to_string())
+    })?;
     let resp = http_client()
         .post(TOKEN_URL)
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", tokens.refresh_token.as_str()),
-            ("client_id", DROPBOX_APP_KEY),
+            ("client_id", key),
         ])
         .send()
         .await
@@ -259,13 +277,32 @@ mod tests {
 
     #[test]
     fn start_oauth_returns_error_when_app_key_unconfigured() {
-        // The placeholder check fires when no real key has been
-        // hardcoded; surfaces config errors clearly instead of
-        // mysteriously failing the token exchange later.
+        // Skip in builds that DO have the env var set — the test
+        // only meaningfully covers the unconfigured branch. CI runs
+        // tests without DROPBOX_APP_KEY so this almost always fires.
+        if app_key().is_some() {
+            return;
+        }
         let r = start_oauth_flow();
         assert!(r.is_err());
         let msg = format!("{:?}", r.unwrap_err());
         assert!(msg.contains("not yet configured") || msg.contains("DROPBOX_APP_KEY"));
+    }
+
+    #[test]
+    fn app_key_filters_placeholder_value() {
+        // Sanity: even if someone leaves the historical placeholder
+        // in their env (DROPBOX_APP_KEY=REPLACE_WITH_REAL_DROPBOX_APP_KEY),
+        // app_key() rejects it as unconfigured. Verified via the
+        // filter logic — we can't actually mutate option_env! at
+        // runtime, but we can test the filter's intent.
+        fn filter(s: &str) -> Option<&str> {
+            Some(s)
+                .filter(|s| !s.is_empty() && *s != "REPLACE_WITH_REAL_DROPBOX_APP_KEY")
+        }
+        assert!(filter("REPLACE_WITH_REAL_DROPBOX_APP_KEY").is_none());
+        assert!(filter("").is_none());
+        assert!(filter("real-app-key-abc123").is_some());
     }
 
     #[test]
