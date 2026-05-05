@@ -366,30 +366,36 @@ pub fn walk_and_download_blocking(
         ))
     })?;
 
-    let mut manifest = SyncManifest::load(&cache_dir);
+    let manifest = SyncManifest::load(&cache_dir);
 
-    let sess = connect_blocking(creds)?;
-    let listing = list_recursive_blocking(&sess, base_path, MAX_SFTP_FILES)?;
-
-    // Pre-count supported files so progress callbacks have a stable
-    // total to report against (the listing includes unsupported
-    // extensions we'll skip).
-    let total_supported = listing
-        .iter()
-        .filter(|f| {
-            f.remote_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| crate::scanner::is_supported_ext(&e.to_ascii_lowercase()))
-                .unwrap_or(false)
-        })
-        .count();
+    // Listing uses a single session; release it before spawning the
+    // worker pool so we don't hold an extra connection alongside the
+    // 4 worker sessions.
+    let listing = {
+        let sess = connect_blocking(creds)?;
+        list_recursive_blocking(&sess, base_path, MAX_SFTP_FILES)?
+    };
 
     const BYTE_PROGRESS_MIN_SIZE: u64 = 10 * 1024 * 1024;
+    const MAX_CONCURRENT: usize = 4;
     let base_pb = PathBuf::from(base_path);
-    let mut downloaded = 0usize;
-    let mut considered = 0usize;
+
+    // Pre-pass: filter to supported, classify each as needs-download
+    // vs skipped. The skipped list is processed sequentially upfront
+    // (no I/O); the needs-download list feeds the concurrent worker
+    // pool. Same shape as the async cache-and-scan kinds.
+    struct Work {
+        remote_path: PathBuf,
+        local_path: PathBuf,
+        size_bytes: u64,
+        key: String,
+        mtime_marker: String,
+        label: String,
+    }
+    let mut to_download: Vec<Work> = Vec::new();
+    let mut skipped_labels: Vec<String> = Vec::new();
     let mut current_keys: HashSet<String> = HashSet::new();
+    let mut total_supported = 0usize;
 
     for file in listing.iter() {
         let ext = file
@@ -411,103 +417,185 @@ pub fn walk_and_download_blocking(
         };
         let local_path = cache_dir.join(&relative);
 
-        // Manifest key = remote absolute path. Stable across walks.
         let key = file.remote_path.to_string_lossy().to_string();
-        // Mtime marker: SFTP gives us Unix epoch seconds. Stringify
-        // for the byte-comparison contract; "0" sentinel when None
-        // (some servers don't return mtime).
         let mtime_marker = file
             .mtime_unix
             .map(|t| t.to_string())
             .unwrap_or_else(|| "0".to_string());
         current_keys.insert(key.clone());
+        total_supported += 1;
 
-        // Skip if manifest matches AND the local cached file still
-        // exists. The local-existence check guards against the user
-        // (or some other process) deleting the cache file between
-        // scans — manifest-only would skip the redownload and the
-        // scanner would see nothing.
         let label = file
             .remote_path
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
         if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
             || !local_path.exists()
         {
-            let byte_cb: Option<ByteProgressCb> = if file.size_bytes
-                > BYTE_PROGRESS_MIN_SIZE
-                && progress.is_some()
-            {
-                let walk_cb = progress.clone();
-                let label_owned = label.to_string();
-                let size = file.size_bytes;
-                // Snapshot the count so the byte-progress callbacks
-                // for this file all report against the same N. The
-                // top-level `cb(considered, ...)` after this block
-                // will report N too.
-                let n_in_flight = considered + 1;
-                let total = total_supported;
-                use std::sync::atomic::{AtomicUsize, Ordering};
-                let last_pct = std::sync::Arc::new(AtomicUsize::new(0));
-                Some(std::sync::Arc::new(move |bytes, _hint| {
-                    let pct = ((bytes.saturating_mul(20)) / size.max(1))
-                        as usize;
-                    let prev = last_pct.load(Ordering::Relaxed);
-                    if pct > prev
-                        && last_pct
-                            .compare_exchange(
-                                prev,
-                                pct,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            )
-                            .is_ok()
-                    {
-                        if let Some(cb) = walk_cb.as_ref() {
-                            cb(
-                                n_in_flight,
-                                total,
-                                &format!("{label_owned} ({}%)", pct * 5),
-                            );
-                        }
-                    }
-                }))
-            } else {
-                None
-            };
-            match download_blocking(
-                &sess,
-                &file.remote_path,
-                &local_path,
-                byte_cb,
-            ) {
-                Ok(_) => {
-                    downloaded += 1;
-                    manifest.record(key, file.size_bytes, mtime_marker);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[sftp] download failed for {}: {} — skipping",
-                        file.remote_path.display(),
-                        e
-                    );
-                }
-            }
+            to_download.push(Work {
+                remote_path: file.remote_path.clone(),
+                local_path,
+                size_bytes: file.size_bytes,
+                key,
+                mtime_marker,
+                label,
+            });
+        } else {
+            skipped_labels.push(label);
         }
-        // Bump considered for every supported file (downloaded OR
-        // skipped via manifest) so the progress bar tracks total
-        // walk completion, not just new downloads.
+    }
+
+    // Emit progress for skipped files upfront so the progress bar
+    // jumps past them quickly. After this pass the only progress
+    // movement comes from the concurrent download phase.
+    let mut considered = 0usize;
+    for label in &skipped_labels {
         considered += 1;
         if let Some(cb) = progress.as_ref() {
             cb(considered, total_supported, label);
         }
     }
 
-    // Drop manifest entries + cache files for remote paths no
-    // longer present. Otherwise removed-from-server files keep
-    // showing up in scan results.
+    // Concurrent download phase: N worker threads, each holding its
+    // own SFTP session. libssh2 sessions aren't safe to share across
+    // threads (single channel; can't multiplex) so the simplest path
+    // to parallelism is one session per worker. 4 sessions ≪ the
+    // OpenSSH MaxStartups default (10), and home connections handle
+    // 4 concurrent transfers comfortably.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let n_workers = MAX_CONCURRENT.min(to_download.len()).max(1);
+    let queue: Arc<Mutex<Vec<Work>>> = Arc::new(Mutex::new(to_download));
+    let manifest_mu = Arc::new(Mutex::new(manifest));
+    let downloaded_ct = Arc::new(AtomicUsize::new(0));
+    let considered_ct = Arc::new(AtomicUsize::new(considered));
+    let total_supported_arc = total_supported;
+
+    let mut handles = Vec::with_capacity(n_workers);
+    for _ in 0..n_workers {
+        let creds = creds.clone();
+        let queue = queue.clone();
+        let manifest = manifest_mu.clone();
+        let downloaded = downloaded_ct.clone();
+        let considered_atomic = considered_ct.clone();
+        let progress = progress.clone();
+
+        let h = std::thread::spawn(move || -> Result<()> {
+            let sess = match connect_blocking(&creds) {
+                Ok(s) => s,
+                Err(e) => {
+                    // A failed worker shouldn't kill the whole walk —
+                    // it just means one fewer parallel slot. Surface
+                    // the error to stderr like a per-file failure.
+                    eprintln!("[sftp] worker session failed: {e}");
+                    return Ok(());
+                }
+            };
+            loop {
+                let work = {
+                    let mut q = queue.lock().expect("queue poisoned");
+                    q.pop()
+                };
+                let Some(w) = work else {
+                    break;
+                };
+
+                let byte_cb: Option<ByteProgressCb> = if w.size_bytes
+                    > BYTE_PROGRESS_MIN_SIZE
+                    && progress.is_some()
+                {
+                    let walk_cb = progress.clone();
+                    let label_owned = w.label.clone();
+                    let size = w.size_bytes;
+                    let n_in_flight =
+                        considered_atomic.load(Ordering::Relaxed) + 1;
+                    let total = total_supported_arc;
+                    let last_pct = Arc::new(AtomicUsize::new(0));
+                    Some(Arc::new(move |bytes, _hint| {
+                        let pct = ((bytes.saturating_mul(20)) / size.max(1))
+                            as usize;
+                        let prev = last_pct.load(Ordering::Relaxed);
+                        if pct > prev
+                            && last_pct
+                                .compare_exchange(
+                                    prev,
+                                    pct,
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                        {
+                            if let Some(cb) = walk_cb.as_ref() {
+                                cb(
+                                    n_in_flight,
+                                    total,
+                                    &format!("{label_owned} ({}%)", pct * 5),
+                                );
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                };
+
+                match download_blocking(
+                    &sess,
+                    &w.remote_path,
+                    &w.local_path,
+                    byte_cb,
+                ) {
+                    Ok(_) => {
+                        downloaded.fetch_add(1, Ordering::Relaxed);
+                        let mut m = manifest.lock().expect("manifest poisoned");
+                        m.record(
+                            w.key.clone(),
+                            w.size_bytes,
+                            w.mtime_marker.clone(),
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[sftp] download failed for {}: {} — skipping",
+                            w.remote_path.display(),
+                            e
+                        );
+                    }
+                }
+                let n = considered_atomic.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(cb) = progress.as_ref() {
+                    cb(n, total_supported_arc, &w.label);
+                }
+            }
+            Ok(())
+        });
+        handles.push(h);
+    }
+
+    for h in handles {
+        // Worker errors during connect already get logged + swallowed
+        // inside the thread; a Join error here means the OS killed the
+        // thread, which we surface as a generic error.
+        if let Err(_) = h.join() {
+            return Err(AgentError::Network(
+                "SFTP worker thread panicked".to_string(),
+            ));
+        }
+    }
+
+    let downloaded = downloaded_ct.load(Ordering::Relaxed);
+    let mut manifest = Arc::try_unwrap(manifest_mu)
+        .map_err(|_| {
+            AgentError::Network(
+                "SFTP manifest still referenced after workers joined"
+                    .to_string(),
+            )
+        })?
+        .into_inner()
+        .expect("manifest poisoned");
+
     let stale = manifest.drop_missing(&current_keys);
     for stale_key in &stale {
         let stale_path = PathBuf::from(stale_key);
