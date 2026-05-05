@@ -110,6 +110,29 @@ impl ScanCache {
         Ok(Self { conn })
     }
 
+    /// Look up the freshness key (mtime, size) currently stored for a
+    /// (folder, relative) entry, without comparing it to anything.
+    /// Used by `preview_cache` to derive its own cache key from
+    /// scan_cache's source-of-truth — keeps the two caches consistent
+    /// without re-issuing a HEAD probe at preview time.
+    pub fn get_freshness(
+        &self,
+        folder_path: &str,
+        relative_path: &str,
+    ) -> Option<(i64, i64)> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT mtime_secs, size_bytes FROM scan_cache
+                 WHERE folder_path = ? AND relative_path = ?",
+            )
+            .ok()?;
+        stmt.query_row(params![folder_path, relative_path], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .ok()
+    }
+
     /// Fetch a cached metadata row if (mtime, size) match. Returns `None`
     /// on miss, stale, or any DB/parse error — callers should fall back
     /// to full extraction.
