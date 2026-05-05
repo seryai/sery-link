@@ -47,7 +47,8 @@ use tokio::io::AsyncWriteExt;
 /// clear error rather than mysterious authentication failures.
 const MICROSOFT_CLIENT_ID: &str = "REPLACE_WITH_REAL_APP_ID";
 
-const TENANT: &str = "common"; // Personal + work + school accounts.
+// Tenant `common` (personal + work + school) is baked into the
+// device-code + token URLs below.
 const SCOPE: &str = "Files.Read Files.Read.All offline_access";
 const DEVICE_CODE_URL: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
@@ -111,10 +112,6 @@ struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     expires_in: i64,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,18 +469,6 @@ pub async fn list_recursive(
 /// Per-byte progress callback. Same shape as the other cache-and-
 /// scan kinds.
 pub type ByteProgressCb = std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
-
-/// Download a single file by its Drive item id.
-pub async fn download_file(
-    creds: &mut OneDriveCredentials,
-    item_id: &str,
-    local_path: &Path,
-) -> Result<u64> {
-    if creds.access_token_expired_or_expiring() {
-        refresh_access_token(creds).await?;
-    }
-    download_file_with_token(&creds.access_token, item_id, local_path, None).await
-}
 
 /// Internal: download with an explicit access token, no creds
 /// mutation. Used by `walk_and_download` so concurrent tasks can

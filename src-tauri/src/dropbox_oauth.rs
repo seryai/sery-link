@@ -28,7 +28,7 @@
 //! datalake/SETUP_DROPBOX_OAUTH.md for app registration steps.
 
 use crate::error::{AgentError, Result};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, Utc};
 use sha2::{Digest, Sha256};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -55,27 +55,16 @@ fn app_key() -> Option<&'static str> {
 const AUTHORIZE_URL: &str = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL: &str = "https://api.dropboxapi.com/oauth2/token";
 
-/// Stored OAuth credentials. Distinct from the PAT shape (just
-/// access_token); access_token has 4-hour validity, refresh_token
-/// is long-lived. The DropboxCredentials struct in dropbox.rs
-/// gets an optional refresh_token + expires_at so it serves both
-/// auth styles — PAT entries leave them None.
+/// Stored OAuth tokens — return shape for `complete_oauth_flow`
+/// and `refresh_access_token`. Callers convert into the persisted
+/// `DropboxCredentials` shape (which carries the same fields plus
+/// PAT compatibility); the expiry check lives there too.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropboxOAuthTokens {
     pub access_token: String,
     pub refresh_token: String,
-    /// RFC 3339 timestamp; `is_access_token_expiring` returns true
-    /// within 60s of expiry.
+    /// RFC 3339 timestamp.
     pub expires_at: String,
-}
-
-impl DropboxOAuthTokens {
-    pub fn is_expiring(&self) -> bool {
-        match DateTime::parse_from_rfc3339(&self.expires_at) {
-            Ok(t) => Utc::now() + ChronoDuration::seconds(60) >= t,
-            Err(_) => true,
-        }
-    }
 }
 
 /// Public state returned to the frontend when starting auth — the
@@ -305,33 +294,9 @@ mod tests {
         assert!(filter("real-app-key-abc123").is_some());
     }
 
-    #[test]
-    fn is_expiring_treats_unparseable_as_expired() {
-        let t = DropboxOAuthTokens {
-            access_token: "x".to_string(),
-            refresh_token: "y".to_string(),
-            expires_at: "garbage".to_string(),
-        };
-        assert!(t.is_expiring());
-    }
-
-    #[test]
-    fn is_expiring_returns_true_for_past() {
-        let t = DropboxOAuthTokens {
-            access_token: "x".to_string(),
-            refresh_token: "y".to_string(),
-            expires_at: "2000-01-01T00:00:00Z".to_string(),
-        };
-        assert!(t.is_expiring());
-    }
-
-    #[test]
-    fn is_expiring_returns_false_for_far_future() {
-        let t = DropboxOAuthTokens {
-            access_token: "x".to_string(),
-            refresh_token: "y".to_string(),
-            expires_at: "2099-01-01T00:00:00Z".to_string(),
-        };
-        assert!(!t.is_expiring());
-    }
+    // Expiry-detection coverage lives in dropbox::tests now —
+    // DropboxCredentials::is_expiring is the canonical implementation
+    // for both PAT and OAuth shapes; the bare DropboxOAuthTokens
+    // type is just a transport between OAuth helpers and
+    // dropbox::ensure_fresh.
 }
