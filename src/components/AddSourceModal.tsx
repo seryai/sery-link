@@ -81,7 +81,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'gdrive', label: 'Google Drive', description: 'Folder via OAuth' },
   { kind: 'sftp', label: 'SFTP', description: 'Password or SSH key' },
   { kind: 'webdav', label: 'WebDAV', description: 'Nextcloud / ownCloud / generic' },
-  { kind: 'dropbox', label: 'Dropbox', description: 'Access token (PAT)' },
+  { kind: 'dropbox', label: 'Dropbox', description: 'Sign in or access token' },
   { kind: 'azure', label: 'Azure Blob', description: 'SAS token' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Microsoft device code' },
 ];
@@ -345,7 +345,7 @@ function ModalHeader({
           : stage.kind === 'webdav'
             ? 'Works with Nextcloud, ownCloud, and any generic WebDAV server. Files cache locally; auth lives in your OS keychain.'
             : stage.kind === 'dropbox'
-              ? 'v0.7 ships Personal Access Token auth. OAuth Connect-with-Dropbox follows in a later release.'
+              ? 'Connect-with-Dropbox via OAuth, or paste a Personal Access Token from dropbox.com/developers/apps.'
               : stage.kind === 'azure'
                 ? 'Generate a SAS token in the Azure portal scoped to your container with read-only permissions. Stored in your OS keychain.'
                 : stage.kind === 'onedrive'
@@ -717,12 +717,14 @@ function CredField({
   onChange,
   placeholder,
   type = 'text',
+  autoFocus,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: 'text' | 'password';
+  autoFocus?: boolean;
 }) {
   return (
     <label className="block">
@@ -734,6 +736,7 @@ function CredField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        autoFocus={autoFocus}
         className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
       />
     </label>
@@ -1418,6 +1421,11 @@ function AzureBlobStage({
 
 // ─── Stage B — Dropbox form ────────────────────────────────────────
 
+interface DropboxAuthStart {
+  authorize_url: string;
+  code_verifier: string;
+}
+
 function DropboxStage({
   onAdded,
   onCancel,
@@ -1425,9 +1433,258 @@ function DropboxStage({
   onAdded: () => void;
   onCancel: () => void;
 }) {
+  // Two auth paths share this stage. OAuth is the default
+  // (Connect-with-Dropbox) — no token-pasting, refreshes itself.
+  // PAT is the fallback for users whose Dropbox app deployment
+  // hasn't been registered yet, or for self-hosters.
+  const [mode, setMode] = useState<'oauth' | 'pat'>('oauth');
+  const [basePath, setBasePath] = useState('/');
+
+  return (
+    <>
+      <div className="mb-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+        <button
+          onClick={() => setMode('oauth')}
+          className={`rounded px-2.5 py-1 font-medium ${
+            mode === 'oauth'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+          }`}
+        >
+          Sign in with Dropbox
+        </button>
+        <button
+          onClick={() => setMode('pat')}
+          className={`rounded px-2.5 py-1 font-medium ${
+            mode === 'pat'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+          }`}
+        >
+          Access token
+        </button>
+      </div>
+
+      {mode === 'oauth' ? (
+        <DropboxOAuthForm
+          basePath={basePath}
+          setBasePath={setBasePath}
+          onAdded={onAdded}
+          onCancel={onCancel}
+        />
+      ) : (
+        <DropboxPatForm
+          basePath={basePath}
+          setBasePath={setBasePath}
+          onAdded={onAdded}
+          onCancel={onCancel}
+        />
+      )}
+    </>
+  );
+}
+
+function DropboxOAuthForm({
+  basePath,
+  setBasePath,
+  onAdded,
+  onCancel,
+}: {
+  basePath: string;
+  setBasePath: (v: string) => void;
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  // Phase machine:
+  //   idle      — show the "Open Dropbox" button.
+  //   awaiting  — Dropbox tab is open; user pastes the code Dropbox
+  //               showed them. Verifier is held in state.
+  const [phase, setPhase] = useState<
+    | { kind: 'idle' }
+    | { kind: 'awaiting'; codeVerifier: string; authorizeUrl: string }
+  >({ kind: 'idle' });
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const startAuth = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const start = await invoke<DropboxAuthStart>('start_dropbox_oauth');
+      try {
+        // Best-effort open; if the opener plugin isn't available
+        // (or Dropbox blocks the in-app webview), the user can
+        // still copy the URL from the field below.
+        const opener = await import('@tauri-apps/plugin-opener');
+        await opener.openUrl(start.authorize_url);
+      } catch {
+        // Falls through; the URL is shown in the awaiting phase.
+      }
+      setPhase({
+        kind: 'awaiting',
+        codeVerifier: start.code_verifier,
+        authorizeUrl: start.authorize_url,
+      });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (phase.kind !== 'awaiting') return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_dropbox_source_oauth', {
+        basePath: basePath.trim(),
+        code: code.trim(),
+        codeVerifier: phase.codeVerifier,
+      });
+      toast.success('Dropbox source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      {phase.kind === 'idle' && (
+        <>
+          <p className="text-sm text-slate-700 dark:text-slate-300">
+            Connect-with-Dropbox via OAuth — no token to copy:
+          </p>
+          <ol className="ml-4 list-decimal space-y-1 text-sm text-slate-700 dark:text-slate-300">
+            <li>Click "Open Dropbox" below.</li>
+            <li>Sign in and click "Allow" on Dropbox.</li>
+            <li>Dropbox shows you a code — copy it.</li>
+            <li>Paste it back here and click Add.</li>
+          </ol>
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Tokens (access + refresh) live in your OS keychain.
+            Refreshes happen automatically; you only sign in once.
+          </p>
+
+          <div className="mt-3">
+            <CredField
+              label="Base path"
+              value={basePath}
+              onChange={setBasePath}
+              placeholder="/ (whole Dropbox) or /Subfolder"
+            />
+          </div>
+
+          {error && (
+            <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+              {error}
+            </div>
+          )}
+          <div className="mt-6 flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={startAuth}
+              disabled={busy || basePath.trim() === ''}
+              className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Open Dropbox
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase.kind === 'awaiting' && (
+        <>
+          <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-100">
+            Dropbox should have opened. If not,{' '}
+            <a
+              href={phase.authorizeUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              open this link
+            </a>
+            . After clicking Allow, Dropbox shows a one-time code —
+            paste it here.
+          </div>
+
+          <div className="mt-3">
+            <CredField
+              label="Authorization code"
+              value={code}
+              onChange={setCode}
+              placeholder="Paste the code Dropbox showed you"
+              autoFocus
+            />
+          </div>
+
+          {error && (
+            <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+              {error}
+            </div>
+          )}
+
+          <div className="mt-6 flex items-center justify-between gap-2">
+            <button
+              onClick={() => {
+                setPhase({ kind: 'idle' });
+                setCode('');
+              }}
+              disabled={busy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Back
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onCancel}
+                disabled={busy}
+                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submit}
+                disabled={busy || code.trim() === ''}
+                className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Add Dropbox source
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function DropboxPatForm({
+  basePath,
+  setBasePath,
+  onAdded,
+  onCancel,
+}: {
+  basePath: string;
+  setBasePath: (v: string) => void;
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
   const toast = useToast();
   const [accessToken, setAccessToken] = useState('');
-  const [basePath, setBasePath] = useState('/');
   const [busy, setBusy] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
   const [error, setError] = useState<string | null>(null);
