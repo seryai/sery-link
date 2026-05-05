@@ -1,4 +1,4 @@
-// File detail — the third navigation level (Folders → Folder → File).
+// File detail — the third navigation level (Sources → Source → File).
 //
 // Reached by clicking a row in FolderDetail OR a result in SearchPage.
 // Shows everything the old expanded-row view showed, plus more vertical
@@ -149,10 +149,10 @@ export function FileDetail() {
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
           <button
-            onClick={() => navigate('/folders')}
+            onClick={() => navigate('/sources')}
             className="hover:text-slate-900 dark:hover:text-slate-100"
           >
-            Folders
+            Sources
           </button>
           <span className="text-slate-300 dark:text-slate-600">/</span>
           <button

@@ -1,6 +1,8 @@
-// Folder detail page — /folders/:folderId
+// Source detail page — /folders/:folderId (the URL param is a
+// path or URL the path-keyed scanner indexes; route prefix kept
+// for now while cache-and-scan kinds get their own resolver).
 //
-// Reached by clicking a folder card on the Folders tab. Shows every
+// Reached by clicking a row on the Sources sidebar. Shows every
 // dataset Sery indexed inside this folder, with filename search,
 // per-dataset schema preview, sample-row preview, and a "locate in
 // Finder" shortcut.
@@ -310,16 +312,16 @@ export function FolderDetail() {
       <div className="flex h-full flex-col overflow-hidden">
         <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
           <button
-            onClick={() => navigate('/folders')}
+            onClick={() => navigate('/sources')}
             className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
           >
-            <ArrowLeft className="h-4 w-4" /> Back to folders
+            <ArrowLeft className="h-4 w-4" /> Back to sources
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-6">
           <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              This folder isn't being watched.
+              This source isn't connected.
             </p>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               {folderPath || '(no path)'}
@@ -335,10 +337,10 @@ export function FolderDetail() {
       {/* Header */}
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
         <button
-          onClick={() => navigate('/folders')}
+          onClick={() => navigate('/sources')}
           className="mb-3 inline-flex items-center gap-2 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> All folders
+          <ArrowLeft className="h-3.5 w-3.5" /> All sources
         </button>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
