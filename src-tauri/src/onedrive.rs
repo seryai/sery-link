@@ -18,12 +18,12 @@
 //! flow runs automatically before each Graph API call when the
 //! access token is within 60s of expiry.
 //!
-//! The `MICROSOFT_CLIENT_ID` constant must be set to the founder's
-//! Microsoft Entra app registration. See
-//! datalake/SETUP_MICROSOFT_OAUTH.md for the registration steps.
-//! For dev/test before a real registration exists, the placeholder
-//! ID below points at a non-functional app — testing the flow
-//! end-to-end requires a real registration.
+//! Build-time gating: the `MICROSOFT_CLIENT_ID` env var must be
+//! set at `cargo build` time (option_env!). Builds without it
+//! leave OneDrive auth disabled — `start_device_code_auth` and the
+//! token endpoints surface a "not configured" error. Same pattern
+//! as gdrive_oauth and dropbox_oauth. See
+//! datalake/SETUP_MICROSOFT_OAUTH.md for registration steps.
 
 use crate::error::{AgentError, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -32,30 +32,22 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-/// Microsoft Entra app registration client ID. This is a public
-/// identifier — safe to embed in the binary (Microsoft's own docs
-/// confirm this for `allowPublicClient: true` apps).
+/// Microsoft Entra app registration client ID, embedded at build
+/// time via the `MICROSOFT_CLIENT_ID` env var. Public identifier —
+/// safe to embed for `allowPublicClient: true` apps (per Microsoft
+/// OAuth docs).
 ///
-/// REPLACE before shipping: register a new app at
-/// https://entra.microsoft.com/ → App registrations → New
-/// registration. Required scopes: `Files.Read`, `Files.Read.All`,
-/// `offline_access`. Allow public client flows = yes. Device code
-/// flow = enabled.
+/// Builds without the env var return `None`; the OAuth helpers
+/// surface a "not configured" error. Same pattern as
+/// `gdrive_oauth::client_id` / `dropbox_oauth::app_key`.
 ///
-/// Until then, this placeholder makes test_credentials fail at
-/// the device code request — surfacing the misconfiguration as a
-/// clear error rather than mysterious authentication failures.
-const MICROSOFT_CLIENT_ID: &str = "REPLACE_WITH_REAL_APP_ID";
-
-/// Diagnostic accessor — returns `Some(id)` only if the const has
-/// been swapped from the placeholder. Used by `oauth_status::*`
-/// to report build configuration without exposing the const.
+/// Register at https://entra.microsoft.com/ → App registrations →
+/// New registration. Required scopes: `Files.Read`,
+/// `Files.Read.All`, `offline_access`. Allow public client flows
+/// = yes. Device code flow = enabled.
 pub fn configured_client_id() -> Option<&'static str> {
-    if MICROSOFT_CLIENT_ID == "REPLACE_WITH_REAL_APP_ID" {
-        None
-    } else {
-        Some(MICROSOFT_CLIENT_ID)
-    }
+    option_env!("MICROSOFT_CLIENT_ID")
+        .filter(|s| !s.is_empty() && *s != "REPLACE_WITH_REAL_APP_ID")
 }
 
 // Tenant `common` (personal + work + school) is baked into the
@@ -142,18 +134,19 @@ fn http_client() -> reqwest::Client {
 /// Step 1 of device code flow: request a code from Microsoft.
 /// Returns the user_code + verification_uri the UI displays.
 pub async fn start_device_code_flow() -> Result<DeviceCodeStart> {
-    if MICROSOFT_CLIENT_ID == "REPLACE_WITH_REAL_APP_ID" {
-        return Err(AgentError::Config(
-            "OneDrive auth not yet configured — the founder needs to \
-             register a Microsoft Entra app and set MICROSOFT_CLIENT_ID. \
-             See datalake/SETUP_MICROSOFT_OAUTH.md."
+    let client_id = configured_client_id().ok_or_else(|| {
+        AgentError::Config(
+            "OneDrive auth not yet configured — this build was \
+             produced without MICROSOFT_CLIENT_ID. Rebuild Sery Link \
+             with the env var set. See \
+             datalake/SETUP_MICROSOFT_OAUTH.md."
                 .to_string(),
-        ));
-    }
+        )
+    })?;
     let resp = http_client()
         .post(DEVICE_CODE_URL)
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", client_id),
             ("scope", SCOPE),
         ])
         .send()
@@ -193,10 +186,15 @@ pub async fn start_device_code_flow() -> Result<DeviceCodeStart> {
 /// refresh_token. Caller is responsible for the polling loop —
 /// this is one attempt that returns Pending vs Completed vs Error.
 pub async fn poll_device_code(device_code: &str) -> Result<PollOutcome> {
+    let client_id = configured_client_id().ok_or_else(|| {
+        AgentError::Config(
+            "OneDrive auth not configured (MICROSOFT_CLIENT_ID)".to_string(),
+        )
+    })?;
     let resp = http_client()
         .post(TOKEN_URL)
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", client_id),
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("device_code", device_code),
         ])
@@ -266,10 +264,15 @@ pub enum PollOutcome {
 /// the supplied creds in place. Used before each Graph API call
 /// when `access_token_expired_or_expiring()` is true.
 pub async fn refresh_access_token(creds: &mut OneDriveCredentials) -> Result<()> {
+    let client_id = configured_client_id().ok_or_else(|| {
+        AgentError::Config(
+            "OneDrive auth not configured (MICROSOFT_CLIENT_ID)".to_string(),
+        )
+    })?;
     let resp = http_client()
         .post(TOKEN_URL)
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", client_id),
             ("grant_type", "refresh_token"),
             ("refresh_token", creds.refresh_token.as_str()),
             ("scope", SCOPE),
