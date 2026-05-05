@@ -255,16 +255,24 @@ export function SourcesSidebar() {
         // these specific messages from onedrive.rs. Open the
         // Reauth dialog automatically — saves the user from
         // discovering "Re-authorize…" in the context menu.
-        if (
-          source.kind.kind === 'one_drive' &&
-          /re-auth needed|token rejected|refresh failed|access_denied/i.test(
+        const isAuthError =
+          /re-auth needed|token rejected|refresh failed|access_denied|401|403/i.test(
             errStr,
-          )
-        ) {
+          );
+        if (source.kind.kind === 'one_drive' && isAuthError) {
           toast.error(
             `"${source.name}" needs to re-authorize — opening sign-in…`,
           );
           setReauthSourceId(source.id);
+        } else if (source.kind.kind === 'dropbox' && isAuthError) {
+          // Dropbox OAuth refresh can fail when the user revokes
+          // the app on dropbox.com or the refresh_token expires
+          // (after long inactivity). Edit credentials defaults to
+          // the OAuth re-auth tab when the source is OAuth-shaped.
+          toast.error(
+            `"${source.name}" needs to re-authenticate — opening Edit credentials…`,
+          );
+          setEditCredsSourceId(source.id);
         } else {
           toast.error(`Rescan failed: ${errStr}`);
         }
