@@ -239,6 +239,12 @@ pub fn list_recursive_blocking(
     Ok(out)
 }
 
+/// Per-byte progress callback. Same shape as the other cache-and-
+/// scan kinds. Called per chunk written with (bytes_so_far,
+/// total_bytes_hint). For SFTP the hint comes from the file's stat
+/// at listing time and is passed through here.
+pub type ByteProgressCb = std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 /// Download a single remote file to a local path. The local parent
 /// directory is created if missing. Returns the number of bytes
 /// written.
@@ -246,6 +252,7 @@ pub fn download_blocking(
     sess: &Session,
     remote_path: &Path,
     local_path: &Path,
+    byte_progress: Option<ByteProgressCb>,
 ) -> Result<u64> {
     let sftp = sess
         .sftp()
@@ -286,6 +293,12 @@ pub fn download_blocking(
             AgentError::FileSystem(format!("write local: {e}"))
         })?;
         total += n as u64;
+        if let Some(cb) = byte_progress.as_ref() {
+            // libssh2 stat doesn't always populate size pre-read,
+            // so the walker passes the listing-time size; 0 here
+            // means "unknown" and the cb can ignore it.
+            cb(total, 0);
+        }
     }
     Ok(total)
 }
@@ -372,6 +385,7 @@ pub fn walk_and_download_blocking(
         })
         .count();
 
+    const BYTE_PROGRESS_MIN_SIZE: u64 = 10 * 1024 * 1024;
     let base_pb = PathBuf::from(base_path);
     let mut downloaded = 0usize;
     let mut considered = 0usize;
@@ -422,7 +436,53 @@ pub fn walk_and_download_blocking(
         if manifest.needs_download(&key, file.size_bytes, &mtime_marker)
             || !local_path.exists()
         {
-            match download_blocking(&sess, &file.remote_path, &local_path) {
+            let byte_cb: Option<ByteProgressCb> = if file.size_bytes
+                > BYTE_PROGRESS_MIN_SIZE
+                && progress.is_some()
+            {
+                let walk_cb = progress.clone();
+                let label_owned = label.to_string();
+                let size = file.size_bytes;
+                // Snapshot the count so the byte-progress callbacks
+                // for this file all report against the same N. The
+                // top-level `cb(considered, ...)` after this block
+                // will report N too.
+                let n_in_flight = considered + 1;
+                let total = total_supported;
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                let last_pct = std::sync::Arc::new(AtomicUsize::new(0));
+                Some(std::sync::Arc::new(move |bytes, _hint| {
+                    let pct = ((bytes.saturating_mul(20)) / size.max(1))
+                        as usize;
+                    let prev = last_pct.load(Ordering::Relaxed);
+                    if pct > prev
+                        && last_pct
+                            .compare_exchange(
+                                prev,
+                                pct,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            )
+                            .is_ok()
+                    {
+                        if let Some(cb) = walk_cb.as_ref() {
+                            cb(
+                                n_in_flight,
+                                total,
+                                &format!("{label_owned} ({}%)", pct * 5),
+                            );
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+            match download_blocking(
+                &sess,
+                &file.remote_path,
+                &local_path,
+                byte_cb,
+            ) {
                 Ok(_) => {
                     downloaded += 1;
                     manifest.record(key, file.size_bytes, mtime_marker);
