@@ -12,7 +12,7 @@
 //
 // Spec ref: SPEC_F42_SOURCES_SIDEBAR.md §3.1
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   GripVertical,
@@ -986,10 +986,43 @@ function ContextMenu({
     source.kind.kind === 'web_dav' ||
     source.kind.kind === 'dropbox' ||
     source.kind.kind === 'azure_blob';
+
+  // Viewport-clamp the menu so it never opens off-screen. The kebab
+  // button hands us its (left, bottom) corner — close to the window's
+  // right edge for the rightmost button column. Without clamping the
+  // 192px menu would render past the viewport. Right-click can hit
+  // edges too (clicking a row near the bottom of a tall window).
+  // useLayoutEffect runs synchronously after first paint with the
+  // measured rect; we shift left/up by the overflow amount and pin
+  // a small gutter from the edge.
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({
+    left: x,
+    top: y,
+  });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const GUTTER = 8;
+    let left = x;
+    let top = y;
+    if (left + rect.width + GUTTER > window.innerWidth) {
+      left = window.innerWidth - rect.width - GUTTER;
+    }
+    if (top + rect.height + GUTTER > window.innerHeight) {
+      top = window.innerHeight - rect.height - GUTTER;
+    }
+    if (left < GUTTER) left = GUTTER;
+    if (top < GUTTER) top = GUTTER;
+    setPos({ left, top });
+  }, [x, y]);
+
   return (
     <div
+      ref={ref}
       onClick={(e) => e.stopPropagation()}
-      style={{ left: x, top: y }}
+      style={{ left: pos.left, top: pos.top }}
       className="fixed z-50 min-w-[12rem] rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-900"
     >
       <MenuItem onClick={() => onRescan(source)}>Rescan now</MenuItem>
