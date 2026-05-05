@@ -1203,12 +1203,18 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     use std::borrow::Cow;
     use std::path::{Path, PathBuf};
 
-    // Remote source branch — the folder_path IS the URL and
-    // relative_path is just a display filename we synthesized at scan
-    // time. We hand the URL straight to DuckDB after loading httpfs;
-    // Parquet and CSV are the two formats Phase A supports.
+    // Remote source branch. For SINGLE-FILE remote sources
+    // (folder_path = `https://x/data.parquet`), relative_path is a
+    // synthesized filename we ignore. For S3 LISTING sources
+    // (folder_path = `s3://bucket/prefix/`), relative_path is the
+    // object's key under the prefix and we have to join them back
+    // — DuckDB needs the full object URL, not the listing URL.
+    // Phase A/B support csv / parquet URLs. The folder_path is also
+    // the credential lookup key (matches how scan_s3_listing stores
+    // creds keyed on the listing URL).
     if crate::url::is_remote_url(folder_path) {
-        return profile_remote(folder_path);
+        let full_url = crate::url::join_remote_url(folder_path, relative_path);
+        return profile_remote(&full_url, folder_path);
     }
 
     // Compose the absolute file path. `relative_path` comes from the scan
@@ -1288,9 +1294,12 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
 
 /// Profile a remote URL. Loads httpfs + (for s3://) credentials into
 /// the session and runs the same SUMMARIZE pattern used for local
-/// files. Wrapped in catch_unwind to match the local path's panic
-/// safety.
-fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
+/// files. `url` is the full object URL DuckDB queries; `creds_source`
+/// is the URL the source was added under (= listing URL for S3
+/// listings, same as `url` for single-file sources) — that's what
+/// remote_creds is keyed on. Wrapped in catch_unwind to match the
+/// local path's panic safety.
+fn profile_remote(url: &str, creds_source: &str) -> Result<Vec<ColumnProfile>, String> {
     let ext = crate::url::extension_from_url(url);
     let read_func = match ext.as_str() {
         "parquet" => "read_parquet",
@@ -1304,10 +1313,11 @@ fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
     };
     let escaped = url.replace('\'', "''");
     let url_owned = url.to_string();
+    let creds_source_owned = creds_source.to_string();
     let read_func_owned = read_func.to_string();
     let escaped_owned = escaped;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        run_remote_summarize(&url_owned, &read_func_owned, &escaped_owned)
+        run_remote_summarize(&url_owned, &creds_source_owned, &read_func_owned, &escaped_owned)
     }));
     match result {
         Ok(r) => r,
@@ -1321,6 +1331,7 @@ fn profile_remote(url: &str) -> Result<Vec<ColumnProfile>, String> {
 
 fn run_remote_summarize(
     url: &str,
+    creds_source: &str,
     read_func: &str,
     escaped_url: &str,
 ) -> Result<Vec<ColumnProfile>, String> {
@@ -1331,10 +1342,12 @@ fn run_remote_summarize(
     conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
         .map_err(|e| format!("load httpfs: {}", e))?;
     // S3 URLs need credentials in the session before we can run any
-    // query against them. The scanner already persisted them to the
-    // keyring when the source was added.
+    // query against them. Credentials are keyed on the URL the
+    // source was added under (the listing URL for S3 listings) —
+    // not on per-object URLs we synthesize here.
     if crate::url::is_s3_url(url) {
-        crate::remote::apply_s3_credentials(&conn, url).map_err(|e| e.to_string())?;
+        crate::remote::apply_s3_credentials(&conn, creds_source)
+            .map_err(|e| e.to_string())?;
     }
     let sql = format!(
         "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
@@ -1695,7 +1708,12 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
     use std::path::{Path, PathBuf};
 
     if crate::url::is_remote_url(folder_path) {
-        return read_rows_remote(folder_path);
+        // Mirror profile_blocking: for S3 listing sources the
+        // folder_path is the listing URL and relative_path is the
+        // object key; the DuckDB read function needs the full URL,
+        // and S3 creds are keyed on the listing URL.
+        let full_url = crate::url::join_remote_url(folder_path, relative_path);
+        return read_rows_remote(&full_url, folder_path);
     }
 
     let full_path: PathBuf = Path::new(folder_path).join(relative_path);
@@ -1754,7 +1772,7 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
     })
 }
 
-fn read_rows_remote(url: &str) -> Result<DatasetRows, String> {
+fn read_rows_remote(url: &str, creds_source: &str) -> Result<DatasetRows, String> {
     let ext = crate::url::extension_from_url(url);
     let read_func = match ext.as_str() {
         "parquet" => "read_parquet",
@@ -1762,7 +1780,7 @@ fn read_rows_remote(url: &str) -> Result<DatasetRows, String> {
         other => {
             return Err(format!(
                 "can't preview rows for {} URLs — only csv / parquet supported",
-                other
+                if other.is_empty() { "unknown" } else { other }
             ));
         }
     };
@@ -1772,7 +1790,8 @@ fn read_rows_remote(url: &str) -> Result<DatasetRows, String> {
     conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
         .map_err(|e| format!("load httpfs: {}", e))?;
     if crate::url::is_s3_url(url) {
-        crate::remote::apply_s3_credentials(&conn, url).map_err(|e| e.to_string())?;
+        crate::remote::apply_s3_credentials(&conn, creds_source)
+            .map_err(|e| e.to_string())?;
     }
     run_read_rows_with_conn(&conn, read_func, &escaped)
 }
