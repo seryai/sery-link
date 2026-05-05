@@ -2,7 +2,7 @@
 
 **Universal cloud storage browser, AI-era. Free + open source (AGPL-3.0).**
 
-Connect every cloud storage you have — local, S3, Google Drive, plus SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive (rolling out v0.7+). Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
+Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
 
 > **Browse · preview · profile · query — across every cloud you have, no downloads.** Sery Link is also the desktop endpoint for [Sery](https://sery.ai) — a private data network for your files (multi-machine workspace upgrade is opt-in).
 
@@ -16,14 +16,13 @@ Sery Link works in three independent modes. Use any combination — they coexist
 | **MCP stdio** | `Settings → MCP` toggle exposes a folder to Claude Desktop / Cursor / Continue via local stdio. The external LLM uses its own key. | Not required |
 | **Cloud workspace** | Connect with a workspace key — AI chat across all your sources at app.sery.ai/chat, multi-machine catalog sync, cross-machine search, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
 
-**Storage protocols supported (today):** Local disk · HTTPS public URLs · S3 · Google Drive (OAuth).
-**Coming v0.7.x:** SFTP · WebDAV · Backblaze B2 · Azure Blob · Google Cloud Storage · Dropbox · OneDrive.
+**Storage protocols (9 implemented + 4 S3-compatible presets):** Local disk · HTTPS public URLs · S3 · Google Drive (OAuth) · SFTP · WebDAV · Dropbox (OAuth or PAT) · Azure Blob · OneDrive (OAuth) — plus Backblaze B2 / Wasabi / Cloudflare R2 / Google Cloud Storage as one-click S3 presets.
 
 > **Where did BYOK go?** v0.5.3 shipped a paste-your-own-key `/ask` tab. v0.6.0 removed it — AI now lives in the cloud dashboard's `/chat` page, where the tool-use agent runs server-side and fans out queries across all your connected sources through the existing tunnel. See the [v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01) for the full rationale.
 
 ## Features
 
-- 🌐 **Browse every cloud you have, in one app** — local + S3 + Google Drive today; SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive in v0.7+. Credentials in the OS keychain, fetched directly from your machine.
+- 🌐 **Browse every cloud you have, in one app** — 9 protocols (Local, HTTPS, S3, Drive, SFTP, WebDAV, Dropbox, Azure, OneDrive) plus 4 S3-compatible presets (B2, Wasabi, R2, GCS). Credentials in the OS keychain, fetched directly from your machine.
 - ⚡ **Preview without downloading** — click any Parquet on S3 → schema + sample rows in <2s via the Parquet footer (no full file pull). CSV / TSV / Excel preview streams just enough.
 - 📊 **Per-file column profiles** — null %, unique values, min/max/avg, computed locally via DuckDB SUMMARIZE.
 - 🔎 **Column-aware search** — match filenames, column names, and extracted document content across every connected source in one pass.

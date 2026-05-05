@@ -117,17 +117,35 @@ design.
 ### F48 — Dropbox
 
 - `SourceKind::Dropbox { base_path }` variant.
-- Auth: Personal Access Token (PAT) only for v0.7. User generates
-  the token at `dropbox.com/developers/apps`. OAuth Connect-with-
-  Dropbox flow follows in a later release; the keychain shape is
-  forward-compatible (could grow `refresh_token` / `expires_at`
-  fields without breaking PAT entries).
+- **Two auth shapes**, user-toggleable in the Add Source modal:
+    - **OAuth (default)** — Connect-with-Dropbox via PKCE
+      no-redirect flow. User clicks "Open Dropbox", signs in,
+      pastes the code Dropbox shows back into the app. Tokens
+      auto-refresh ~60s before expiry.
+    - **Personal Access Token (fallback)** — user generates a
+      token at `dropbox.com/developers/apps`. No expiry to
+      manage; useful for self-hosters or users on builds that
+      ship without a real `DROPBOX_APP_KEY` baked in.
+- `DropboxCredentials` carries `access_token` + optional
+  `refresh_token` + `expires_at`; PAT entries leave the optional
+  fields `None`. Backward-compatible deserialization for
+  pre-OAuth keychain entries.
+- `ensure_fresh` helper rotates expiring OAuth tokens before
+  every rescan and persists the rotated tokens. PAT entries are
+  a no-op.
 - Backed by direct Dropbox HTTP API calls via reqwest (no extra
   crate). Cursor pagination via `/files/list_folder/continue`;
   Dropbox quirks handled (root is empty string not "/", path_lower
   used as the stable per-file key).
 - Rescan: list + mirror-download to
   `~/.seryai/dropbox-cache/<source_id>/`.
+- **Manual ops step before OAuth works:** `DROPBOX_APP_KEY` env
+  var must be set at `cargo build` time. Builds without it leave
+  the OAuth tab functional but surface a clear "not configured"
+  error when the user clicks "Open Dropbox" — PAT still works as
+  the fallback. See `datalake/SETUP_DROPBOX_OAUTH.md` for app
+  registration. Settings → About surfaces the configured/not-set
+  state at runtime.
 
 ### F49 — OneDrive
 
@@ -149,11 +167,13 @@ design.
 - Rescan: walk + mirror-download to
   `~/.seryai/onedrive-cache/<source_id>/`. Manifest key = item id
   (stable across renames).
-- **Manual ops step before this works:** `MICROSOFT_CLIENT_ID` in
-  `src-tauri/src/onedrive.rs` is a placeholder. Founder needs to
-  register a Microsoft Entra app per
-  `datalake/SETUP_MICROSOFT_OAUTH.md` and replace it. Until then,
-  `start_device_code_flow` returns a clear configuration error.
+- **Manual ops step before this works:** `MICROSOFT_CLIENT_ID`
+  must be set at `cargo build` time (option_env!). Same pattern
+  as `GOOGLE_OAUTH_CLIENT_ID` and `DROPBOX_APP_KEY`. Builds
+  without it return a clear configuration error from
+  `start_device_code_flow`. See `datalake/SETUP_MICROSOFT_OAUTH.md`
+  for Entra app registration. Settings → About surfaces the
+  configured/not-set state at runtime.
 
 ### Incremental sync (all 5 cache-and-scan kinds)
 
@@ -185,10 +205,66 @@ design.
 - SFTP edit form: host/port/username read-only; only the auth
   payload (password or SSH key) is editable. Endpoint changes go
   through Remove + Re-add.
-- OneDrive deliberately not wired in here — a "Re-authorize…"
-  context menu entry (re-running the device code flow) would be
-  better UX than editing tokens directly. Defer until users hit
-  refresh-token revocation in practice.
+- **Dropbox OAuth re-auth** — when the loaded entry is OAuth-shaped
+  the form opens on a "Sign in with Dropbox" tab that re-runs the
+  PKCE flow against the existing source_id; tokens rotate without
+  losing the source's name / group / sort_order / scan-cache. The
+  user can also toggle to PAT mode to switch auth styles.
+- **OneDrive Re-authorize…** is a separate context-menu entry
+  (`ReauthOneDriveDialog`) that re-runs the device code flow.
+  Auto-triggers on auth-shaped rescan errors so users don't have
+  to discover the menu. Dropbox's auth-shaped errors auto-open
+  the Edit credentials dialog on the OAuth tab — same pattern.
+
+### Concurrent downloads (all 5 cache-and-scan kinds)
+
+- All 5 cache-and-scan walks (SFTP / WebDAV / Dropbox / Azure /
+  OneDrive) now run downloads concurrently — up to 4 in flight
+  per walk. Pre-pass classifies files into needs-download vs
+  skipped-by-manifest; skipped files emit progress upfront, the
+  download queue runs concurrently behind a shared
+  `Arc<Mutex<>>`-protected manifest + atomic counters.
+- 4 async modules use `futures::stream::for_each_concurrent` over
+  a single shared session (Dropbox / Azure / WebDAV reqwest /
+  OneDrive Graph). `WalkProgressCb` is `Arc<dyn Fn>` so the
+  callback clones cleanly across tasks.
+- SFTP uses 4 OS threads with one libssh2 session each (libssh2
+  channels can't multiplex). Worker connect failures are
+  individually non-fatal (siblings carry the load); if all 4
+  workers fail the rescan returns the last connect error rather
+  than silently succeeding with 0 downloads.
+
+### Per-byte progress for large files
+
+- `download_*` functions across all 5 kinds accept an optional
+  `ByteProgressCb`. The walker only wires it in for files larger
+  than 10MB and throttles emissions to 5% boundaries — the
+  per-file label sent to `scan_progress` becomes
+  `"filename.parquet (45%)"` while the download is in flight,
+  back to `"filename.parquet"` at the per-file post-callback.
+- Frontend renders the new label text in the existing FolderList
+  scan card without changes. Avoids the "did it freeze?" feel on
+  multi-GB downloads.
+- WebDAV-Digest still uses the buffered fallback (no streaming →
+  no per-byte progress); a small minority of legacy WebDAV
+  servers, considered acceptable.
+
+### OAuth providers — build-time env var pattern
+
+- All three OAuth providers now share the same `option_env!`
+  build-time pattern with consistent error messages:
+    - Google Drive: `GOOGLE_OAUTH_CLIENT_ID` (existing)
+    - Dropbox: `DROPBOX_APP_KEY` (NEW)
+    - OneDrive (Microsoft Entra): `MICROSOFT_CLIENT_ID` (NEW —
+      drops the hardcoded const + "REPLACE_WITH_REAL_APP_ID"
+      placeholder)
+- Each rejects empty values AND historical placeholder strings,
+  so a stale value in the env shows as "not configured" instead
+  of failing later with a confusing 401 from the vendor.
+- **Settings → About** surfaces a diagnostic block when at least
+  one provider's env var is missing — names the provider + the
+  env var the maintainer needs to set. Hidden when all three are
+  configured (production builds show nothing extra).
 
 ### Fixed
 
@@ -198,7 +274,7 @@ design.
 
 ### Tests
 
-- **265 sery-link Rust lib tests green** (up from 191 pre-F42).
+- **273 sery-link Rust lib tests green** (up from 191 pre-F42).
   Per-protocol coverage:
     - `sftp::tests` — 8 (creds validation, password / SSH key,
       serde tagged enum, default port, tilde expansion).
@@ -224,26 +300,18 @@ design.
 
 ### Out of scope for v0.7.0
 
-- **Connect-with-Dropbox OAuth** — Dropbox ships today with PAT
-  auth (user generates token in their developer dashboard).
-  The OneDrive device-code scaffolding could be adapted to
-  Dropbox in a future slice for friendlier consumer UX.
-- **Streaming downloads** for WebDAV / Dropbox / Azure / OneDrive
-  (currently buffer full body — fine for typical files, memory-
-  heavy on multi-GB).
-- **Live `scan_progress` events during the cache-and-scan walk
-  phase** — the StatusPill doesn't tick during downloads (only
-  during the local-scanner phase that follows). Toast confirmation
-  is the only user-facing feedback today.
-- **Concurrent downloads** within each walk — currently serial.
+- **WebDAV Digest streaming** — Digest auth requires a manual
+  challenge/response implementation; reqwest doesn't ship one.
+  Falls back to the buffered path for the small minority of
+  legacy WebDAV servers using Digest. No per-byte progress for
+  those downloads.
+- **Per-source-kind concurrency knob** — `MAX_CONCURRENT=4` is
+  hardcoded across all 5 protocols. Settings UI to tune
+  per-kind concurrency is deferred until users hit either the
+  rate-limit ceiling or the home-bandwidth ceiling in practice.
 - **Drive scan via DataSource** — still walks via `gdrive_walker`;
   `scan_source(GoogleDrive)` returns `Ok(vec![])` pending the
   adapter rewire.
-- **Cross-bucket drag-reorder** — moving a source between groups
-  via DnD; use "Move to group…" action instead.
-- **OneDrive Re-authorize… context menu entry** — better UX than
-  Edit credentials for token rotation; defer until users hit
-  refresh-token revocation in practice.
 
 ## [0.6.3] — 2026-05-01
 
