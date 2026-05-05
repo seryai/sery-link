@@ -3784,10 +3784,80 @@ pub async fn test_dropbox_credentials(
 ) -> Result<(), String> {
     let creds = crate::dropbox::DropboxCredentials {
         access_token: access_token.trim().to_string(),
+        refresh_token: None,
+        expires_at: None,
     };
     crate::dropbox::test_credentials(&creds)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// F48 — Step 1 of the Dropbox OAuth (PKCE no-redirect) flow.
+/// Frontend opens the returned authorize_url in the user's browser
+/// and stashes the code_verifier in component state until step 2.
+#[tauri::command]
+pub async fn start_dropbox_oauth(
+) -> Result<crate::dropbox_oauth::DropboxAuthStart, String> {
+    crate::dropbox_oauth::start_oauth_flow().map_err(|e| e.to_string())
+}
+
+/// F48 — Step 2 of the Dropbox OAuth flow. The user pasted a code
+/// from the Dropbox auth page; exchange it (with the verifier from
+/// step 1) for an access_token + refresh_token, persist as a new
+/// Dropbox source. Mirrors `add_dropbox_source` but for the OAuth
+/// auth shape.
+#[tauri::command]
+pub async fn add_dropbox_source_oauth(
+    base_path: String,
+    code: String,
+    code_verifier: String,
+) -> Result<String, String> {
+    let tokens = crate::dropbox_oauth::complete_oauth_flow(
+        code.trim(),
+        code_verifier.trim(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let creds = crate::dropbox::DropboxCredentials {
+        access_token: tokens.access_token,
+        refresh_token: Some(tokens.refresh_token),
+        expires_at: Some(tokens.expires_at),
+    };
+    if !creds.is_valid() {
+        return Err("Dropbox OAuth response missing access token".to_string());
+    }
+    // Pre-flight the freshly-issued token to surface scope problems
+    // before we persist anything.
+    crate::dropbox::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let trimmed_base = base_path.trim().to_string();
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: if trimmed_base.is_empty() || trimmed_base == "/" {
+            "Dropbox".to_string()
+        } else {
+            format!("Dropbox · {}", trimmed_base)
+        },
+        kind: crate::sources::SourceKind::Dropbox {
+            base_path: trimmed_base,
+        },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+    if returned_id == source_id {
+        crate::dropbox_creds::save(&source_id, &creds)
+            .map_err(|e| e.to_string())?;
+    }
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
 }
 
 /// F48 — kind-specific add for a Dropbox source.
@@ -3798,6 +3868,8 @@ pub async fn add_dropbox_source(
 ) -> Result<String, String> {
     let creds = crate::dropbox::DropboxCredentials {
         access_token: access_token.trim().to_string(),
+        refresh_token: None,
+        expires_at: None,
     };
     if !creds.is_valid() {
         return Err("Dropbox credentials need an access token".to_string());
@@ -3863,13 +3935,18 @@ pub async fn rescan_dropbox_source<R: Runtime>(
     };
     drop(config);
 
-    let creds = crate::dropbox_creds::load(&source_id)
+    let mut creds = crate::dropbox_creds::load(&source_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| {
             "No Dropbox credentials stored for this source — re-add or use \
              Edit credentials"
                 .to_string()
         })?;
+    // Refresh the OAuth token if it's about to expire. PAT entries
+    // are a no-op (no refresh_token).
+    crate::dropbox::ensure_fresh(&mut creds, &source_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let app_for_progress = app.clone();
     let progress_id = source_id.clone();

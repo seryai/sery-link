@@ -22,18 +22,81 @@ const CONTENT_BASE: &str = "https://content.dropboxapi.com/2";
 
 /// Connection target + auth payload. Lives in the OS keychain
 /// (dropbox_creds.rs) keyed on source_id.
+///
+/// Two auth shapes share this struct:
+///   - PAT: just `access_token`; `refresh_token` + `expires_at` are
+///     None. PATs don't expire, so refresh is a no-op.
+///   - OAuth: `access_token` (4-hour validity) + `refresh_token`
+///     (long-lived) + `expires_at` (RFC 3339). `ensure_fresh` rotates
+///     the access_token ~60s before expiry.
+///
+/// `#[serde(default)]` on the OAuth fields keeps older PAT-only
+/// entries in the keychain backward-compatible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropboxCredentials {
-    /// Personal Access Token from the user's Dropbox app
-    /// configuration page. Bearer-style; no expiry on PATs (unlike
-    /// OAuth access tokens).
     pub access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 impl DropboxCredentials {
     pub fn is_valid(&self) -> bool {
         !self.access_token.trim().is_empty()
     }
+
+    /// True if this entry was obtained via OAuth (and therefore can
+    /// be refreshed). PAT entries have no refresh_token.
+    pub fn is_oauth(&self) -> bool {
+        self.refresh_token
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// True for OAuth entries within 60s of expiry. Always false for
+    /// PAT entries (they don't expire).
+    pub fn is_expiring(&self) -> bool {
+        if !self.is_oauth() {
+            return false;
+        }
+        match self.expires_at.as_deref() {
+            Some(s) => match chrono::DateTime::parse_from_rfc3339(s) {
+                Ok(t) => {
+                    chrono::Utc::now() + chrono::Duration::seconds(60) >= t
+                }
+                Err(_) => true,
+            },
+            None => true,
+        }
+    }
+}
+
+/// If this is an OAuth entry that's about to expire, refresh the
+/// access_token in place and persist the new tokens to the keychain.
+/// PAT entries are a no-op.
+pub async fn ensure_fresh(
+    creds: &mut DropboxCredentials,
+    source_id: &str,
+) -> Result<()> {
+    if !creds.is_expiring() {
+        return Ok(());
+    }
+    let mut tokens = crate::dropbox_oauth::DropboxOAuthTokens {
+        access_token: creds.access_token.clone(),
+        refresh_token: creds.refresh_token.clone().unwrap_or_default(),
+        expires_at: creds.expires_at.clone().unwrap_or_default(),
+    };
+    crate::dropbox_oauth::refresh_access_token(&mut tokens).await?;
+    creds.access_token = tokens.access_token;
+    creds.refresh_token = Some(tokens.refresh_token);
+    creds.expires_at = Some(tokens.expires_at);
+    // Persist refreshed tokens so we don't refresh again on the next
+    // call. Best-effort: a keychain write failure here just means
+    // we'll refresh again next time, which is harmless.
+    let _ = crate::dropbox_creds::save(source_id, creds);
+    Ok(())
 }
 
 fn client() -> reqwest::Client {
@@ -491,11 +554,15 @@ mod tests {
     fn is_valid_rejects_empty_token() {
         let creds = DropboxCredentials {
             access_token: "".to_string(),
+            refresh_token: None,
+            expires_at: None,
         };
         assert!(!creds.is_valid());
 
         let creds_ws = DropboxCredentials {
             access_token: "  ".to_string(),
+            refresh_token: None,
+            expires_at: None,
         };
         assert!(!creds_ws.is_valid());
     }
@@ -504,8 +571,54 @@ mod tests {
     fn is_valid_accepts_real_looking_token() {
         let creds = DropboxCredentials {
             access_token: "sl.B1234567890abcdef".to_string(),
+            refresh_token: None,
+            expires_at: None,
         };
         assert!(creds.is_valid());
+    }
+
+    #[test]
+    fn pat_is_not_oauth_and_never_expires() {
+        let creds = DropboxCredentials {
+            access_token: "sl.PAT".to_string(),
+            refresh_token: None,
+            expires_at: None,
+        };
+        assert!(!creds.is_oauth());
+        assert!(!creds.is_expiring());
+    }
+
+    #[test]
+    fn oauth_with_far_future_expiry_is_not_expiring() {
+        let creds = DropboxCredentials {
+            access_token: "sl.OAUTH".to_string(),
+            refresh_token: Some("rt".to_string()),
+            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+        };
+        assert!(creds.is_oauth());
+        assert!(!creds.is_expiring());
+    }
+
+    #[test]
+    fn oauth_with_past_expiry_is_expiring() {
+        let creds = DropboxCredentials {
+            access_token: "sl.OAUTH".to_string(),
+            refresh_token: Some("rt".to_string()),
+            expires_at: Some("2000-01-01T00:00:00Z".to_string()),
+        };
+        assert!(creds.is_expiring());
+    }
+
+    #[test]
+    fn legacy_pat_only_json_deserializes() {
+        // PAT-only entries written before OAuth landed must still
+        // load — this is the backward-compat guarantee.
+        let json = r#"{"access_token": "sl.LEGACY"}"#;
+        let creds: DropboxCredentials = serde_json::from_str(json).unwrap();
+        assert_eq!(creds.access_token, "sl.LEGACY");
+        assert!(creds.refresh_token.is_none());
+        assert!(creds.expires_at.is_none());
+        assert!(!creds.is_oauth());
     }
 
     #[test]
