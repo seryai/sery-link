@@ -47,6 +47,42 @@ pub fn is_s3_listing(url: &str) -> bool {
     trimmed.ends_with('/') || trimmed.contains('*')
 }
 
+/// Resolve a `(folder_url, relative_path)` pair back into the full
+/// object URL. Inverse of `scanner::relative_key`. Used by the
+/// preview / profile dispatch when the source is remote: scans
+/// store the LISTING URL as folder_path and the per-object key
+/// (relative to the listing prefix) as relative_path, but the
+/// DuckDB read functions need the full URL.
+///
+/// Rules:
+///   * If folder_url is a glob pattern (`s3://b/p/*.parquet`),
+///     strip back to the prefix (`s3://b/p/`) before joining.
+///   * Else ensure folder_url ends with `/`.
+///   * If relative_path is empty (single-file source) or already
+///     absolute, return folder_url unchanged.
+pub fn join_remote_url(folder_url: &str, relative_path: &str) -> String {
+    let rel = relative_path.trim_start_matches('/');
+    if rel.is_empty() {
+        return folder_url.to_string();
+    }
+    // If the relative happens to already be a full URL (paranoia
+    // guard against double-joining), pass through.
+    if is_remote_url(rel) {
+        return rel.to_string();
+    }
+    let base = if folder_url.contains('*') {
+        match folder_url.rsplit_once('/') {
+            Some((root, _)) => format!("{}/", root),
+            None => folder_url.to_string(),
+        }
+    } else if folder_url.ends_with('/') {
+        folder_url.to_string()
+    } else {
+        format!("{}/", folder_url)
+    };
+    format!("{}{}", base, rel)
+}
+
 /// Expand a bucket-prefix listing URL to the glob pattern we'll hand
 /// to DuckDB. Only callers should be the scanner's listing path.
 ///
@@ -525,6 +561,45 @@ mod tests {
         assert_eq!(extension_from_url("https://x.com/a.csv?foo=1"), "csv");
         assert_eq!(extension_from_url("https://x.com/no_extension"), "");
         assert_eq!(extension_from_url("https://x.com/"), "");
+    }
+
+    #[test]
+    fn join_remote_url_handles_listing_shapes() {
+        // S3 listing with trailing slash + nested key — the bug that
+        // surfaced as "can't profile remote unknown files" before the
+        // join was wired into profile_blocking.
+        assert_eq!(
+            join_remote_url("s3://bucket/data/", "2024/sales.parquet"),
+            "s3://bucket/data/2024/sales.parquet"
+        );
+        // No trailing slash — caller forgot it; we add one.
+        assert_eq!(
+            join_remote_url("s3://bucket/data", "sales.parquet"),
+            "s3://bucket/data/sales.parquet"
+        );
+        // Glob pattern as base — strip back to the prefix before
+        // joining, matching scanner::relative_key's inverse.
+        assert_eq!(
+            join_remote_url("s3://bucket/data/*.parquet", "2024/sales.parquet"),
+            "s3://bucket/data/2024/sales.parquet"
+        );
+        // Single-file source: empty relative_path returns folder
+        // unchanged (synthetic display filename was dropped).
+        assert_eq!(
+            join_remote_url("https://example.com/data.parquet", ""),
+            "https://example.com/data.parquet"
+        );
+        // Defensive: relative is already a full URL (paranoia guard
+        // against double-joining if a caller mis-passes).
+        assert_eq!(
+            join_remote_url("s3://bucket/data/", "s3://bucket/data/sales.parquet"),
+            "s3://bucket/data/sales.parquet"
+        );
+        // Leading slash on the relative gets normalized.
+        assert_eq!(
+            join_remote_url("s3://bucket/data/", "/2024/sales.parquet"),
+            "s3://bucket/data/2024/sales.parquet"
+        );
     }
 
     #[test]
