@@ -83,10 +83,15 @@ export function getWebDavCredentialsForSource(
   return invoke('get_webdav_credentials_for_source', { sourceId });
 }
 
-/** F48 — Load existing Dropbox PAT for a source. */
+/** F48 — Load existing Dropbox creds for a source. PAT entries omit
+ * refresh_token + expires_at; OAuth entries include both. */
 export function getDropboxCredentialsForSource(
   sourceId: string,
-): Promise<{ access_token: string } | null> {
+): Promise<{
+  access_token: string;
+  refresh_token?: string | null;
+  expires_at?: string | null;
+} | null> {
   return invoke('get_dropbox_credentials_for_source', { sourceId });
 }
 
