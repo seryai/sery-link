@@ -223,23 +223,6 @@ pub fn migrate_watched_folder_to_source(wf: &WatchedFolder) -> DataSource {
     }
 }
 
-/// Migrate a list of legacy WatchedFolders. Returns a Vec preserving
-/// input order (callers can re-sort by `sort_order` if needed).
-/// Idempotent at this layer; idempotency at the Config-load layer is
-/// the caller's responsibility (skip migration if `sources` already
-/// has an entry for the same path).
-pub fn migrate_watched_folders_to_sources(folders: &[WatchedFolder]) -> Vec<DataSource> {
-    folders
-        .iter()
-        .enumerate()
-        .map(|(idx, wf)| {
-            let mut src = migrate_watched_folder_to_source(wf);
-            src.sort_order = idx as i32;
-            src
-        })
-        .collect()
-}
-
 /// Default name derivation for each kind. Users can rename anytime
 /// via F51's bookmark management UX.
 fn derive_name_from_kind(kind: &SourceKind) -> String {
@@ -400,59 +383,42 @@ mod tests {
     }
 
     #[test]
-    fn fixture_1_empty_list_yields_empty_sources() {
-        let result = migrate_watched_folders_to_sources(&[]);
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
     fn fixture_2_one_local_folder_becomes_local_source() {
         let wf = make_wf("/Users/me/Documents");
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        assert_eq!(result.len(), 1);
-        match &result[0].kind {
+        let result = migrate_watched_folder_to_source(&wf);
+        match &result.kind {
             SourceKind::Local { path, recursive, .. } => {
                 assert_eq!(path, &PathBuf::from("/Users/me/Documents"));
                 assert!(*recursive);
             }
             other => panic!("expected Local, got {:?}", other),
         }
-        assert_eq!(result[0].name, "Documents");
-        assert!(!result[0].id.is_empty());
-        assert_eq!(result[0].sort_order, 0);
+        assert_eq!(result.name, "Documents");
+        assert!(!result.id.is_empty());
     }
 
     #[test]
-    fn fixture_3_mixed_local_s3_https_get_correct_kinds() {
-        let folders = vec![
-            make_wf("/Users/me/Documents"),
-            make_wf("s3://my-bucket/data/"),
-            make_wf("https://example.com/sample.csv"),
-        ];
-        let result = migrate_watched_folders_to_sources(&folders);
-        assert_eq!(result.len(), 3);
-
-        assert!(matches!(result[0].kind, SourceKind::Local { .. }));
-        assert!(matches!(result[1].kind, SourceKind::S3 { .. }));
-        assert!(matches!(result[2].kind, SourceKind::Https { .. }));
-
-        // sort_order preserves input position
-        assert_eq!(result[0].sort_order, 0);
-        assert_eq!(result[1].sort_order, 1);
-        assert_eq!(result[2].sort_order, 2);
-
-        // Each gets a unique ID
-        let ids: std::collections::HashSet<&String> =
-            result.iter().map(|s| &s.id).collect();
-        assert_eq!(ids.len(), 3, "all source IDs should be unique");
+    fn fixture_3_each_kind_resolves_to_correct_source_kind() {
+        // The plural batch wrapper used to also assert sort_order
+        // ordering and ID uniqueness across an array; both are
+        // properties of the (now removed) batch wrapper, not of the
+        // per-row migration logic this test now covers.
+        let local = migrate_watched_folder_to_source(&make_wf("/Users/me/Documents"));
+        let s3 = migrate_watched_folder_to_source(&make_wf("s3://my-bucket/data/"));
+        let https =
+            migrate_watched_folder_to_source(&make_wf("https://example.com/sample.csv"));
+        assert!(matches!(local.kind, SourceKind::Local { .. }));
+        assert!(matches!(s3.kind, SourceKind::S3 { .. }));
+        assert!(matches!(https.kind, SourceKind::Https { .. }));
+        assert_ne!(local.id, s3.id);
+        assert_ne!(s3.id, https.id);
     }
 
     #[test]
     fn fixture_4_paths_with_unicode_and_spaces_preserve_exactly() {
         let wf = make_wf("/Users/me/Documentos prácticos/数据 folder");
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        assert_eq!(result.len(), 1);
-        match &result[0].kind {
+        let result = migrate_watched_folder_to_source(&wf);
+        match &result.kind {
             SourceKind::Local { path, .. } => {
                 assert_eq!(
                     path,
@@ -462,14 +428,14 @@ mod tests {
             other => panic!("expected Local, got {:?}", other),
         }
         // Friendly name uses the basename
-        assert_eq!(result[0].name, "数据 folder");
+        assert_eq!(result.name, "数据 folder");
     }
 
     #[test]
     fn fixture_5_s3_glob_url_becomes_s3_source() {
         let wf = make_wf("s3://my-bucket/year=2024/**/*.parquet");
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        match &result[0].kind {
+        let result = migrate_watched_folder_to_source(&wf);
+        match &result.kind {
             SourceKind::S3 { url } => {
                 assert_eq!(url, "s3://my-bucket/year=2024/**/*.parquet");
             }
@@ -486,8 +452,8 @@ mod tests {
         wf.mcp_enabled = true;
         wf.last_scan_at = Some("2026-04-15T10:00:00Z".to_string());
 
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        match &result[0].kind {
+        let result = migrate_watched_folder_to_source(&wf);
+        match &result.kind {
             SourceKind::Local {
                 recursive,
                 exclude_patterns,
@@ -504,9 +470,9 @@ mod tests {
             other => panic!("expected Local, got {:?}", other),
         }
 
-        assert!(result[0].mcp_enabled);
+        assert!(result.mcp_enabled);
         assert_eq!(
-            result[0].last_scan_at,
+            result.last_scan_at,
             Some("2026-04-15T10:00:00Z".to_string())
         );
     }
@@ -516,18 +482,17 @@ mod tests {
         let wf = make_wf(
             "https://very-long-subdomain.example.com/some/long/path/to/data.csv",
         );
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        let name = &result[0].name;
-        let chars = name.chars().count();
-        assert!(chars <= 40, "name was {} chars: {}", chars, name);
-        assert!(name.ends_with('…'));
+        let result = migrate_watched_folder_to_source(&wf);
+        let chars = result.name.chars().count();
+        assert!(chars <= 40, "name was {} chars: {}", chars, result.name);
+        assert!(result.name.ends_with('…'));
     }
 
     #[test]
     fn s3_friendly_name_drops_scheme_and_trailing_slash() {
         let wf = make_wf("s3://my-bucket/data/");
-        let result = migrate_watched_folders_to_sources(&[wf]);
-        assert_eq!(result[0].name, "my-bucket/data");
+        let result = migrate_watched_folder_to_source(&wf);
+        assert_eq!(result.name, "my-bucket/data");
     }
 
     #[test]
