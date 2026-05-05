@@ -26,6 +26,7 @@ mod metadata_cache;
 mod relationship_detector;
 mod remote;
 mod remote_creds;
+mod preview_cache;
 mod scan_cache;
 mod scanner;
 mod sftp;

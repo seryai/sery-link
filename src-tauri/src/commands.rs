@@ -714,8 +714,10 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
     // Drop any cached scan results for this folder — otherwise re-adding
     // the same path later would surface rows for files that may have
     // moved or been deleted in the meantime. Goes through the shared
-    // cache singleton.
+    // cache singleton. Same for the preview cache (row + profile
+    // payloads keyed under the same folder_path).
     let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&path));
+    let _ = crate::preview_cache::with_cache(|c| c.invalidate_folder(&path));
     let _ = restart_file_watcher().await;
     Ok(())
 }
@@ -1169,7 +1171,7 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<DatasetMetadata>, St
 /// are strings (DuckDB emits min/max as VARCHAR so all column types are
 /// representable) so the frontend doesn't need to worry about numeric
 /// precision or timestamp formatting.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColumnProfile {
     pub column_name: String,
     pub column_type: String,
@@ -1214,6 +1216,34 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     // creds keyed on the listing URL).
     if crate::url::is_remote_url(folder_path) {
         let full_url = crate::url::join_remote_url(folder_path, relative_path);
+
+        // Cache fast path: borrow the freshness key from scan_cache
+        // so a re-open of the same file (no mtime/size change since
+        // the last scan) skips the DuckDB-httpfs round trip entirely.
+        if let Some((mtime, size)) = crate::scan_cache::with_cache(|c| {
+            c.get_freshness(folder_path, relative_path)
+        })
+        .flatten()
+        {
+            if let Some(hit) = crate::preview_cache::with_cache(|c| {
+                c.get_profile(folder_path, relative_path, mtime, size)
+            })
+            .flatten()
+            {
+                return Ok(hit);
+            }
+
+            // Miss → fetch + persist for next time.
+            let profile = profile_remote(&full_url, folder_path)?;
+            let _ = crate::preview_cache::with_cache(|c| {
+                c.put_profile(folder_path, relative_path, mtime, size, &profile)
+            });
+            return Ok(profile);
+        }
+
+        // No scan_cache freshness key (file not yet scanned, or
+        // scan_cache disabled): skip the preview cache and just
+        // fetch.
         return profile_remote(&full_url, folder_path);
     }
 
@@ -1676,7 +1706,7 @@ fn pick_convert_destination(source: &std::path::Path) -> Result<std::path::PathB
 
 const MAX_PREVIEW_ROWS: usize = 5_000;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DatasetRows {
     pub columns: Vec<String>,
     /// Each row's cells stringified for stable JSON shape. The frontend
@@ -1713,6 +1743,30 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
         // object key; the DuckDB read function needs the full URL,
         // and S3 creds are keyed on the listing URL.
         let full_url = crate::url::join_remote_url(folder_path, relative_path);
+
+        // Cache fast path — same shape as profile_blocking. The row
+        // payload is bigger than a profile (5000 rows of stringified
+        // cells), so the latency win is correspondingly larger on
+        // re-opens of remote files.
+        if let Some((mtime, size)) = crate::scan_cache::with_cache(|c| {
+            c.get_freshness(folder_path, relative_path)
+        })
+        .flatten()
+        {
+            if let Some(hit) = crate::preview_cache::with_cache(|c| {
+                c.get_rows(folder_path, relative_path, mtime, size)
+            })
+            .flatten()
+            {
+                return Ok(hit);
+            }
+            let rows = read_rows_remote(&full_url, folder_path)?;
+            let _ = crate::preview_cache::with_cache(|c| {
+                c.put_rows(folder_path, relative_path, mtime, size, &rows)
+            });
+            return Ok(rows);
+        }
+
         return read_rows_remote(&full_url, folder_path);
     }
 
@@ -3093,6 +3147,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             let _ = crate::remote_creds::delete(&url);
         }
         let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&url));
+        let _ = crate::preview_cache::with_cache(|c| c.invalidate_folder(&url));
     }
     if is_sftp {
         let _ = crate::sftp_creds::delete(&id);
