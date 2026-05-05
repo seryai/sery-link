@@ -20,7 +20,7 @@ you can use any one without the others.
 
 | Path | What it does | Account? | Cost? |
 |---|---|---|---|
-| **A. Local — the universal data gateway** | Connect every cloud storage you have (local, S3, Drive today; SFTP / WebDAV / B2 / Azure / GCS / Dropbox / OneDrive in v0.7+). Browse, preview tables without downloading, run profiles, search across all of them. Convert CSV / TSV / Excel → Parquet. Document → markdown. Fully offline (no cloud contact). | None | Free |
+| **A. Local — the universal data gateway** | Connect every cloud storage you have. **9 protocols** (Local, HTTPS, S3, Drive, SFTP, WebDAV, Dropbox, Azure, OneDrive) + **4 S3-compatible presets** (B2, Wasabi, R2, GCS). Browse, preview tables without downloading, run profiles, search across all of them. Convert CSV / TSV / Excel → Parquet. Document → markdown. Fully offline (no cloud contact). | None | Free |
 | **B. MCP stdio** | Claude Desktop / Cursor / Continue spawns Sery Link as a local subprocess to read your folder. The *external* LLM client uses *its* key. | None | Whatever your LLM client costs |
 | **C. Cloud workspace** | Connect with a workspace key — AI chat at app.sery.ai (server-side agent fans queries out across all your sources via the existing tunnel), multi-machine catalog sync, cross-machine search. | Sery account | Free + 50 hosted queries/mo, or Plus $19 |
 
@@ -122,7 +122,7 @@ chmod +x Sery-Link_*.AppImage
 | `~/.seryai/scan_cache.db` | Local SQL index of file metadata (DuckDB-backed) |
 | `~/.seryai/sync_audit.jsonl` | One line per outbound network event — **the privacy proof on disk** |
 | `~/.seryai/query_history.jsonl` | Local query transcript |
-| OS keychain | Workspace bearer token (Cloud). Google Drive OAuth refresh token. Never written to disk in plaintext |
+| OS keychain | Workspace bearer token (Cloud). OAuth refresh tokens (Google Drive, Dropbox, OneDrive). SFTP / WebDAV / Dropbox PAT / Azure SAS credentials. Never written to disk in plaintext |
 
 ### Uninstall
 
@@ -180,19 +180,36 @@ no account.**
 
 ### Remote sources (still local, just non-disk)
 
-The Folders sidebar accepts more than disk paths:
+The Sources sidebar accepts more than disk paths. Each row uses
+its own credential storage in the OS keychain (or no creds for
+public/anonymous protocols), and bytes flow direct to your
+machine — the cloud never proxies.
 
 - **Public HTTPS URLs** — point at a CSV / Parquet hosted
   publicly; Sery fetches and indexes it like a local file.
-- **S3 buckets** — credentials in the OS keychain, fetched
-  directly from your machine. Sery never sees them.
-- **Google Drive** — OAuth (PKCE + loopback redirect),
-  per-folder Watch, hourly background refresh. Files cache
-  locally under `~/.seryai/gdrive_cache/`. Storage tab shows
-  disk usage and a Clear-cache button.
+- **S3 buckets** (+ Backblaze B2 / Wasabi / Cloudflare R2 / GCS
+  presets) — access keys in the keychain. DuckDB-httpfs reads
+  the bytes in place; nothing cached.
+- **Google Drive** — OAuth (PKCE + loopback redirect), per-folder
+  Watch, hourly background refresh. Files cache locally under
+  `~/.seryai/gdrive_cache/`. Storage tab shows disk usage and a
+  Clear-cache button.
+- **SFTP** — password or SSH key auth. Concurrent downloads
+  via 4 parallel sessions. Cache: `~/.seryai/sftp-cache/<id>/`.
+- **WebDAV** — Anonymous / Basic / Digest auth (Nextcloud, ownCloud,
+  Apache mod_dav, etc). Cache: `~/.seryai/webdav-cache/<id>/`.
+- **Dropbox** — Connect-with-Dropbox OAuth (PKCE no-redirect) or
+  Personal Access Token. Tokens auto-refresh. Cache:
+  `~/.seryai/dropbox-cache/<id>/`.
+- **Azure Blob** — SAS-token auth. Cache:
+  `~/.seryai/azure-cache/<id>/`.
+- **OneDrive** — Microsoft device-code OAuth. Tokens
+  auto-refresh. Cache: `~/.seryai/onedrive-cache/<id>/`.
 
-All remote-source bytes flow direct to your machine. The cloud
-never proxies.
+All 5 cache-and-scan kinds (SFTP / WebDAV / Dropbox / Azure /
+OneDrive) share the same incremental sync (skip files whose
+remote size + mtime match the previous walk), concurrent
+downloads (4 in flight), and per-byte progress for files >10MB.
 
 ---
 
