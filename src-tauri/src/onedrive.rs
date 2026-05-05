@@ -595,7 +595,7 @@ pub async fn walk_and_download(
         ))
     })?;
 
-    let mut manifest = SyncManifest::load(&cache_dir);
+    let manifest = SyncManifest::load(&cache_dir);
     // list_recursive does its own up-front refresh-if-needed via
     // &mut creds; after it returns, creds.access_token is fresh.
     // We snapshot it for the concurrent download phase. Rationale:

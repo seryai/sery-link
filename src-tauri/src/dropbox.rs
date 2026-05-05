@@ -410,7 +410,7 @@ pub async fn walk_and_download(
         ))
     })?;
 
-    let mut manifest = SyncManifest::load(&cache_dir);
+    let manifest = SyncManifest::load(&cache_dir);
 
     let listing = list_recursive(creds, base_path, MAX_DROPBOX_FILES).await?;
 

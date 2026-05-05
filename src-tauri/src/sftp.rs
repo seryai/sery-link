@@ -474,7 +474,17 @@ pub fn walk_and_download_blocking(
     let considered_ct = Arc::new(AtomicUsize::new(considered));
     let total_supported_arc = total_supported;
 
+    // Track at least one worker connecting successfully. If 0 succeed
+    // AND the queue had work, we'd otherwise return Ok((cache_dir, 0))
+    // and the user would think the rescan finished cleanly with no
+    // new files — masking a real auth/connectivity problem. Surface
+    // it as an error instead.
+    let connected_workers = Arc::new(AtomicUsize::new(0));
+    let queue_had_work = !queue.lock().expect("queue poisoned").is_empty();
+
     let mut handles = Vec::with_capacity(n_workers);
+    let last_connect_err_mu: Arc<Mutex<Option<String>>> =
+        Arc::new(Mutex::new(None));
     for _ in 0..n_workers {
         let creds = creds.clone();
         let queue = queue.clone();
@@ -482,15 +492,25 @@ pub fn walk_and_download_blocking(
         let downloaded = downloaded_ct.clone();
         let considered_atomic = considered_ct.clone();
         let progress = progress.clone();
+        let connected = connected_workers.clone();
+        let last_err = last_connect_err_mu.clone();
 
         let h = std::thread::spawn(move || -> Result<()> {
             let sess = match connect_blocking(&creds) {
-                Ok(s) => s,
+                Ok(s) => {
+                    connected.fetch_add(1, Ordering::Relaxed);
+                    s
+                }
                 Err(e) => {
-                    // A failed worker shouldn't kill the whole walk —
-                    // it just means one fewer parallel slot. Surface
-                    // the error to stderr like a per-file failure.
+                    // A failed worker shouldn't kill the whole walk if
+                    // siblings can carry the load — just one fewer slot.
+                    // We stash the last error so the post-join check
+                    // can surface a meaningful message if ALL workers
+                    // failed (rather than the user seeing 0 downloads
+                    // and assuming everything was up to date).
                     eprintln!("[sftp] worker session failed: {e}");
+                    *last_err.lock().expect("last_err poisoned") =
+                        Some(e.to_string());
                     return Ok(());
                 }
             };
@@ -578,11 +598,26 @@ pub fn walk_and_download_blocking(
         // Worker errors during connect already get logged + swallowed
         // inside the thread; a Join error here means the OS killed the
         // thread, which we surface as a generic error.
-        if let Err(_) = h.join() {
+        if h.join().is_err() {
             return Err(AgentError::Network(
                 "SFTP worker thread panicked".to_string(),
             ));
         }
+    }
+
+    // If there were files to download but no worker successfully
+    // authenticated, the queue still holds the unprocessed work and
+    // downloaded_ct is 0. Surface as an error using the last connect
+    // failure message so the user sees the actual auth/network reason.
+    if queue_had_work && connected_workers.load(Ordering::Relaxed) == 0 {
+        let last = last_connect_err_mu
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_else(|| "no specific error captured".to_string());
+        return Err(AgentError::Network(format!(
+            "SFTP: all {n_workers} download worker(s) failed to connect — {last}"
+        )));
     }
 
     let downloaded = downloaded_ct.load(Ordering::Relaxed);
