@@ -669,6 +669,8 @@ function AboutPanel({
         <Row label="API endpoint" value={draft.cloud.api_url} mono />
       </div>
 
+      <OAuthProvidersSection />
+
       <UpdaterSection />
 
       <div className="flex items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
@@ -713,6 +715,99 @@ function VersionRow() {
     getVersion().then(setVersion).catch(() => setVersion('—'));
   }, []);
   return <Row label="Version" value={version} mono />;
+}
+
+// ─── OAuth providers status ──────────────────────────────────────────────
+
+interface OAuthProvidersStatus {
+  dropbox: boolean;
+  google: boolean;
+  microsoft: boolean;
+}
+
+function OAuthProvidersSection() {
+  const [status, setStatus] = useState<OAuthProvidersStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<OAuthProvidersStatus>('get_oauth_providers_status')
+      .then(setStatus)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  // Skip the section entirely if every provider is configured —
+  // there's nothing actionable for the user. Show only when at
+  // least one provider is missing its build-time key.
+  const allConfigured =
+    status && status.dropbox && status.google && status.microsoft;
+  if (!status && !error) return null;
+  if (allConfigured) return null;
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+      <div className="mb-2 flex items-center gap-2 font-medium text-amber-900 dark:text-amber-200">
+        <Info className="h-4 w-4" />
+        OAuth providers
+      </div>
+      {error && (
+        <p className="text-xs text-rose-700 dark:text-rose-300">
+          Couldn't read provider status: {error}
+        </p>
+      )}
+      {status && (
+        <>
+          <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">
+            One or more OAuth providers is missing its build-time key.
+            "Sign in with X" will fail with a "not configured" error
+            for these providers. Self-builders: see the SETUP_*_OAUTH
+            runbooks in the repo.
+          </p>
+          <ul className="grid gap-1 text-xs">
+            <ProviderRow
+              label="Dropbox"
+              configured={status.dropbox}
+              envVar="DROPBOX_APP_KEY"
+            />
+            <ProviderRow
+              label="Google Drive"
+              configured={status.google}
+              envVar="GOOGLE_OAUTH_CLIENT_ID"
+            />
+            <ProviderRow
+              label="OneDrive (Microsoft)"
+              configured={status.microsoft}
+              envVar="MICROSOFT_CLIENT_ID"
+            />
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProviderRow({
+  label,
+  configured,
+  envVar,
+}: {
+  label: string;
+  configured: boolean;
+  envVar: string;
+}) {
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <span className="text-slate-700 dark:text-slate-300">{label}</span>
+      {configured ? (
+        <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="h-3 w-3" />
+          configured
+        </span>
+      ) : (
+        <span className="font-mono text-amber-800 dark:text-amber-300">
+          {envVar} not set
+        </span>
+      )}
+    </li>
+  );
 }
 
 // ─── Updater ─────────────────────────────────────────────────────────────
