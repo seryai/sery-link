@@ -13,6 +13,7 @@
 // Spec ref: SPEC_F42_SOURCES_SIDEBAR.md §3.1
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
   GripVertical,
@@ -139,6 +140,7 @@ export function SourcesSidebar() {
     clearScanProgress,
   } = useAgentStore();
   const toast = useToast();
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<RowMenuState | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
@@ -467,6 +469,18 @@ export function SourcesSidebar() {
   };
 
   const renderRow = (source: DataSource, sortable: boolean) => {
+    // Drill-down currently works only for path-keyed kinds (Local /
+    // HTTPS / S3) where scanKeyOf returns a non-null URL/path the
+    // legacy FolderDetail page resolves via watched_folders. The 5
+    // cache-and-scan kinds + Drive don't have a detail surface yet
+    // (a follow-up needs to add a Tauri command that resolves
+    // source_id → cache_dir so FolderDetail can render their files).
+    // Until that ships, those rows render with a tooltip and no
+    // navigation.
+    const scanKey = scanKeyOf(source);
+    const onOpen = scanKey
+      ? () => navigate(`/folders/${encodeURIComponent(scanKey)}`)
+      : undefined;
     const props: SourceRowProps = {
       source,
       status: statusOf(source, scansInFlight),
@@ -477,6 +491,7 @@ export function SourcesSidebar() {
         e.preventDefault();
         setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
       },
+      onOpen,
     };
     return sortable ? (
       <SortableSourceRow key={source.id} {...props} />
@@ -840,6 +855,10 @@ interface SourceRowProps {
   onCommitRename: (newName: string) => void;
   onCancelRename: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
+  /** Click-to-drill-down handler. Undefined for kinds where the
+   *  detail surface (FolderDetail) can't yet resolve the source —
+   *  the row stays non-navigable and the cursor reflects that. */
+  onOpen?: () => void;
   /** Optional drag-handle slot. Rendered to the left of the icon when
    *  the row is sortable; otherwise omitted so non-draggable rows
    *  (those inside a group section) keep their existing layout. */
@@ -853,14 +872,24 @@ function SourceRow({
   onCommitRename,
   onCancelRename,
   onContextMenu,
+  onOpen,
   dragHandle,
 }: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
   const datasetCount = source.last_scan_stats?.datasets ?? null;
+  const openable = !!onOpen && !editing;
   return (
     <div
       onContextMenu={onContextMenu}
-      className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
+      onClick={openable ? onOpen : undefined}
+      title={
+        openable
+          ? undefined
+          : 'File-list view for this source kind is coming in a follow-up.'
+      }
+      className={`group flex items-center gap-2 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${
+        openable ? 'cursor-pointer' : 'cursor-default'
+      }`}
     >
       {dragHandle}
       <div
