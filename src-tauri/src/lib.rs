@@ -265,6 +265,7 @@ pub fn run() {
             commands::sync_metadata,
             commands::has_token,
             commands::get_agent_info,
+            commands::get_oauth_providers_status,
             commands::logout,
             commands::start_websocket_tunnel,
             commands::get_websocket_status,

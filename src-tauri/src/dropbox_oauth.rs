@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 /// `files.content.read`, `files.metadata.read`. Allow "PKCE
 /// (recommended for mobile and desktop apps)" in OAuth 2 settings.
 /// See `datalake/SETUP_DROPBOX_OAUTH.md` for the full runbook.
-fn app_key() -> Option<&'static str> {
+pub fn app_key() -> Option<&'static str> {
     option_env!("DROPBOX_APP_KEY")
         .filter(|s| !s.is_empty() && *s != "REPLACE_WITH_REAL_DROPBOX_APP_KEY")
 }

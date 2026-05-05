@@ -2174,6 +2174,27 @@ pub async fn has_token() -> Result<bool, String> {
     Ok(keyring_store::has_token())
 }
 
+/// Diagnostic — reports whether each OAuth provider has its
+/// build-time client-id baked in. Builds without a key make the
+/// corresponding "Sign in with X" flow surface a "not configured"
+/// error; this surface lets the user see the state without first
+/// triggering the flow. Used by Settings → About.
+#[derive(serde::Serialize)]
+pub struct OAuthProvidersStatus {
+    pub dropbox: bool,
+    pub google: bool,
+    pub microsoft: bool,
+}
+
+#[tauri::command]
+pub async fn get_oauth_providers_status() -> Result<OAuthProvidersStatus, String> {
+    Ok(OAuthProvidersStatus {
+        dropbox: crate::dropbox_oauth::app_key().is_some(),
+        google: crate::gdrive_oauth::client_id().is_some(),
+        microsoft: crate::onedrive::configured_client_id().is_some(),
+    })
+}
+
 #[tauri::command]
 pub async fn get_agent_info() -> Result<Option<AgentToken>, String> {
     if !keyring_store::has_token() {

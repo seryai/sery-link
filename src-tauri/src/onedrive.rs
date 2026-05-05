@@ -47,6 +47,17 @@ use tokio::io::AsyncWriteExt;
 /// clear error rather than mysterious authentication failures.
 const MICROSOFT_CLIENT_ID: &str = "REPLACE_WITH_REAL_APP_ID";
 
+/// Diagnostic accessor — returns `Some(id)` only if the const has
+/// been swapped from the placeholder. Used by `oauth_status::*`
+/// to report build configuration without exposing the const.
+pub fn configured_client_id() -> Option<&'static str> {
+    if MICROSOFT_CLIENT_ID == "REPLACE_WITH_REAL_APP_ID" {
+        None
+    } else {
+        Some(MICROSOFT_CLIENT_ID)
+    }
+}
+
 // Tenant `common` (personal + work + school) is baked into the
 // device-code + token URLs below.
 const SCOPE: &str = "Files.Read Files.Read.All offline_access";
