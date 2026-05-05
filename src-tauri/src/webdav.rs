@@ -174,6 +174,7 @@ pub async fn download_file(
     creds: &WebDavCredentials,
     remote_href: &str,
     local_path: &Path,
+    byte_progress: Option<ByteProgressCb>,
 ) -> Result<u64> {
     if let Some(parent) = local_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -206,7 +207,8 @@ pub async fn download_file(
             // fall back through reqwest_dav for Digest sources by
             // calling the original buffered path. Most modern
             // Nextcloud / ownCloud installs use Basic with app
-            // passwords, so this affects a small minority.
+            // passwords, so this affects a small minority. The
+            // buffered path doesn't emit per-byte progress.
             return download_file_buffered(creds, remote_href, local_path).await;
         }
     }
@@ -227,6 +229,7 @@ pub async fn download_file(
             local_path.display()
         ))
     })?;
+    let total_hint = response.content_length().unwrap_or(0);
     use futures::StreamExt;
     let mut stream = response.bytes_stream();
     let mut total: u64 = 0;
@@ -238,6 +241,9 @@ pub async fn download_file(
             AgentError::FileSystem(format!("write local: {e}"))
         })?;
         total += chunk.len() as u64;
+        if let Some(cb) = byte_progress.as_ref() {
+            cb(total, total_hint);
+        }
     }
     local.flush().await.map_err(|e| {
         AgentError::FileSystem(format!("flush local: {e}"))
@@ -330,6 +336,10 @@ fn sanitize_path_component(s: &str) -> String {
 /// `sftp::WalkProgressCb`.
 pub type WalkProgressCb = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
 
+/// Per-byte progress callback for a single file. Same shape as the
+/// other cache-and-scan kinds.
+pub type ByteProgressCb = std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 /// Walk the remote `base_path` and download every supported tabular
 /// / document file under it to the local cache dir. Mirrors the
 /// remote hierarchy. Skips files whose remote size + mtime match
@@ -415,6 +425,7 @@ pub async fn walk_and_download(
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     const MAX_CONCURRENT: usize = 4;
+    const BYTE_PROGRESS_MIN_SIZE: u64 = 10 * 1024 * 1024;
 
     let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
     let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
@@ -434,7 +445,44 @@ pub async fn walk_and_download(
                         || !w.local_path.exists()
                 };
                 if needs {
-                    match download_file(&creds, &w.href, &w.local_path).await {
+                    let byte_cb: Option<ByteProgressCb> = if w.size
+                        > BYTE_PROGRESS_MIN_SIZE
+                        && progress.is_some()
+                    {
+                        let walk_cb = progress.clone();
+                        let label = w.label.clone();
+                        let size = w.size;
+                        let n_in_flight = considered.load(Ordering::Relaxed) + 1;
+                        let last_pct = std::sync::Arc::new(AtomicUsize::new(0));
+                        Some(std::sync::Arc::new(move |bytes, _hint| {
+                            let pct = ((bytes.saturating_mul(20)) / size.max(1))
+                                as usize;
+                            let prev = last_pct.load(Ordering::Relaxed);
+                            if pct > prev
+                                && last_pct
+                                    .compare_exchange(
+                                        prev,
+                                        pct,
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                            {
+                                if let Some(cb) = walk_cb.as_ref() {
+                                    cb(
+                                        n_in_flight,
+                                        total_supported,
+                                        &format!("{label} ({}%)", pct * 5),
+                                    );
+                                }
+                            }
+                        }))
+                    } else {
+                        None
+                    };
+                    match download_file(&creds, &w.href, &w.local_path, byte_cb)
+                        .await
+                    {
                         Ok(_) => {
                             downloaded.fetch_add(1, Ordering::Relaxed);
                             let mut m = manifest.lock().expect("manifest poisoned");

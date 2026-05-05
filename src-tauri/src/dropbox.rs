@@ -291,11 +291,19 @@ pub async fn list_recursive(
     Ok(out)
 }
 
+/// Per-byte progress for a single download. Fires per chunk with
+/// (bytes_so_far, total_bytes_hint). `total_bytes_hint` is best-
+/// effort: it's the Content-Length the server reported, or 0 if
+/// the server didn't send one. Callers can use a separately-known
+/// size (e.g., the listing entry) and ignore the hint.
+pub type ByteProgressCb = std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 /// Download a single Dropbox file to a local path.
 pub async fn download_file(
     creds: &DropboxCredentials,
     path_lower: &str,
     local_path: &Path,
+    byte_progress: Option<ByteProgressCb>,
 ) -> Result<u64> {
     let c = client();
 
@@ -337,6 +345,7 @@ pub async fn download_file(
             local_path.display()
         ))
     })?;
+    let total_hint = resp.content_length().unwrap_or(0);
     use futures::StreamExt;
     let mut stream = resp.bytes_stream();
     let mut total: u64 = 0;
@@ -348,6 +357,9 @@ pub async fn download_file(
             AgentError::FileSystem(format!("write local: {e}"))
         })?;
         total += chunk.len() as u64;
+        if let Some(cb) = byte_progress.as_ref() {
+            cb(total, total_hint);
+        }
     }
     local.flush().await.map_err(|e| {
         AgentError::FileSystem(format!("flush local: {e}"))
@@ -474,6 +486,11 @@ pub async fn walk_and_download(
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     const MAX_CONCURRENT: usize = 4;
+    // Files smaller than this don't need per-byte progress — the
+    // existing per-file count + label gives plenty of feedback. Above
+    // this threshold a single download can take long enough that the
+    // UI looks frozen without intermediate updates.
+    const BYTE_PROGRESS_MIN_SIZE: u64 = 10 * 1024 * 1024;
 
     let manifest_mu = std::sync::Arc::new(Mutex::new(manifest));
     let downloaded_ct = std::sync::Arc::new(AtomicUsize::new(0));
@@ -493,7 +510,53 @@ pub async fn walk_and_download(
                         || !w.local_path.exists()
                 };
                 if needs {
-                    match download_file(&creds, &w.path_lower, &w.local_path).await {
+                    // Build a per-file byte-progress callback that
+                    // emits walk-progress events with a "label (45%)"
+                    // suffix at 5% boundaries. Skips the wiring for
+                    // small files where per-file granularity is fine.
+                    let byte_cb: Option<ByteProgressCb> = if w.size
+                        > BYTE_PROGRESS_MIN_SIZE
+                        && progress.is_some()
+                    {
+                        let walk_cb = progress.clone();
+                        let label = w.label.clone();
+                        let size = w.size;
+                        let n_in_flight = considered.load(Ordering::Relaxed) + 1;
+                        let last_pct = std::sync::Arc::new(AtomicUsize::new(0));
+                        Some(std::sync::Arc::new(move |bytes, _hint| {
+                            let pct = ((bytes.saturating_mul(20)) / size.max(1))
+                                as usize;
+                            let prev = last_pct.load(Ordering::Relaxed);
+                            if pct > prev
+                                && last_pct
+                                    .compare_exchange(
+                                        prev,
+                                        pct,
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                    )
+                                    .is_ok()
+                            {
+                                if let Some(cb) = walk_cb.as_ref() {
+                                    cb(
+                                        n_in_flight,
+                                        total_supported,
+                                        &format!("{label} ({}%)", pct * 5),
+                                    );
+                                }
+                            }
+                        }))
+                    } else {
+                        None
+                    };
+                    match download_file(
+                        &creds,
+                        &w.path_lower,
+                        &w.local_path,
+                        byte_cb,
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             downloaded.fetch_add(1, Ordering::Relaxed);
                             let mut m = manifest.lock().expect("manifest poisoned");
