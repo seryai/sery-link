@@ -37,7 +37,14 @@ interface Props {
 type Loaded =
   | { kind: 'sftp'; host: string; port: number; username: string; auth: SftpAuth }
   | { kind: 'web_dav'; server_url: string; auth: WebDavAuth }
-  | { kind: 'dropbox'; access_token: string }
+  | {
+      kind: 'dropbox';
+      access_token: string;
+      // Present when the source was added via OAuth — when set,
+      // the edit form swaps to a re-auth flow instead of pasting
+      // a token. Absent for legacy PAT entries.
+      is_oauth: boolean;
+    }
   | { kind: 'azure_blob'; sas_token: string };
 
 export function EditCredentialsDialog({ source, onClose, onSaved }: Props) {
@@ -74,7 +81,12 @@ export function EditCredentialsDialog({ source, onClose, onSaved }: Props) {
           if (c) result = { kind: 'web_dav', server_url: c.server_url, auth: c.auth };
         } else if (source.kind.kind === 'dropbox') {
           const c = await getDropboxCredentialsForSource(source.id);
-          if (c) result = { kind: 'dropbox', access_token: c.access_token };
+          if (c)
+            result = {
+              kind: 'dropbox',
+              access_token: c.access_token,
+              is_oauth: !!(c.refresh_token && c.refresh_token.trim() !== ''),
+            };
         } else if (source.kind.kind === 'azure_blob') {
           const c = await getAzureBlobCredentialsForSource(source.id);
           if (c) result = { kind: 'azure_blob', sas_token: c.sas_token };
@@ -279,7 +291,7 @@ function FreshFormFor({
             auth: { type: 'basic', username: '', password: '' },
           }
         : source.kind.kind === 'dropbox'
-          ? { kind: 'dropbox', access_token: '' }
+          ? { kind: 'dropbox', access_token: '', is_oauth: false }
           : { kind: 'azure_blob', sas_token: '' };
   return (
     <FormFor
@@ -332,6 +344,7 @@ function FormFor({
   if (initial.kind === 'dropbox')
     return (
       <DropboxEditForm
+        source={source}
         initial={initial}
         busy={busy}
         error={error}
@@ -580,8 +593,247 @@ function DropboxEditForm({
   error,
   onSubmit,
   onCancel,
-}: SubFormProps<Extract<Loaded, { kind: 'dropbox' }>>) {
-  const [accessToken, setAccessToken] = useState(initial.access_token);
+  source,
+}: SubFormProps<Extract<Loaded, { kind: 'dropbox' }>> & {
+  source: DataSource;
+}) {
+  // OAuth-shaped entries get a re-auth flow (no token to paste);
+  // PAT entries get the existing rotate-token form. The user can
+  // toggle to PAT mode if they want to switch auth styles.
+  const [mode, setMode] = useState<'oauth' | 'pat'>(
+    initial.is_oauth ? 'oauth' : 'pat',
+  );
+  return (
+    <>
+      <div className="mb-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 p-0.5 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+        <button
+          onClick={() => setMode('oauth')}
+          disabled={busy}
+          className={`rounded px-2.5 py-1 font-medium ${
+            mode === 'oauth'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+          }`}
+        >
+          Sign in with Dropbox
+        </button>
+        <button
+          onClick={() => setMode('pat')}
+          disabled={busy}
+          className={`rounded px-2.5 py-1 font-medium ${
+            mode === 'pat'
+              ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+              : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+          }`}
+        >
+          Access token
+        </button>
+      </div>
+      {mode === 'oauth' ? (
+        <DropboxOAuthReauthBlock
+          source={source}
+          isCurrentlyOAuth={initial.is_oauth}
+          busy={busy}
+          error={error}
+          onCancel={onCancel}
+        />
+      ) : (
+        <DropboxPatRotateBlock
+          initial={initial}
+          busy={busy}
+          error={error}
+          onSubmit={onSubmit}
+          onCancel={onCancel}
+        />
+      )}
+    </>
+  );
+}
+
+interface DropboxAuthStart {
+  authorize_url: string;
+  code_verifier: string;
+}
+
+function DropboxOAuthReauthBlock({
+  source,
+  isCurrentlyOAuth,
+  busy: parentBusy,
+  error: parentError,
+  onCancel,
+}: {
+  source: DataSource;
+  isCurrentlyOAuth: boolean;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [phase, setPhase] = useState<
+    | { kind: 'idle' }
+    | { kind: 'awaiting'; codeVerifier: string; authorizeUrl: string }
+  >({ kind: 'idle' });
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const startAuth = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const start = await invoke<DropboxAuthStart>('start_dropbox_oauth');
+      try {
+        const opener = await import('@tauri-apps/plugin-opener');
+        await opener.openUrl(start.authorize_url);
+      } catch {
+        // Falls through; URL is shown below.
+      }
+      setPhase({
+        kind: 'awaiting',
+        codeVerifier: start.code_verifier,
+        authorizeUrl: start.authorize_url,
+      });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (phase.kind !== 'awaiting') return;
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<void>('reauth_dropbox_source', {
+        sourceId: source.id,
+        code: code.trim(),
+        codeVerifier: phase.codeVerifier,
+      });
+      toast.success('Dropbox re-authenticated');
+      // Close the dialog. The dialog's own onSaved is wired by the
+      // parent — but this submit path bypasses parent.onSubmit, so
+      // we just dismiss via onCancel (closes without save toast).
+      onCancel();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const showBusy = busy || parentBusy;
+  return (
+    <>
+      {phase.kind === 'idle' && (
+        <>
+          <p className="text-sm text-slate-700 dark:text-slate-300">
+            {isCurrentlyOAuth
+              ? 'This source is already authenticated via OAuth — tokens refresh automatically. Re-authenticate only if you revoked access on Dropbox or hit a stuck refresh.'
+              : 'Upgrade this source from Personal Access Token to OAuth. The old token is replaced; the source name and scan cache stay intact.'}
+          </p>
+          {(error || parentError) && (
+            <ErrorBox message={(error || parentError) as string} />
+          )}
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <button
+              onClick={onCancel}
+              disabled={showBusy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={startAuth}
+              disabled={showBusy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {showBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isCurrentlyOAuth ? 'Re-authenticate' : 'Open Dropbox'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase.kind === 'awaiting' && (
+        <>
+          <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-100">
+            Dropbox should have opened. If not,{' '}
+            <a
+              href={phase.authorizeUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              open this link
+            </a>
+            . After clicking Allow, paste the code Dropbox shows.
+          </div>
+          <div className="mt-3">
+            <Field
+              label="Authorization code"
+              value={code}
+              onChange={setCode}
+              placeholder="Paste the code Dropbox showed you"
+            />
+          </div>
+          {(error || parentError) && (
+            <ErrorBox message={(error || parentError) as string} />
+          )}
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <button
+              onClick={() => {
+                setPhase({ kind: 'idle' });
+                setCode('');
+              }}
+              disabled={showBusy}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Back
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onCancel}
+                disabled={showBusy}
+                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submit}
+                disabled={showBusy || code.trim() === ''}
+                className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {showBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function DropboxPatRotateBlock({
+  initial,
+  busy,
+  error,
+  onSubmit,
+  onCancel,
+}: {
+  initial: Extract<Loaded, { kind: 'dropbox' }>;
+  busy: boolean;
+  error: string | null;
+  onSubmit: (next: Loaded) => void;
+  onCancel: () => void;
+}) {
+  // Pre-fill from the current entry only when the source is already
+  // PAT-shaped — no point seeding the input with a 4-hour OAuth
+  // access_token that won't be valid by save time.
+  const [accessToken, setAccessToken] = useState(
+    initial.is_oauth ? '' : initial.access_token,
+  );
   const canSubmit = !busy && accessToken.trim() !== '';
   return (
     <>
@@ -593,16 +845,20 @@ function DropboxEditForm({
         placeholder="sl.B…"
       />
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Generate a new token at{' '}
-        <span className="font-mono">dropbox.com/developers/apps</span>{' '}
-        if rotating. The old keychain entry is overwritten on save.
+        {initial.is_oauth
+          ? 'Switching from OAuth to Personal Access Token. The OAuth refresh token will be discarded.'
+          : 'Generate a new token at dropbox.com/developers/apps if rotating. The old keychain entry is overwritten on save.'}
       </p>
       {error && <ErrorBox message={error} />}
       <Footer
         busy={busy}
         canSubmit={canSubmit}
         onSubmit={() =>
-          onSubmit({ kind: 'dropbox', access_token: accessToken.trim() })
+          onSubmit({
+            kind: 'dropbox',
+            access_token: accessToken.trim(),
+            is_oauth: false,
+          })
         }
         onCancel={onCancel}
         submitLabel="Save token"

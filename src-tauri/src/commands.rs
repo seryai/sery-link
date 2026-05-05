@@ -3860,6 +3860,54 @@ pub async fn add_dropbox_source_oauth(
     Ok(returned_id)
 }
 
+/// F48 — Re-auth an existing Dropbox source via OAuth. Used by
+/// "Edit credentials" when the stored entry is OAuth-shaped (or a
+/// user wants to upgrade an existing PAT entry to OAuth without
+/// losing the source's name / group / sort_order / scan-cache).
+/// Mirrors `add_dropbox_source_oauth` but rotates the keychain
+/// entry under an existing source_id instead of creating a new
+/// `DataSource`.
+#[tauri::command]
+pub async fn reauth_dropbox_source(
+    source_id: String,
+    code: String,
+    code_verifier: String,
+) -> Result<(), String> {
+    // Confirm the source exists + is actually a Dropbox kind before
+    // we touch the keychain — guards against stale source_id from a
+    // race or a deleted source.
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let exists = config
+        .sources
+        .iter()
+        .any(|s| s.id == source_id && matches!(s.kind, crate::sources::SourceKind::Dropbox { .. }));
+    if !exists {
+        return Err(format!(
+            "Source {source_id:?} is not a Dropbox source"
+        ));
+    }
+    drop(config);
+
+    let tokens = crate::dropbox_oauth::complete_oauth_flow(
+        code.trim(),
+        code_verifier.trim(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let creds = crate::dropbox::DropboxCredentials {
+        access_token: tokens.access_token,
+        refresh_token: Some(tokens.refresh_token),
+        expires_at: Some(tokens.expires_at),
+    };
+    if !creds.is_valid() {
+        return Err("Dropbox OAuth response missing access token".to_string());
+    }
+    crate::dropbox::test_credentials(&creds)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::dropbox_creds::save(&source_id, &creds).map_err(|e| e.to_string())
+}
+
 /// F48 — kind-specific add for a Dropbox source.
 #[tauri::command]
 pub async fn add_dropbox_source(

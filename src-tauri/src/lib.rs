@@ -234,6 +234,7 @@ pub fn run() {
             commands::add_dropbox_source,
             commands::add_dropbox_source_oauth,
             commands::start_dropbox_oauth,
+            commands::reauth_dropbox_source,
             commands::test_dropbox_credentials,
             commands::rescan_dropbox_source,
             commands::add_azure_blob_source,
