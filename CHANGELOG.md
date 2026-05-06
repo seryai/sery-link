@@ -5,6 +5,23 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] — 2026-05-06 — scan_status keepalive on slow scans
+
+Patch release. Fixes an edge case in the v0.7.1 scan_status pipeline:
+during long extractions on a single file (e.g. a 10 GB CSV that
+takes >60 s to read), no `progress_cb` fires, the cloud-side Redis
+TTL (60 s) expires, and the dashboard pill blinks out mid-scan.
+
+### Fixed
+
+- **scan_status TTL keepalive.** `rescan_folder` now keeps a live
+  snapshot of the latest reported state and a 30 s background tick
+  that re-emits it. The keepalive runs alongside the existing 2/sec
+  throttled emissions on `walk_progress` / `progress` callbacks, so
+  the cloud pill stays accurate during fast and slow phases alike.
+  RAII guard cancels the keepalive when `rescan_folder` returns
+  (success, error, panic).
+
 ## [0.7.3] — 2026-05-06 — Catch-up state machine + reachable post-dismissal
 
 Patch release that closes two holes in the v0.7.2 catch-up flow.
