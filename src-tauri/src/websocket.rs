@@ -51,6 +51,20 @@ type WsWriter = Arc<
 static OUTBOUND_WRITER: once_cell::sync::Lazy<RwLock<Option<WsWriter>>> =
     once_cell::sync::Lazy::new(|| RwLock::new(None));
 
+// Last scan_status snapshot the scanner pipeline published. Read
+// by the keepalive loop in commands::rescan_folder (so a stuck
+// extraction doesn't let the cloud's 60s TTL expire) AND by the
+// websocket reconnect path (so a tunnel blip mid-scan resyncs
+// the dashboard pill within milliseconds instead of waiting 30s
+// for the next keepalive tick). Cleared at scan end (idle/error)
+// so a stale "scanning" state can't get replayed forever.
+//
+// Plain std::sync::Mutex (not tokio::sync::RwLock) so the sync
+// scanner progress callbacks can write to it without awaiting.
+// Writes hold the lock for microseconds; contention is a non-issue.
+pub static LAST_SCAN_STATUS: once_cell::sync::Lazy<std::sync::Mutex<Option<Value>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
 /// Send a JSON Text frame on the active tunnel. Returns `true` if
 /// the frame was queued, `false` if no connection was up. Best-
 /// effort by design — the caller is expected to retry semantically
@@ -235,6 +249,18 @@ impl WebSocketClient {
             }
         }
         let _outbound_guard = OutboundGuard;
+
+        // Replay the last scan_status snapshot if we reconnected
+        // mid-scan. Without this, a tunnel blip leaves the cloud
+        // dashboard pill blank until the next 30s keepalive tick or
+        // the next progress callback fires — for a slow-file scan
+        // both could be far away. Best-effort: a send failure here
+        // just means the keepalive will catch up shortly.
+        let snapshot = LAST_SCAN_STATUS.lock().unwrap().clone();
+        if let Some(payload) = snapshot {
+            let mut w = write.lock().await;
+            let _ = w.send(Message::Text(payload.to_string())).await;
+        }
 
         // Heartbeat task — pings every N seconds. Dies when the connection
         // closes (send error → break).
