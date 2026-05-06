@@ -149,6 +149,71 @@ pub async fn add_watched_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct CatchUpFolder {
+    pub path: String,
+    pub datasets: u64,
+    pub total_bytes: u64,
+    pub last_scan_at: Option<String>,
+}
+
+/// Watched folders that already have a local scan baseline. The
+/// connect flow uses this to ask the user "you have N folders
+/// indexed locally — sync metadata to your workspace?" right after
+/// auth_with_key succeeds. Empty list means there's nothing to
+/// catch up on (fresh install, or every folder is brand new and
+/// will scan on first watcher tick anyway).
+///
+/// Doesn't filter by "synced state" — we don't track that locally.
+/// The cloud is idempotent on dataset uploads (UNIQUE on
+/// workspace_id + path), so re-pushing already-known datasets is a
+/// cheap upsert.
+#[tauri::command]
+pub async fn list_catch_up_folders() -> Result<Vec<CatchUpFolder>, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for f in &config.watched_folders {
+        if let Some(stats) = &f.last_scan_stats {
+            if stats.datasets == 0 {
+                continue;
+            }
+            out.push(CatchUpFolder {
+                path: f.path.clone(),
+                datasets: stats.datasets,
+                total_bytes: stats.total_bytes,
+                last_scan_at: f.last_scan_at.clone(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Re-run rescan_folder on each path in turn. Used by the post-
+/// connect catch-up dialog after the user picks which folders to
+/// share metadata for. Sequential by design — desktops have one set
+/// of CPU/disk resources; scanning two huge folders in parallel
+/// makes both slower. The existing scan_status pipeline emits
+/// progress to the cloud dashboard for the folder currently in
+/// flight, so the user sees live progress without us needing a
+/// separate event channel here.
+#[tauri::command]
+pub async fn catch_up_sync<R: Runtime>(
+    app: AppHandle<R>,
+    paths: Vec<String>,
+) -> Result<u64, String> {
+    let mut synced: u64 = 0;
+    for path in paths {
+        // Best-effort: a single failing folder doesn't abort the
+        // catch-up. rescan_folder already logs + emits sync_failed
+        // for visibility; we just keep going.
+        match rescan_folder(app.clone(), path.clone()).await {
+            Ok(_) => synced += 1,
+            Err(e) => eprintln!("[catch_up_sync] {path}: {e}"),
+        }
+    }
+    Ok(synced)
+}
+
 /// Register a remote data source. Accepts `http(s)://` (Phase A) or
 /// `s3://` (Phase B) URLs. The URL is stored in `watched_folders`
 /// alongside local folder paths; `is_remote_url()` / `is_s3_url()`
