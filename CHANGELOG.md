@@ -5,6 +5,30 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] — 2026-05-06 — Catch-up sync visibility + privacy deep-link
+
+Patch release. Two small follow-ups to the catch-up sync flow that
+landed in v0.7.2/0.7.3.
+
+### Added
+
+- **Top-level "Syncing N of M…" pill in the StatusBar.** When
+  `catch_up_sync` runs in the background (e.g. user clicked Sync
+  in the catch-up dialog and dismissed it), the StatusBar shows
+  the live folder-by-folder progress instead of the static "N to
+  share" badge. Driven by a new `catch_up_progress` Tauri event
+  emitted at the start of each folder + once at the end of the
+  batch. Closes the gap where a user who closed the dialog had no
+  top-level signal that work was still in flight.
+
+### Fixed
+
+- **Privacy "What gets uploaded?" deep-link.** The catch-up
+  dialog's link previously dumped users at the top of /privacy.
+  Now it deep-links to `#machines-and-datasets` — the section
+  that actually answers what's stored and what isn't. Pairs with
+  the matching anchor on the website side.
+
 ## [0.7.5] — 2026-05-06 — scan_status replay on reconnect
 
 Patch release. Pairs with the api-side scan-error alerts shipped at

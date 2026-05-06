@@ -146,7 +146,7 @@ export function CatchUpDialog({ folders, onClose, title, subtitle }: Props) {
           AI-generated descriptions. File contents stay on this
           machine.{' '}
           <a
-            href="https://sery.ai/privacy"
+            href="https://sery.ai/privacy#machines-and-datasets"
             target="_blank"
             rel="noopener noreferrer"
             className="underline hover:text-slate-700 dark:hover:text-slate-200"
