@@ -217,8 +217,22 @@ pub async fn catch_up_sync<R: Runtime>(
     app: AppHandle<R>,
     paths: Vec<String>,
 ) -> Result<u64, String> {
+    let total = paths.len() as u64;
     let mut synced: u64 = 0;
-    for path in paths {
+    for (idx, path) in paths.iter().enumerate() {
+        // Top-level "Syncing N of M…" signal. Lets the StatusBar
+        // pill replace the "N to share" badge with live catch-up
+        // progress while the loop runs in the background — users
+        // who closed the catch-up dialog still see something.
+        events::emit_catch_up_progress(
+            &app,
+            events::CatchUpProgress {
+                current: (idx as u64) + 1,
+                total,
+                current_folder: Some(path.clone()),
+                finished: false,
+            },
+        );
         // Best-effort: a single failing folder doesn't abort the
         // catch-up. rescan_folder already logs + emits sync_failed
         // for visibility; we just keep going.
@@ -227,6 +241,16 @@ pub async fn catch_up_sync<R: Runtime>(
             Err(e) => eprintln!("[catch_up_sync] {path}: {e}"),
         }
     }
+    // Tear-down signal so the frontend dismisses the pill.
+    events::emit_catch_up_progress(
+        &app,
+        events::CatchUpProgress {
+            current: total,
+            total,
+            current_folder: None,
+            finished: true,
+        },
+    );
     Ok(synced)
 }
 

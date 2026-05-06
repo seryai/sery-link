@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Cloud, CloudOff, FolderUp, Link as LinkIcon, LogOut } from 'lucide-react';
+import { Cloud, CloudOff, FolderUp, Link as LinkIcon, Loader2, LogOut } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import type { ConnectionStatus } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
@@ -69,6 +69,34 @@ export function StatusBar() {
   // the sync flow without disconnecting + reconnecting.
   const [catchUpFolders, setCatchUpFolders] = useState<CatchUpFolder[]>([]);
   const [showCatchUp, setShowCatchUp] = useState(false);
+  // Live progress while catch_up_sync runs in the background.
+  // Replaces the "N to share" pill with "Syncing N of M…" so a
+  // user who closed the dialog has a top-level signal that the
+  // background work is still in flight.
+  const [catchUpProgress, setCatchUpProgress] = useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+  useEffect(() => {
+    const unlisten = listen<{
+      current: number;
+      total: number;
+      current_folder: string | null;
+      finished: boolean;
+    }>('catch_up_progress', (event) => {
+      if (event.payload.finished) {
+        setCatchUpProgress(null);
+      } else {
+        setCatchUpProgress({
+          current: event.payload.current,
+          total: event.payload.total,
+        });
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, []);
   useEffect(() => {
     if (!authenticated) {
       setCatchUpFolders([]);
@@ -203,7 +231,15 @@ export function StatusBar() {
       </div>
 
       <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
-        {catchUpFolders.length > 0 && (
+        {catchUpProgress ? (
+          <span
+            className="inline-flex items-center gap-1 rounded-md bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-800 dark:bg-purple-900/30 dark:text-purple-200"
+            title="Catch-up sync in progress"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Syncing {catchUpProgress.current} of {catchUpProgress.total}
+          </span>
+        ) : catchUpFolders.length > 0 ? (
           <button
             type="button"
             onClick={() => setShowCatchUp(true)}
@@ -213,7 +249,7 @@ export function StatusBar() {
             <FolderUp className="h-3 w-3" />
             {catchUpFolders.length} to share
           </button>
-        )}
+        ) : null}
         {stats && (
           <span>
             {stats.queries_today} {stats.queries_today === 1 ? 'query' : 'queries'}{' '}

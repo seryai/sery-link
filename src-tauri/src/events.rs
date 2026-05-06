@@ -44,6 +44,12 @@ pub const EVT_AUTH_EXPIRED: &str = "auth_expired";
 pub const EVT_SYNC_COMPLETED: &str = "sync_completed";
 pub const EVT_SYNC_FAILED: &str = "sync_failed";
 pub const EVT_STATS_UPDATED: &str = "stats_updated";
+// Top-level catch-up sync progress. Fired by commands::catch_up_sync
+// at the start of each folder + once when the whole batch finishes.
+// The frontend uses it to render a "Syncing N of M folders…" pill in
+// the StatusBar while the catch-up runs in the background — without
+// it, a user who closed the dialog has no top-level feedback.
+pub const EVT_CATCH_UP_PROGRESS: &str = "catch_up_progress";
 
 // ---------------------------------------------------------------------------
 // Payload types
@@ -261,6 +267,21 @@ pub fn emit_sync_failed<R: Runtime>(app: &AppHandle<R>, folder: &str, error: &st
 
 pub fn emit_stats_updated<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit(EVT_STATS_UPDATED, ());
+}
+
+#[derive(Serialize, Clone)]
+pub struct CatchUpProgress {
+    pub current: u64,
+    pub total: u64,
+    pub current_folder: Option<String>,
+    /// True when the whole batch is done. Frontend uses this as the
+    /// "tear down the pill" signal regardless of success/failure
+    /// counts within.
+    pub finished: bool,
+}
+
+pub fn emit_catch_up_progress<R: Runtime>(app: &AppHandle<R>, payload: CatchUpProgress) {
+    let _ = app.emit(EVT_CATCH_UP_PROGRESS, payload);
 }
 
 // ---------------------------------------------------------------------------
