@@ -171,10 +171,26 @@ pub struct CatchUpFolder {
 #[tauri::command]
 pub async fn list_catch_up_folders() -> Result<Vec<CatchUpFolder>, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
+    // Without an authenticated workspace, the catch-up flow has
+    // nowhere to push to. Returning an empty list collapses the
+    // dialog naturally for local-only users.
+    let current_ws = match config.agent.workspace_id.as_deref() {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
     let mut out = Vec::new();
     for f in &config.watched_folders {
         if let Some(stats) = &f.last_scan_stats {
             if stats.datasets == 0 {
+                continue;
+            }
+            // Skip folders already synced to *this* workspace. If
+            // the user switches workspaces (or clears creds and
+            // signs into a different one) the marker mismatches
+            // and the folder reappears in the catch-up list, which
+            // is the right behaviour — that is a fresh workspace
+            // and the data hasn't reached it.
+            if f.last_synced_to_workspace_id.as_deref() == Some(current_ws) {
                 continue;
             }
             out.push(CatchUpFolder {
@@ -2324,6 +2340,19 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 {
                     Ok(r) => {
                         events::emit_sync_completed(&app, &folder_path, dataset_count);
+                        // Mark this folder as synced to the current
+                        // workspace so the catch-up dialog won't
+                        // re-prompt for it on reconnect. Best-effort:
+                        // a config write failure here doesn't
+                        // invalidate the upload that just succeeded;
+                        // worst case the user sees one extra catch-up
+                        // prompt next time they reconnect.
+                        if let Some(ws_id) = config.agent.workspace_id.as_deref() {
+                            if let Ok(mut cfg_mut) = Config::load() {
+                                cfg_mut.mark_folder_synced(&folder_path, ws_id);
+                                let _ = cfg_mut.save();
+                            }
+                        }
                         r
                     }
                     Err(e) => {

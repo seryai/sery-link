@@ -5,6 +5,33 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] — 2026-05-06 — Catch-up state machine + reachable post-dismissal
+
+Patch release that closes two holes in the v0.7.2 catch-up flow.
+
+### Fixed
+
+- **Catch-up dialog re-fired on every reconnect.** v0.7.2 listed
+  every watched folder with a local scan baseline, so a machine
+  reboot or auth blip would re-prompt the user to sync data already
+  in the workspace. Now `WatchedFolder` carries
+  `last_synced_to_workspace_id`, set after `sync_metadata_to_cloud`
+  succeeds. `list_catch_up_folders` skips folders already synced to
+  the *current* workspace; switching workspaces still surfaces them
+  (correct — that's a different workspace).
+- **No way back to catch-up after "Not now."** The auto-prompt was
+  the only entry point; users who dismissed it had no path back
+  short of disconnecting and reconnecting. Added a "N to share"
+  pill in the StatusBar (visible whenever `list_catch_up_folders`
+  returns non-empty) that opens the same dialog standalone.
+
+### Refactored
+
+- Phase-2 catch-up view extracted from `ConnectModal` into a
+  standalone `CatchUpDialog` component so both entry points (post-
+  connect prompt + StatusBar follow-up) reuse the same UI without a
+  fork.
+
 ## [0.7.2] — 2026-05-06 — Catch-up sync after first connect
 
 Patch release. Pairs with v0.7.1's live `scan_status` plumbing and
