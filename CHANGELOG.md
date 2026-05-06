@@ -5,6 +5,27 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-05-06 — Live scan progress in the cloud dashboard
+
+Patch release. Sery Link now reports its scanner state to Sery.ai
+over the existing tunnel, so the dashboard can replace its
+"Open Sery Link" empty-state nag with a live "Indexing 1,243 / 8,000
+files…" pill while a scan is in flight. Pairs with matching api
+and dashboard updates that landed at the same time.
+
+### Added
+
+- **`scan_status` over the agent tunnel** — `rescan_folder` emits
+  `scanning` → throttled progress → `idle` (or `error`) so the
+  cloud dashboard's `/network/[id]` pill and chat empty-state
+  banner can react in real time. Throttled to ~2 emissions/sec
+  across walk + content-extraction phases.
+- **Best-effort outbound channel** in `websocket.rs`
+  (`send_outbound_json`) — non-WS code can publish status frames
+  on the active tunnel. Sends are no-ops when the tunnel is
+  offline (no buffering, by design — the next progress tick
+  resyncs on reconnect).
+
 ## [0.7.0] — 2026-05-05 — Sources sidebar + 5 new storage protocols
 
 A two-part release. **Part one (F42)** rebuilds the sidebar around a
