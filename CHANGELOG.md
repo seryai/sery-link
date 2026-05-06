@@ -5,6 +5,31 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-05-06 — Catch-up sync after first connect
+
+Patch release. Pairs with v0.7.1's live `scan_status` plumbing and
+closes the workflow loop: when a user adds folders in local-only
+mode and *later* enters a workspace key, ConnectModal now offers a
+"Connected. One more step?" follow-up dialog listing the locally-
+indexed folders with per-folder checkboxes (default all on) and a
+single Sync button. The cloud dashboard's `scan_status` pill renders
+the catch-up progress in real time.
+
+### Added
+
+- **`list_catch_up_folders` Tauri command** — returns watched
+  folders that have a local scan baseline (`last_scan_stats`) for
+  the connect-time UI to surface.
+- **`catch_up_sync(paths)` Tauri command** — sequentially re-runs
+  `rescan_folder` for each path. Sequential by design — desktops
+  don't benefit from parallel folder scans.
+- **Phase-2 view in ConnectModal** (frontend) — appears post-auth
+  when the catch-up list is non-empty. Per-folder checkboxes,
+  privacy reminder ("only metadata uploaded — file contents stay
+  on this machine") with a link to /privacy, and Sync /
+  Not now buttons. Sync fires `catch_up_sync` and dismisses; the
+  user keeps using the app while the background catch-up runs.
+
 ## [0.7.1] — 2026-05-06 — Live scan progress in the cloud dashboard
 
 Patch release. Sery Link now reports its scanner state to Sery.ai

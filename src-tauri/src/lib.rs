@@ -263,6 +263,8 @@ pub fn run() {
             commands::convert_to_parquet,
             commands::get_cached_folder_metadata,
             commands::rescan_folder,
+            commands::list_catch_up_folders,
+            commands::catch_up_sync,
             commands::sync_metadata,
             commands::has_token,
             commands::get_agent_info,
