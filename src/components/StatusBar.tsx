@@ -15,10 +15,11 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Cloud, CloudOff, Link as LinkIcon, LogOut } from 'lucide-react';
+import { Cloud, CloudOff, FolderUp, Link as LinkIcon, LogOut } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import type { ConnectionStatus } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
+import { CatchUpDialog, type CatchUpFolder } from './CatchUpDialog';
 import { useToast } from './Toast';
 
 const CONNECTED_STATUS: Record<
@@ -61,6 +62,39 @@ export function StatusBar() {
   } = useAgentStore();
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
+  // Catch-up follow-up: when the user clicked "Not now" on the
+  // post-connect prompt, the folders stay locally indexed but
+  // never make it to the workspace. Poll list_catch_up_folders
+  // while connected so the user has a discoverable way back to
+  // the sync flow without disconnecting + reconnecting.
+  const [catchUpFolders, setCatchUpFolders] = useState<CatchUpFolder[]>([]);
+  const [showCatchUp, setShowCatchUp] = useState(false);
+  useEffect(() => {
+    if (!authenticated) {
+      setCatchUpFolders([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchOnce = async () => {
+      try {
+        const list = await invoke<CatchUpFolder[]>('list_catch_up_folders');
+        if (!cancelled) setCatchUpFolders(list);
+      } catch (e) {
+        // Older sery-link builds without the command return an
+        // error string — treat as "no catch-up needed" silently.
+        if (!cancelled) setCatchUpFolders([]);
+      }
+    };
+    fetchOnce();
+    // 60s is enough to reflect the post-sync drop without polling
+    // hot. The list updates after rescan_folder anyway, so this is
+    // mostly a safety net for cross-component state.
+    const id = setInterval(fetchOnce, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [authenticated]);
   // Set when a `seryai://pair?key=...` deep link fires while the user
   // is unauthenticated. Pre-fills ConnectModal so the user sees the
   // key from the invite without copy-pasting. Cleared when the modal
@@ -169,6 +203,17 @@ export function StatusBar() {
       </div>
 
       <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
+        {catchUpFolders.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowCatchUp(true)}
+            className="inline-flex items-center gap-1 rounded-md bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-800 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-200 dark:hover:bg-purple-900/50"
+            title="Some folders haven't been shared with your workspace yet"
+          >
+            <FolderUp className="h-3 w-3" />
+            {catchUpFolders.length} to share
+          </button>
+        )}
         {stats && (
           <span>
             {stats.queries_today} {stats.queries_today === 1 ? 'query' : 'queries'}{' '}
@@ -185,6 +230,14 @@ export function StatusBar() {
         )}
         <DisconnectButton />
       </div>
+      {showCatchUp && (
+        <CatchUpDialog
+          folders={catchUpFolders}
+          onClose={() => setShowCatchUp(false)}
+          title="Share these folders with your workspace?"
+          subtitle="These folders are indexed on this machine but haven't been shared with your workspace yet."
+        />
+      )}
     </div>
   );
 }

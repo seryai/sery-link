@@ -102,6 +102,16 @@ pub struct WatchedFolder {
     pub last_scan_at: Option<String>,
     #[serde(default)]
     pub last_scan_stats: Option<ScanStats>,
+    /// Workspace this folder's metadata was last successfully
+    /// uploaded to. Set by `rescan_folder` after a successful
+    /// `sync_metadata_to_cloud` call; cleared (server-side via the
+    /// catch-up dialog) only by the user explicitly opting in to a
+    /// new sync. The catch-up dialog uses this to filter out folders
+    /// that have already been shared with the current workspace, so
+    /// reconnecting (machine reboot, key rotation, AuthExpired blip)
+    /// doesn't re-prompt for already-synced data.
+    #[serde(default)]
+    pub last_synced_to_workspace_id: Option<String>,
     /// Whether this folder is exposed via the MCP stdio mode
     /// (`sery-link --mcp-stdio --root <this folder>`). Off by default;
     /// users opt-in per folder from Settings → MCP. The flag itself
@@ -461,6 +471,7 @@ impl Config {
             max_file_size_mb: default_max_file_size_mb(),
             last_scan_at: None,
             last_scan_stats: None,
+            last_synced_to_workspace_id: None,
             mcp_enabled: false,
         });
     }
@@ -517,6 +528,16 @@ impl Config {
         if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
             folder.last_scan_stats = Some(stats);
             folder.last_scan_at = Some(when);
+        }
+    }
+
+    /// Record that this folder's metadata was successfully uploaded
+    /// to a particular workspace. Used by the catch-up dialog to
+    /// avoid re-prompting for folders that have already been shared
+    /// with the current workspace. See WatchedFolder::last_synced_to_workspace_id.
+    pub fn mark_folder_synced(&mut self, path: &str, workspace_id: &str) {
+        if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
+            folder.last_synced_to_workspace_id = Some(workspace_id.to_string());
         }
     }
 
