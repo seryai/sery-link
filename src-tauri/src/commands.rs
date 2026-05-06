@@ -19,7 +19,7 @@ use crate::machines::{self, MachinesResponse};
 use crate::scanner::{self, DatasetMetadata};
 use crate::stats::{self, Stats};
 use crate::watcher::{self, WatcherHandle};
-use crate::websocket::WebSocketClient;
+use crate::websocket::{self, WebSocketClient};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
@@ -1977,6 +1977,32 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // Flip tray to "syncing" so users see the work kick off.
     crate::tray::set_state(&app, "syncing");
 
+    // Tell the cloud we're starting. Best-effort: if the tunnel is
+    // offline this is a no-op and the cloud will see "idle" until the
+    // next reconnect. Either way the dashboard pill will update once
+    // the next progress tick lands. Using spawn so we don't block the
+    // synchronous scan setup on a websocket round-trip.
+    let scan_started_at = chrono::Utc::now().to_rfc3339();
+    {
+        let started_at = scan_started_at.clone();
+        tokio::spawn(async move {
+            websocket::send_outbound_json(&serde_json::json!({
+                "type": "scan_status",
+                "status": "scanning",
+                "files_total": 0,
+                "files_indexed": 0,
+                "started_at": started_at,
+            }))
+            .await;
+        });
+    }
+
+    // Throttle progress emissions to ~2/sec. Without this, a fast scan
+    // would flood the tunnel with hundreds of scan_status frames per
+    // second. The dashboard polls /v1/agents at 30s anyway — anything
+    // finer than ~500ms is invisible to the user.
+    let last_emit_ms = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+
     // 1. Scan the folder locally with progress + per-dataset events. Both
     // callbacks run on the blocking scan thread so the UI stays smooth
     // even for huge folders. The dataset callback lets FolderDetail stream
@@ -1985,6 +2011,8 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // the wait would otherwise be minutes of empty screen.
     let folder_for_walk = folder_path.clone();
     let app_for_walk = app.clone();
+    let last_emit_for_walk = std::sync::Arc::clone(&last_emit_ms);
+    let started_at_for_walk = scan_started_at.clone();
     let walk_progress_cb: scanner::WalkProgressCb = Box::new(move |discovered| {
         events::emit_scan_walk_progress(
             &app_for_walk,
@@ -1993,10 +2021,25 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 discovered,
             },
         );
+        if scan_status_should_emit(&last_emit_for_walk) {
+            let started_at = started_at_for_walk.clone();
+            tokio::spawn(async move {
+                websocket::send_outbound_json(&serde_json::json!({
+                    "type": "scan_status",
+                    "status": "scanning",
+                    "files_total": discovered,
+                    "files_indexed": 0,
+                    "started_at": started_at,
+                }))
+                .await;
+            });
+        }
     });
 
     let folder_for_progress = folder_path.clone();
     let app_for_progress = app.clone();
+    let last_emit_for_progress = std::sync::Arc::clone(&last_emit_ms);
+    let started_at_for_progress = scan_started_at.clone();
     let progress_cb: scanner::ProgressCb = Box::new(move |current, total, current_file| {
         events::emit_scan_progress(
             &app_for_progress,
@@ -2007,6 +2050,19 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 current_file: current_file.to_string(),
             },
         );
+        if scan_status_should_emit(&last_emit_for_progress) {
+            let started_at = started_at_for_progress.clone();
+            tokio::spawn(async move {
+                websocket::send_outbound_json(&serde_json::json!({
+                    "type": "scan_status",
+                    "status": "scanning",
+                    "files_total": total,
+                    "files_indexed": current,
+                    "started_at": started_at,
+                }))
+                .await;
+            });
+        }
     });
 
     let folder_for_dataset = folder_path.clone();
@@ -2032,10 +2088,23 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     )
     .await
         .map_err(|e| {
-            audit::record(&folder_path, 0, 0, 0, Some(e.to_string()));
-            events::emit_sync_failed(&app, &folder_path, &e.to_string());
+            let msg = e.to_string();
+            audit::record(&folder_path, 0, 0, 0, Some(msg.clone()));
+            events::emit_sync_failed(&app, &folder_path, &msg);
             crate::tray::set_state(&app, "online");
-            e.to_string()
+            // Surface the failure on the cloud-side scan_status pill.
+            // Best-effort — if the tunnel is down the dashboard will
+            // just keep showing "scanning" until the TTL drops it.
+            let err_for_ws = msg.clone();
+            tokio::spawn(async move {
+                websocket::send_outbound_json(&serde_json::json!({
+                    "type": "scan_status",
+                    "status": "error",
+                    "error": err_for_ws,
+                }))
+                .await;
+            });
+            msg
         })?;
 
     let column_count: u64 = datasets.iter().map(|d| d.schema.len() as u64).sum();
@@ -2226,7 +2295,43 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     };
 
     crate::tray::set_state(&app, "online");
+
+    // Tell the cloud the scan finished. Sent regardless of cloud sync
+    // outcome — the local scan succeeded, and the dashboard pill is
+    // tracking *scanning*, not *cloud upload*. If the upload failed
+    // the dashboard will still see dataset_count via the metadata
+    // sync (or its absence on a stale Redis state) on the next poll.
+    tokio::spawn(async move {
+        websocket::send_outbound_json(&serde_json::json!({
+            "type": "scan_status",
+            "status": "idle",
+            "files_total": dataset_count,
+            "files_indexed": dataset_count,
+        }))
+        .await;
+    });
+
     Ok(cloud_resp)
+}
+
+/// 2/sec throttle for scan_status emissions. Returns true if at least
+/// 500ms has elapsed since the last positive return; false otherwise.
+/// `last_emit_ms` stores the most recent positive timestamp.
+fn scan_status_should_emit(last_emit_ms: &std::sync::atomic::AtomicI64) -> bool {
+    let now = chrono::Utc::now().timestamp_millis();
+    let prev = last_emit_ms.load(std::sync::atomic::Ordering::Relaxed);
+    if now - prev < 500 {
+        return false;
+    }
+    // CAS so concurrent ticks don't both pass through.
+    last_emit_ms
+        .compare_exchange(
+            prev,
+            now,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok()
 }
 
 #[tauri::command]
