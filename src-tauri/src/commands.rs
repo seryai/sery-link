@@ -2065,23 +2065,22 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // synchronous scan setup on a websocket round-trip.
     let scan_started_at = chrono::Utc::now().to_rfc3339();
 
-    // Live snapshot of the scan's reported state. Both progress
-    // callbacks update this; the keepalive task below re-emits it
-    // every 30s so the cloud-side Redis TTL (60s) never expires
-    // mid-scan even if a single huge file takes >60s to process.
-    let scan_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
-        serde_json::json!({
-            "type": "scan_status",
-            "status": "scanning",
-            "files_total": 0,
-            "files_indexed": 0,
-            "started_at": scan_started_at.clone(),
-        }),
-    ));
+    // Initial snapshot. Stored on the websocket-module-level global
+    // (websocket::LAST_SCAN_STATUS) so both the keepalive loop AND
+    // the websocket reconnect path can read it. Without the shared
+    // global, a reconnect mid-scan would have to wait for the next
+    // keepalive tick (up to 30s) before the dashboard pill resyncs.
+    let initial_payload = serde_json::json!({
+        "type": "scan_status",
+        "status": "scanning",
+        "files_total": 0,
+        "files_indexed": 0,
+        "started_at": scan_started_at.clone(),
+    });
+    *websocket::LAST_SCAN_STATUS.lock().unwrap() = Some(initial_payload.clone());
     {
-        let snapshot_for_initial = scan_snapshot.clone();
+        let payload = initial_payload.clone();
         tokio::spawn(async move {
-            let payload = snapshot_for_initial.lock().unwrap().clone();
             websocket::send_outbound_json(&payload).await;
         });
     }
@@ -2089,8 +2088,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // Keepalive task: re-emit the latest snapshot every 30s. This
     // covers the long-tail case where progress_cb stops firing
     // because the scanner is mid-extraction on one slow file. The
-    // task aborts when `_keepalive_handle` drops at function exit.
-    let keepalive_snapshot = scan_snapshot.clone();
+    // task aborts when the RAII guard drops at function exit.
     let _keepalive_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         // First tick fires immediately; skip it so we don't double
@@ -2098,8 +2096,13 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         interval.tick().await;
         loop {
             interval.tick().await;
-            let payload = keepalive_snapshot.lock().unwrap().clone();
-            websocket::send_outbound_json(&payload).await;
+            let snapshot = websocket::LAST_SCAN_STATUS.lock().unwrap().clone();
+            if let Some(payload) = snapshot {
+                websocket::send_outbound_json(&payload).await;
+            } else {
+                // Snapshot cleared (scan ended) — keepalive done.
+                break;
+            }
         }
     });
     // RAII guard around the handle so a panic in the scan body still
@@ -2129,7 +2132,6 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     let app_for_walk = app.clone();
     let last_emit_for_walk = std::sync::Arc::clone(&last_emit_ms);
     let started_at_for_walk = scan_started_at.clone();
-    let snapshot_for_walk = scan_snapshot.clone();
     let walk_progress_cb: scanner::WalkProgressCb = Box::new(move |discovered| {
         events::emit_scan_walk_progress(
             &app_for_walk,
@@ -2138,8 +2140,8 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 discovered,
             },
         );
-        // Always update the keepalive snapshot, even when throttled
-        // — the keepalive task reads this every 30s regardless.
+        // Always update the global snapshot, even when throttled —
+        // the keepalive task + reconnect replay both read this.
         let payload = serde_json::json!({
             "type": "scan_status",
             "status": "scanning",
@@ -2147,7 +2149,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
             "files_indexed": 0,
             "started_at": started_at_for_walk,
         });
-        *snapshot_for_walk.lock().unwrap() = payload.clone();
+        *websocket::LAST_SCAN_STATUS.lock().unwrap() = Some(payload.clone());
         if scan_status_should_emit(&last_emit_for_walk) {
             tokio::spawn(async move {
                 websocket::send_outbound_json(&payload).await;
@@ -2159,7 +2161,6 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     let app_for_progress = app.clone();
     let last_emit_for_progress = std::sync::Arc::clone(&last_emit_ms);
     let started_at_for_progress = scan_started_at.clone();
-    let snapshot_for_progress = scan_snapshot.clone();
     let progress_cb: scanner::ProgressCb = Box::new(move |current, total, current_file| {
         events::emit_scan_progress(
             &app_for_progress,
@@ -2177,7 +2178,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
             "files_indexed": current,
             "started_at": started_at_for_progress,
         });
-        *snapshot_for_progress.lock().unwrap() = payload.clone();
+        *websocket::LAST_SCAN_STATUS.lock().unwrap() = Some(payload.clone());
         if scan_status_should_emit(&last_emit_for_progress) {
             tokio::spawn(async move {
                 websocket::send_outbound_json(&payload).await;
@@ -2216,6 +2217,9 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
             // Best-effort — if the tunnel is down the dashboard will
             // just keep showing "scanning" until the TTL drops it.
             let err_for_ws = msg.clone();
+            // Clear the snapshot so reconnects don't replay a stale
+            // "scanning" payload after a failed scan.
+            *websocket::LAST_SCAN_STATUS.lock().unwrap() = None;
             tokio::spawn(async move {
                 websocket::send_outbound_json(&serde_json::json!({
                     "type": "scan_status",
@@ -2434,6 +2438,9 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // tracking *scanning*, not *cloud upload*. If the upload failed
     // the dashboard will still see dataset_count via the metadata
     // sync (or its absence on a stale Redis state) on the next poll.
+    // Clear the snapshot so reconnects don't replay a stale
+    // "scanning" payload after the scan completes.
+    *websocket::LAST_SCAN_STATUS.lock().unwrap() = None;
     tokio::spawn(async move {
         websocket::send_outbound_json(&serde_json::json!({
             "type": "scan_status",

@@ -5,6 +5,22 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] — 2026-05-06 — scan_status replay on reconnect
+
+Patch release. Pairs with the api-side scan-error alerts shipped at
+the same time.
+
+### Fixed
+
+- **scan_status replay on reconnect.** A WebSocket blip mid-scan
+  (network hiccup, AuthExpired, server restart) used to leave the
+  cloud dashboard pill blank until the next 30s keepalive tick.
+  The scan_status snapshot now lives on a websocket-module-level
+  `LAST_SCAN_STATUS` global, and `connect_and_run` replays the
+  snapshot immediately after publishing the writer. Cleared on
+  scan end (idle/error) so a stale "scanning" payload can never
+  be replayed after the scan finishes.
+
 ## [0.7.4] — 2026-05-06 — scan_status keepalive on slow scans
 
 Patch release. Fixes an edge case in the v0.7.1 scan_status pipeline:
