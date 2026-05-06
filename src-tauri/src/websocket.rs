@@ -42,6 +42,31 @@ type WsWriter = Arc<
     >,
 >;
 
+// Global handle on the *current* connection's write half. Used by
+// async, non-WS code (the scanner pipeline) that wants to send
+// best-effort status messages back to the cloud without owning a
+// reference to WebSocketClient. None when the tunnel is offline —
+// callers must treat send failures as non-fatal because scanner
+// state will resync on the next message.
+static OUTBOUND_WRITER: once_cell::sync::Lazy<RwLock<Option<WsWriter>>> =
+    once_cell::sync::Lazy::new(|| RwLock::new(None));
+
+/// Send a JSON Text frame on the active tunnel. Returns `true` if
+/// the frame was queued, `false` if no connection was up. Best-
+/// effort by design — the caller is expected to retry semantically
+/// (e.g. emit the next progress tick) rather than buffer here.
+pub async fn send_outbound_json(value: &Value) -> bool {
+    let writer = {
+        let guard = OUTBOUND_WRITER.read().await;
+        match guard.as_ref() {
+            Some(w) => Arc::clone(w),
+            None => return false,
+        }
+    };
+    let mut w = writer.lock().await;
+    w.send(Message::Text(value.to_string())).await.is_ok()
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -193,6 +218,23 @@ impl WebSocketClient {
 
         let (write, mut read) = ws_stream.split();
         let write = Arc::new(tokio::sync::Mutex::new(write));
+
+        // Publish the writer so non-WS code (scanner pipeline) can send
+        // best-effort status messages on this connection. Cleared in the
+        // RAII guard below so a dropped/errored connection can't leave a
+        // stale Arc around — the next reconnect will publish a fresh one.
+        *OUTBOUND_WRITER.write().await = Some(Arc::clone(&write));
+        struct OutboundGuard;
+        impl Drop for OutboundGuard {
+            fn drop(&mut self) {
+                // Synchronous drop: schedule the clear on a background task
+                // so we don't block the runtime in Drop.
+                tokio::spawn(async {
+                    *OUTBOUND_WRITER.write().await = None;
+                });
+            }
+        }
+        let _outbound_guard = OutboundGuard;
 
         // Heartbeat task — pings every N seconds. Dies when the connection
         // closes (send error → break).
