@@ -96,46 +96,60 @@ impl MetadataCache {
 
     /// Upsert a single dataset into the cache.
     ///
-    /// CRITICAL: the conflict clause must NOT update `id`.
+    /// The schema has TWO unique constraints that BOTH fire on the
+    /// same logical row when the id is deterministic:
     ///
-    /// `id` is the PRIMARY KEY. Updating it on conflict triggers an
-    /// internal "delete from index + insert into index" path in
-    /// DuckDB. Under concurrent rescans of the same folder (e.g. two
-    /// rescan_folder calls racing — UI double-click, watcher
-    /// retrigger, manual scan + autoscan), two separate UUIDs both
-    /// hit the unique (workspace_id, path) constraint, each tries
-    /// to update the existing row's id, and the index-rebuild path
-    /// throws a FatalException with:
+    ///   id TEXT PRIMARY KEY                     (PK on id)
+    ///   UNIQUE(workspace_id, path)              (composite unique)
     ///
-    ///   INTERNAL Error: Failed to append to PRIMARY_datasets_0:
-    ///   Constraint Error: PRIMARY KEY or UNIQUE constraint violation:
-    ///   duplicate key "<workspace_id>::<path>"
+    /// Callers compute id as `format!("{}::{}", workspace_id, path)`
+    /// — see commands::rescan_folder at the upsert site. So the PK
+    /// conflict and the UNIQUE conflict ALWAYS fire together on a
+    /// re-scan.
     ///
-    /// FatalException crosses the C++ → Rust FFI boundary as an
-    /// unhandled exception → process terminate(). The whole app dies.
+    /// Earlier attempts:
+    /// 1. `ON CONFLICT(workspace_id, path) DO UPDATE` — only handled
+    ///    the UNIQUE conflict; PK conflict bypassed it and threw
+    ///    a FatalException (C++ exception across FFI → process
+    ///    terminate, app dies):
+    ///      INTERNAL Error: Failed to append to PRIMARY_datasets_0:
+    ///      Constraint Error: PRIMARY KEY or UNIQUE constraint
+    ///      violation: duplicate key "<workspace_id>::<path>"
+    /// 2. `INSERT OR REPLACE` — DuckDB 1.1 rejects with
+    ///    "Conflict target has to be provided for a DO UPDATE
+    ///    operation when the table has multiple UNIQUE/PRIMARY KEY
+    ///    constraints" because the rewrite is ambiguous.
     ///
-    /// Fix: keep the id stable. Same logical dataset (same
-    /// workspace_id + path) = same id forever, regardless of how
-    /// many times rescan runs. The conflict clause now updates
-    /// every column EXCEPT id.
+    /// Bulletproof fix: explicit DELETE + INSERT inside a single
+    /// transaction. The DELETE targets BOTH possible conflict
+    /// rows (id match OR (workspace_id, path) match), so the INSERT
+    /// is guaranteed clean. Atomic so no half-written state if the
+    /// app crashes mid-call. Slower than ON CONFLICT but predictable
+    /// across DuckDB versions.
     pub fn upsert_dataset(&mut self, dataset: &CachedDataset) -> Result<()> {
         let tags_json = serde_json::to_string(&dataset.tags)
             .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
 
-        self.conn.execute(
+        let tx = self.conn.transaction()
+            .map_err(|e| AgentError::Database(format!("Failed to start txn: {}", e)))?;
+
+        // Clear any existing row that would conflict — match on
+        // either the PK or the composite UNIQUE.
+        tx.execute(
+            r#"
+            DELETE FROM datasets
+            WHERE id = ?
+               OR (workspace_id = ? AND path = ?)
+            "#,
+            params![&dataset.id, &dataset.workspace_id, &dataset.path],
+        ).map_err(|e| AgentError::Database(format!("Failed to clear conflicts: {}", e)))?;
+
+        tx.execute(
             r#"
             INSERT INTO datasets (
                 id, workspace_id, name, path, file_format,
                 size_bytes, schema_json, tags, description, last_synced
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(workspace_id, path) DO UPDATE SET
-                name = excluded.name,
-                file_format = excluded.file_format,
-                size_bytes = excluded.size_bytes,
-                schema_json = excluded.schema_json,
-                tags = excluded.tags,
-                description = excluded.description,
-                last_synced = excluded.last_synced
             "#,
             params![
                 &dataset.id,
@@ -149,7 +163,10 @@ impl MetadataCache {
                 &dataset.description,
                 dataset.last_synced.to_rfc3339(),
             ],
-        ).map_err(|e| AgentError::Database(format!("Failed to upsert dataset: {}", e)))?;
+        ).map_err(|e| AgentError::Database(format!("Failed to insert dataset: {}", e)))?;
+
+        tx.commit()
+            .map_err(|e| AgentError::Database(format!("Failed to commit upsert: {}", e)))?;
 
         Ok(())
     }
