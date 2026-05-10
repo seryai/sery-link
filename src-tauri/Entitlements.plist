@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Sery Link entitlements — macOS Hardened Runtime opt-outs.
+
+      Why disable library validation?
+      DuckDB downloads + dlopens its own extensions at runtime
+      (httpfs, parquet, etc.) into ~/.duckdb/extensions/. Those
+      extensions are signed by DuckDB Labs, not by us. Hardened
+      Runtime's default library validation refuses to load any dylib
+      whose Team ID differs from the host process — so the app
+      crashes with:
+
+        "code signature in '...httpfs.duckdb_extension' not valid for
+         use in process: mapping process and mapped file (non-platform)
+         have different Team IDs"
+
+      Disabling library validation lets DuckDB's signed-but-not-by-us
+      extensions load. The dylibs are still signed (just by a
+      different identity); they just can't be unsigned ad-hoc.
+
+      Why allow-unsigned-executable-memory?
+      Some DuckDB extensions JIT-compile query plans to native code
+      and need to allocate executable memory. Hardened Runtime would
+      otherwise SIGKILL the process on the first JIT.
+
+      Why allow-dyld-environment-variables?
+      pdfium / pandoc resources resolve relative paths via
+      DYLD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH set by Tauri's
+      bundling. Hardened Runtime ignores those by default.
+
+      Network entitlements: the app talks to api.sery.ai + cloud
+      storage endpoints, so network.client is required.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Network access — required for cloud-storage sources, the
+         WebSocket tunnel back to api.sery.ai, and the auto-updater. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- File access — Sery Link is a "browse the user's files"
+         desktop app, so user-selected and downloads/pictures/movies
+         entitlements are part of the core capability. -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+</dict>
+</plist>
