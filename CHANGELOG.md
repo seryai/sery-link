@@ -5,6 +5,58 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] — 2026-05-10 — Brand alignment
+
+Patch release. Visual refresh that aligns Sery Link's chrome with the
+website + dashboard. No behavior changes.
+
+### Changed
+
+- **App icons regenerated** from the canonical 8-petal mark
+  (`src/assets/sery-mark.svg`). White mark on a #5b3ea3 → #7c3aed
+  purple gradient, with 18.75% inset matching Apple HIG / Material
+  guidance. The full platform family — `icon.icns` (macOS),
+  `icon.ico` (Windows), 32/64/128/128@2x PNGs (Linux), the iOS app
+  icon family (15 files), Android launcher mipmaps (15 files), and
+  the Microsoft Store / Windows tile family — all regenerated via
+  `cargo tauri icon`.
+- **In-app logo** (`src/assets/sery-logo.svg`) — drop-in replacement.
+  The OnboardingWizard renders the new mark in solid #5b3ea3 without
+  any code change.
+- **System tray icon** (`tray-{22,44,64}.png`) — monochrome black
+  silhouette of the new mark, ready for macOS template treatment
+  (`icon_as_template=true` auto-tints for dark/light mode).
+- **Titlebar icon family** (`titlebar-{16,32,64,128}.png`) — solid
+  #5b3ea3 mark on transparent. Used by OS surfaces that provide
+  their own chrome (window title bar accents, notification badges).
+- **Window icon** (`window-icon.png`) — full-color composite at
+  256×256, matches the dock icon at smaller scales.
+- **Dev-server preview** title and favicon updated. `index.html`
+  title `Tauri + React + Typescript` → `Sery Link`; favicon now
+  points at the Sery purple `/favicon.svg`.
+- **Removed** vestigial `public/vite.svg` + `public/tauri.svg`
+  (create-tauri-app template artifacts; never referenced by app
+  code).
+- **Reproducible build script.** `scripts/build-brand-assets.mjs`
+  regenerates every hand-rendered icon (in-app logo + Tauri 1024
+  source PNG + window-icon + tray-{22,44,64} + titlebar-{16,32,
+  64,128}) from the single canonical mark SVG. After a brand-color
+  shift, re-run with:
+  ```
+  node scripts/build-brand-assets.mjs
+  cargo tauri icon src-tauri/icons/_source-1024.png
+  ```
+- `sharp` added as a devDependency for the build script.
+
+### Fixed
+
+- **Test build green again.** Four `WatchedFolder` literal-construction
+  sites in test fixtures (`export_import.rs:222/298/325`,
+  `sources.rs:375`) were missing the `last_synced_to_workspace_id`
+  field that landed during the catch-up-sync work. Production
+  construction sites had been updated; the test-only ones broke
+  `cargo test` compilation on CI. Plugged with `None` defaults.
+
 ## [0.7.6] — 2026-05-06 — Catch-up sync visibility + privacy deep-link
 
 Patch release. Two small follow-ups to the catch-up sync flow that
