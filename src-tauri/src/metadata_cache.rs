@@ -94,7 +94,30 @@ impl MetadataCache {
         Ok(())
     }
 
-    /// Upsert a single dataset into the cache
+    /// Upsert a single dataset into the cache.
+    ///
+    /// CRITICAL: the conflict clause must NOT update `id`.
+    ///
+    /// `id` is the PRIMARY KEY. Updating it on conflict triggers an
+    /// internal "delete from index + insert into index" path in
+    /// DuckDB. Under concurrent rescans of the same folder (e.g. two
+    /// rescan_folder calls racing — UI double-click, watcher
+    /// retrigger, manual scan + autoscan), two separate UUIDs both
+    /// hit the unique (workspace_id, path) constraint, each tries
+    /// to update the existing row's id, and the index-rebuild path
+    /// throws a FatalException with:
+    ///
+    ///   INTERNAL Error: Failed to append to PRIMARY_datasets_0:
+    ///   Constraint Error: PRIMARY KEY or UNIQUE constraint violation:
+    ///   duplicate key "<workspace_id>::<path>"
+    ///
+    /// FatalException crosses the C++ → Rust FFI boundary as an
+    /// unhandled exception → process terminate(). The whole app dies.
+    ///
+    /// Fix: keep the id stable. Same logical dataset (same
+    /// workspace_id + path) = same id forever, regardless of how
+    /// many times rescan runs. The conflict clause now updates
+    /// every column EXCEPT id.
     pub fn upsert_dataset(&mut self, dataset: &CachedDataset) -> Result<()> {
         let tags_json = serde_json::to_string(&dataset.tags)
             .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
@@ -106,7 +129,6 @@ impl MetadataCache {
                 size_bytes, schema_json, tags, description, last_synced
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(workspace_id, path) DO UPDATE SET
-                id = excluded.id,
                 name = excluded.name,
                 file_format = excluded.file_format,
                 size_bytes = excluded.size_bytes,
