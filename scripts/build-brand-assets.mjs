@@ -55,18 +55,36 @@ function inAppLogoSvg(paths) {
 </svg>`;
 }
 
-// Tauri app icon source — 1024×1024, gradient purple bg, white
-// mark inset by ~18% (Apple HIG / Material design sweet spot).
+// Tauri app icon source — follows Apple's macOS app icon template:
+// 1024×1024 canvas with the rounded-rect body inset to 824×824
+// (100px transparent margin on each side). Without this margin the
+// app icon visibly outsizes Apple's own apps in the Dock and
+// Launchpad — every other app on macOS follows this template.
+//
+//   Canvas:   1024×1024
+//   Body:     824×824 centered (offset 100,100)
+//   Corner:   rx=184 (~22% of body, matches Apple's iOS-style
+//             rounded-rect proportion)
+//   Mark:     scaled to 60% of body (~494×494), centered in body
+//             → 18.75% padding within the body (HIG sweet spot)
 function tauriIconSourceSvg(paths) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  // Body dimensions
+  const C = 1024; // canvas
+  const M = 100; // margin on each side
+  const B = C - M * 2; // body = 824
+  const BR = 184; // body corner radius
+  // Mark scale + position: 60% of body, centered
+  const MARK_SCALE = (B * 0.6) / 1024; // ≈ 0.483
+  const MARK_OFFSET = M + (B - 1024 * MARK_SCALE) / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${C}" height="${C}" viewBox="0 0 ${C} ${C}">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="${M}" y1="${M}" x2="${M + B}" y2="${M + B}" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="${PURPLE}"/>
       <stop offset="1" stop-color="${PURPLE_LIGHT}"/>
     </linearGradient>
   </defs>
-  <rect width="1024" height="1024" rx="200" fill="url(#bg)"/>
-  <g transform="translate(192 192) scale(0.625)" fill="${WHITE}">
+  <rect x="${M}" y="${M}" width="${B}" height="${B}" rx="${BR}" fill="url(#bg)"/>
+  <g transform="translate(${MARK_OFFSET} ${MARK_OFFSET}) scale(${MARK_SCALE})" fill="${WHITE}">
     ${paths.join('\n    ')}
   </g>
 </svg>`;
