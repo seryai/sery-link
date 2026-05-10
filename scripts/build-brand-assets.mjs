@@ -84,6 +84,19 @@ function trayIconSvg(paths) {
 </svg>`;
 }
 
+// Titlebar icon — solid purple mark on transparent bg. Appears
+// in places where the OS provides the surrounding chrome (window
+// title bar accent, notification badge, etc) — so we ship the
+// mark only, no background. Brand-color #5b3ea3 reads on both
+// light and dark system chrome.
+function titlebarIconSvg(paths) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <g fill="${PURPLE}">
+    ${paths.join('\n    ')}
+  </g>
+</svg>`;
+}
+
 async function main() {
   console.log('Loading mark paths…');
   const paths = await loadMarkPaths();
@@ -115,15 +128,37 @@ async function main() {
   await writeFile(join(ROOT, 'src-tauri', 'icons', 'window-icon.png'), winPng);
   console.log(`  wrote (${(winPng.byteLength / 1024).toFixed(1)} KB)`);
 
-  // 4. Tray icon — monochrome, 88×88 (2× retina), template-style
-  //    black on transparent. macOS handles dark/light mode tinting.
-  console.log('Rendering src-tauri/icons/tray-44x44.png…');
-  const trayPng = await sharp(Buffer.from(trayIconSvg(paths)), { density: 256 })
-    .resize(88, 88)
-    .png()
-    .toBuffer();
-  await writeFile(join(ROOT, 'src-tauri', 'icons', 'tray-44x44.png'), trayPng);
-  console.log(`  wrote (${(trayPng.byteLength / 1024).toFixed(1)} KB)`);
+  // 4. Tray icon family — monochrome black mark on transparent,
+  //    template-style. macOS auto-tints per dark/light mode.
+  //    Three sizes: 22 (1×), 44 (2× retina), 64 (3× / display
+  //    densities). Only tray-44 is currently include_bytes!()'d
+  //    by tray.rs but the others ship for fallback / future use.
+  const traySrc = trayIconSvg(paths);
+  for (const px of [22, 44, 64]) {
+    const out = `tray-${px}x${px}.png`;
+    console.log(`Rendering src-tauri/icons/${out}…`);
+    const buf = await sharp(Buffer.from(traySrc), { density: 256 })
+      .resize(px * 2, px * 2)
+      .png()
+      .toBuffer();
+    await writeFile(join(ROOT, 'src-tauri', 'icons', out), buf);
+    console.log(`  wrote (${(buf.byteLength / 1024).toFixed(1)} KB)`);
+  }
+
+  // 5. Titlebar icon family — solid purple mark on transparent.
+  //    Used by some OS surfaces that provide their own chrome
+  //    (window title bar accents, notification badges).
+  const titlebarSrc = titlebarIconSvg(paths);
+  for (const px of [16, 32, 64, 128]) {
+    const out = `titlebar-${px}x${px}.png`;
+    console.log(`Rendering src-tauri/icons/${out}…`);
+    const buf = await sharp(Buffer.from(titlebarSrc), { density: 384 })
+      .resize(px, px)
+      .png()
+      .toBuffer();
+    await writeFile(join(ROOT, 'src-tauri', 'icons', out), buf);
+    console.log(`  wrote (${(buf.byteLength / 1024).toFixed(1)} KB)`);
+  }
 
   console.log('\nNext step:');
   console.log('  cargo tauri icon src-tauri/icons/_source-1024.png');
