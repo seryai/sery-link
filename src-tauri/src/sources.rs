@@ -378,6 +378,7 @@ mod tests {
             max_file_size_mb: 1024,
             last_scan_at: None,
             last_scan_stats: None,
+            last_synced_to_workspace_id: None,
             mcp_enabled: false,
         }
     }
