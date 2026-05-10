@@ -12,8 +12,44 @@
 use duckdb::{Connection, params};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use std::sync::{Mutex, OnceLock};
 use crate::error::{AgentError, Result};
 use crate::schema_diff::{self, SchemaDiff};
+
+/// Process-wide write lock for the metadata cache.
+///
+/// Every command that writes (`upsert_dataset`, `upsert_many`, etc.)
+/// acquires this mutex before opening its own DuckDB transaction.
+/// Reads don't lock — DuckDB's MVCC handles read-write concurrency
+/// fine.
+///
+/// Why this is needed:
+///
+/// Each Tauri command in commands.rs creates its own
+/// `MetadataCache::new()` (its own DuckDB connection, its own
+/// transactions) — see the comment at line 3173 of commands.rs. So
+/// when two `rescan_folder` calls run concurrently (UI double-click,
+/// auto-scan + manual scan, watcher retrigger), each transaction
+/// independently does DELETE-by-key + INSERT-with-key, then commits.
+///
+/// At the second commit, DuckDB sees the first commit's row, raises
+/// "Failed to append to PRIMARY_datasets_0: duplicate key" during
+/// index validation, then crashes inside its rollback path with a
+/// FatalException — a C++ exception that crosses the FFI boundary
+/// unhandled and terminates the whole process. Watcher, tray, and
+/// window all die.
+///
+/// Serializing writes through this single mutex makes the second
+/// transaction wait until the first commits. By the time the second
+/// runs, its DELETE finds the first's row and removes it cleanly,
+/// then INSERT succeeds. No race, no FatalException.
+///
+/// Reads do NOT acquire this lock — DuckDB handles concurrent
+/// reads vs. one writer fine.
+fn upsert_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedDataset {
@@ -127,6 +163,16 @@ impl MetadataCache {
     /// app crashes mid-call. Slower than ON CONFLICT but predictable
     /// across DuckDB versions.
     pub fn upsert_dataset(&mut self, dataset: &CachedDataset) -> Result<()> {
+        // Process-wide write lock — see upsert_lock() docs at the
+        // top of this module. Without this, concurrent rescans
+        // commit overlapping inserts and DuckDB crashes with a
+        // FatalException during index validation. Lock held for
+        // the duration of the transaction; released on function
+        // exit (including error paths via RAII).
+        let _guard = upsert_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let tags_json = serde_json::to_string(&dataset.tags)
             .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
 
