@@ -5,6 +5,81 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] — 2026-05-10 — Crash + CI fixes, brand polish
+
+Patch release. Fixes a recurring crash that killed the app during
+folder rescans, restores macOS DuckDB extension loading, brings the
+app icon onto Apple's standard size template, fixes red CI, and
+brand-aligns purple to match the website + dashboard.
+
+### Fixed
+
+- **Rescan no longer crashes the app.** Concurrent `rescan_folder`
+  calls (UI double-click, auto-scan + manual scan, watcher
+  retrigger) raced two DuckDB transactions writing the same
+  metadata row. The second commit hit DuckDB's index-validation
+  path and threw a FatalException — a C++ exception that crossed
+  the FFI boundary unhandled and `terminate()`'d the whole
+  process. Tray, watcher, window all died.
+
+  Three layered fixes:
+  1. `metadata_cache::upsert_dataset` no longer mutates the
+     PRIMARY KEY on conflict (which was triggering DuckDB's
+     index-rebuild path)
+  2. Switched from `ON CONFLICT(...) DO UPDATE` to explicit
+     `DELETE + INSERT` inside a transaction (DuckDB 1.1 rejects
+     `INSERT OR REPLACE` when the table has multiple unique
+     constraints)
+  3. Added a process-wide static `Mutex` around upsert calls
+     so concurrent rescans serialize their commits instead of
+     racing them
+  4. `upsert_many` reuses a single transaction for the whole
+     batch instead of opening one per row — fewer commits to
+     contend, much faster bulk syncs
+
+- **DuckDB extensions actually load on macOS.** Sync was crashing
+  on first cloud-storage source with `code signature ... not valid
+  for use in process: mapping process and mapped file (non-platform)
+  have different Team IDs`. Hardened Runtime's library validation
+  refuses any dylib whose Team ID differs from the host process,
+  but DuckDB downloads its own httpfs / parquet extensions signed
+  by DuckDB Labs. Added an `Entitlements.plist` that opts out:
+  `cs.disable-library-validation`, `cs.allow-unsigned-executable-
+  memory`, `cs.allow-dyld-environment-variables`,
+  `network.client`, `files.user-selected.read-only`. Wired into
+  `tauri.conf.json` `bundle.macOS.entitlements` so codesign picks
+  it up for both ad-hoc dev and notarized release builds.
+
+- **CI builds green.** Two fixes:
+  1. `scan_cache` tests use a per-test `tempfile::TempDir` so
+     concurrent test runs and stale `*.db.wal` files don't
+     trip "Table already exists" during DuckDB WAL replay
+  2. `actions/checkout`, `actions/setup-node`, `pnpm/action-setup`
+     bumped from `@v4` → `@v5` (Node 20 deprecation in mid-2026)
+
+### Changed
+
+- **App icon follows Apple's macOS Icon Template.** The 1024×1024
+  source PNG used to fill edge-to-edge, making the icon visibly
+  outsize every other app in the Dock + Launchpad. Now: 824×824
+  rounded body inset 100px on each side, matching the system
+  template every Apple-shipped app uses. Mark scaled to 60% of
+  the body (≈18.75% padding inside, HIG sweet spot). Regenerated
+  the entire platform icon family via `cargo tauri icon` (icns +
+  ico + 32/64/128/128@2x + iOS app-icon family + Android mipmap
+  launchers + Microsoft Store / Windows tile family). Tray +
+  titlebar icons unchanged (mark-only on transparent bg, no
+  rounded body).
+
+- **Brand purple aligned across the in-app UI.** Audit found 400+
+  uses of Tailwind's default `purple-{500..900}` (`#9333ea`-ish
+  bright violet) and zero uses of the canonical brand `#5b3ea3`.
+  Override Tailwind's `purple` palette in `tailwind.config.js` so
+  every existing `bg-purple-600` etc. resolves to brand-aligned
+  values without changing JSX. Now matches the website + dashboard.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
 ## [0.7.7] — 2026-05-10 — Brand alignment
 
 Patch release. Visual refresh that aligns Sery Link's chrome with the
