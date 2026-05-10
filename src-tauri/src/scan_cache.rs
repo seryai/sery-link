@@ -79,16 +79,24 @@ pub struct CachedEntry {
 }
 
 impl ScanCache {
-    /// Open or create the persistent scan cache DB.
+    /// Open or create the persistent scan cache DB at the platform's
+    /// default data dir (`dirs::data_local_dir()/sery/scan_cache.db`).
     pub fn new() -> Result<Self> {
         let cache_dir = dirs::data_local_dir()
             .ok_or_else(|| AgentError::Config("no local data dir".to_string()))?
             .join("sery");
         fs::create_dir_all(&cache_dir)
             .map_err(|e| AgentError::Config(format!("create cache dir: {}", e)))?;
+        Self::open_at(&cache_dir.join("scan_cache.db"))
+    }
 
-        let db_path = cache_dir.join("scan_cache.db");
-        let conn = Connection::open(&db_path)
+    /// Open or create the cache DB at an arbitrary path. Tests use
+    /// this with a `tempfile::TempDir` so each test gets its own
+    /// isolated DB — the prior shared-on-disk approach broke on CI
+    /// when DuckDB's WAL replay tripped over an existing scan_cache
+    /// table on a stale `*.db.wal` file.
+    pub fn open_at(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path)
             .map_err(|e| AgentError::Database(format!("open scan cache: {}", e)))?;
 
         conn.execute(
@@ -352,13 +360,21 @@ mod tests {
         }
     }
 
-    // Tests share the real on-disk cache because ScanCache::new() resolves
-    // its path from dirs::data_local_dir(). Each test uses a unique
-    // folder_path so the rows never collide. Cleanup runs at the end.
+    // Each test gets its own temp DB via `fresh_cache()` so concurrent
+    // test runs don't share state. The prior "share the real data dir,
+    // use unique folder_path keys" approach worked for serial tests but
+    // broke on CI when DuckDB's WAL replay saw a stale scan_cache.db.wal
+    // and tried to recreate the existing table.
+    fn fresh_cache() -> (ScanCache, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = ScanCache::open_at(&dir.path().join("scan_cache.db"))
+            .expect("open cache");
+        (cache, dir)
+    }
 
     #[test]
     fn put_then_get_returns_exact_payload() {
-        let cache = ScanCache::new().expect("open cache");
+        let (cache, _dir) = fresh_cache();
         let folder = "/fake/folder/scan_cache_roundtrip";
         let rel = "a.parquet";
 
@@ -375,7 +391,7 @@ mod tests {
 
     #[test]
     fn mtime_change_invalidates() {
-        let cache = ScanCache::new().expect("open cache");
+        let (cache, _dir) = fresh_cache();
         let folder = "/fake/folder/scan_cache_mtime";
         let rel = "b.parquet";
 
@@ -388,7 +404,7 @@ mod tests {
 
     #[test]
     fn size_change_invalidates() {
-        let cache = ScanCache::new().expect("open cache");
+        let (cache, _dir) = fresh_cache();
         let folder = "/fake/folder/scan_cache_size";
         let rel = "c.parquet";
 
@@ -403,7 +419,7 @@ mod tests {
 
     #[test]
     fn put_overwrites_previous_entry() {
-        let cache = ScanCache::new().expect("open cache");
+        let (cache, _dir) = fresh_cache();
         let folder = "/fake/folder/scan_cache_overwrite";
         let rel = "d.parquet";
 
@@ -424,7 +440,7 @@ mod tests {
 
     #[test]
     fn invalidate_folder_drops_all_rows_for_that_folder() {
-        let cache = ScanCache::new().expect("open cache");
+        let (cache, _dir) = fresh_cache();
         let folder = "/fake/folder/scan_cache_invalidate";
 
         cache.put(folder, "one.parquet", 1, 1, &sample_metadata()).unwrap();
