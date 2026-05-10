@@ -2327,17 +2327,15 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         if let Some(workspace_id) = config_for_cache.agent.workspace_id.as_deref() {
             if let Ok(mut cache) = MetadataCache::new() {
                 let now = chrono::Utc::now();
-                for ds in &datasets {
+                let cached_list: Vec<_> = datasets.iter().map(|ds| {
                     let schema_json = serde_json::to_string(&ds.schema).ok();
                     let name = std::path::Path::new(&ds.relative_path)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or(&ds.relative_path)
                         .to_string();
-                    // Deterministic local-only id: UNIQUE(workspace_id, path)
-                    // is the real key; this id is a stable display handle.
                     let id = format!("{}::{}", workspace_id, ds.relative_path);
-                    let cached = crate::metadata_cache::CachedDataset {
+                    crate::metadata_cache::CachedDataset {
                         id,
                         workspace_id: workspace_id.to_string(),
                         name,
@@ -2348,9 +2346,9 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                         tags: Vec::new(),
                         description: None,
                         last_synced: now,
-                    };
-                    let _ = cache.upsert_dataset(&cached);
-                }
+                    }
+                }).collect();
+                let _ = cache.upsert_many(&cached_list);
             }
         }
     }

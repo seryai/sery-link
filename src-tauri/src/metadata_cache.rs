@@ -219,9 +219,57 @@ impl MetadataCache {
 
     /// Bulk upsert datasets (for full sync from backend)
     pub fn upsert_many(&mut self, datasets: &[CachedDataset]) -> Result<()> {
-        for dataset in datasets {
-            self.upsert_dataset(dataset)?;
+        if datasets.is_empty() {
+            return Ok(());
         }
+
+        // Single lock for the entire batch
+        let _guard = upsert_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let tx = self.conn.transaction()
+            .map_err(|e| AgentError::Database(format!("Failed to start batch txn: {}", e)))?;
+
+        for dataset in datasets {
+            let tags_json = serde_json::to_string(&dataset.tags)
+                .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
+
+            // Clear conflicts for this specific row
+            tx.execute(
+                r#"
+                DELETE FROM datasets
+                WHERE id = ?
+                   OR (workspace_id = ? AND path = ?)
+                "#,
+                params![&dataset.id, &dataset.workspace_id, &dataset.path],
+            ).map_err(|e| AgentError::Database(format!("Failed to clear batch conflict: {}", e)))?;
+
+            tx.execute(
+                r#"
+                INSERT INTO datasets (
+                    id, workspace_id, name, path, file_format,
+                    size_bytes, schema_json, tags, description, last_synced
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+                params![
+                    &dataset.id,
+                    &dataset.workspace_id,
+                    &dataset.name,
+                    &dataset.path,
+                    &dataset.file_format,
+                    dataset.size_bytes,
+                    &dataset.schema_json,
+                    &tags_json,
+                    &dataset.description,
+                    dataset.last_synced.to_rfc3339(),
+                ],
+            ).map_err(|e| AgentError::Database(format!("Failed to insert batch dataset: {}", e)))?;
+        }
+
+        tx.commit()
+            .map_err(|e| AgentError::Database(format!("Failed to commit batch upsert: {}", e)))?;
+
         Ok(())
     }
 
