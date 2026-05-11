@@ -1,3 +1,4 @@
+mod analytics;
 mod audit;
 mod auth;
 mod commands;
@@ -180,6 +181,21 @@ pub fn run() {
             // user is disconnected; logs per-folder failures to stderr
             // without bothering the user.
             gdrive_refresh::start_refresh_loop(app.handle().clone());
+
+            // Analytics flusher + heartbeat: ships anonymous daily
+            // pings (install_id + version + platform — nothing else)
+            // to analytics.sery.ai. The flusher drains the on-disk
+            // queue every 60s; the heartbeat fires a fresh
+            // daily_ping every 12h while running so users who keep
+            // Sery Link open for days still register as DAU. See
+            // analytics.rs for the full privacy boundary.
+            analytics::spawn_flusher();
+            // Launch ping — one per process start. Covers the
+            // "user launches, quits 5 minutes later" case that the
+            // 12h heartbeat would miss.
+            tokio::spawn(async {
+                analytics::record_ping().await;
+            });
 
             Ok(())
         })

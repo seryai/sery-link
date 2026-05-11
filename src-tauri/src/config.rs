@@ -158,6 +158,17 @@ pub struct CloudConfig {
     pub websocket_url: String,
     #[serde(default = "default_web_url")]
     pub web_url: String,
+    /// Analytics ingest endpoint. Distinct from `api_url` so the
+    /// privacy story can say "telemetry goes to analytics.sery.ai,
+    /// your data goes to api.sery.ai" — and that statement is
+    /// literally true (different service, different uvicorn, can
+    /// even be different VM later).
+    ///
+    /// Compile-time override via SERY_ANALYTICS_URL for dev. Old
+    /// configs without this field deserialize fine because of
+    /// `#[serde(default)]` → falls back to the production URL.
+    #[serde(default = "default_analytics_url")]
+    pub analytics_url: String,
 }
 
 // Cloud endpoint defaults bake into the binary at compile time.
@@ -189,6 +200,12 @@ fn default_websocket_url() -> String {
 fn default_web_url() -> String {
     option_env!("SERY_WEB_URL")
         .unwrap_or("https://app.sery.ai")
+        .to_string()
+}
+
+fn default_analytics_url() -> String {
+    option_env!("SERY_ANALYTICS_URL")
+        .unwrap_or("https://analytics.sery.ai")
         .to_string()
 }
 
@@ -263,6 +280,34 @@ pub struct AppConfig {
     /// be removed in v0.7.0.
     #[serde(default)]
     pub byok_models: std::collections::HashMap<String, String>,
+    /// Whether to send anonymous install-count + DAU pings to
+    /// analytics.sery.ai. Default ON. Off entirely silences
+    /// `analytics::record_event` (it returns immediately without
+    /// queuing) so toggling this stops both new pings AND the
+    /// periodic flusher. Existing queued pings still drain on next
+    /// launch when the user flips it back on; deleting
+    /// `~/.seryai/events.jsonl` discards buffered ones.
+    ///
+    /// What we collect when ON: nothing but `install_id`, app
+    /// version, and OS string. See `analytics.rs` for the full
+    /// list and TELEMETRY.md for the policy.
+    #[serde(default = "default_true")]
+    pub telemetry_enabled: bool,
+    /// Random per-install UUID, generated on first config load and
+    /// then never changed. Used as the sole identifier in analytics
+    /// pings to count installs + DAU. Deliberately NOT tied to
+    /// workspace_id / user_id — those would let us reconstruct a
+    /// per-user activity timeline, which the brand promise rules
+    /// out. Reinstalling Sery Link (or clearing
+    /// `~/.seryai/config.json`) generates a fresh id; that's the
+    /// intended way for a user to "reset" their identity in our
+    /// analytics.
+    ///
+    /// Field is Option<String> so old configs deserialize without
+    /// the field present; `Config::load` fills it in on first read
+    /// + saves back to disk.
+    #[serde(default)]
+    pub install_id: Option<String>,
 }
 
 fn default_theme() -> String {
@@ -286,6 +331,8 @@ impl Default for AppConfig {
             schema_change_toasts_enabled: true,
             selected_byok_provider: None,
             byok_models: std::collections::HashMap::new(),
+            telemetry_enabled: true,
+            install_id: None,
         }
     }
 }
@@ -316,6 +363,7 @@ impl Default for Config {
                 api_url: default_api_url(),
                 websocket_url: default_websocket_url(),
                 web_url: default_web_url(),
+                analytics_url: default_analytics_url(),
             },
             sync: SyncConfig {
                 interval_seconds: 300,
@@ -344,6 +392,19 @@ impl Config {
         };
 
         config.migrate_sources_if_needed();
+
+        // First-run install_id minting. The save below persists it so
+        // the next load reads the same id. Failures here are non-fatal
+        // — analytics gracefully degrades to "no id, drop the ping"
+        // rather than blocking config load. Done in load() rather than
+        // analytics.rs so the id is available to other callers
+        // (settings UI displays it) without forcing them through
+        // analytics.
+        if config.app.install_id.is_none() {
+            config.app.install_id = Some(uuid::Uuid::new_v4().to_string());
+            let _ = config.save();
+        }
+
         Ok(config)
     }
 
