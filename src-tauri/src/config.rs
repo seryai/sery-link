@@ -158,6 +158,17 @@ pub struct CloudConfig {
     pub websocket_url: String,
     #[serde(default = "default_web_url")]
     pub web_url: String,
+    /// Analytics ingest endpoint. Distinct from `api_url` so the
+    /// privacy story can say "telemetry goes to analytics.sery.ai,
+    /// your data goes to api.sery.ai" — and that statement is
+    /// literally true (different service, different uvicorn, can
+    /// even be different VM later).
+    ///
+    /// Compile-time override via SERY_ANALYTICS_URL for dev. Old
+    /// configs without this field deserialize fine because of
+    /// `#[serde(default)]` → falls back to the production URL.
+    #[serde(default = "default_analytics_url")]
+    pub analytics_url: String,
 }
 
 // Cloud endpoint defaults bake into the binary at compile time.
@@ -189,6 +200,12 @@ fn default_websocket_url() -> String {
 fn default_web_url() -> String {
     option_env!("SERY_WEB_URL")
         .unwrap_or("https://app.sery.ai")
+        .to_string()
+}
+
+fn default_analytics_url() -> String {
+    option_env!("SERY_ANALYTICS_URL")
+        .unwrap_or("https://analytics.sery.ai")
         .to_string()
 }
 
@@ -263,6 +280,17 @@ pub struct AppConfig {
     /// be removed in v0.7.0.
     #[serde(default)]
     pub byok_models: std::collections::HashMap<String, String>,
+    /// Whether to send product-analytics events (scan_started,
+    /// query_executed, …) to analytics.sery.ai. Default ON — we want
+    /// to know how the product gets used. Off entirely silences
+    /// `analytics::record_event` (it returns immediately without
+    /// queuing) so toggling this stops both new events from being
+    /// recorded AND the periodic flush from running. Existing
+    /// queued events still drain on next launch when the user flips
+    /// it back on; deleting `~/.seryai/events.jsonl` is the way to
+    /// also discard buffered events.
+    #[serde(default = "default_true")]
+    pub telemetry_enabled: bool,
 }
 
 fn default_theme() -> String {
@@ -286,6 +314,7 @@ impl Default for AppConfig {
             schema_change_toasts_enabled: true,
             selected_byok_provider: None,
             byok_models: std::collections::HashMap::new(),
+            telemetry_enabled: true,
         }
     }
 }
@@ -316,6 +345,7 @@ impl Default for Config {
                 api_url: default_api_url(),
                 websocket_url: default_websocket_url(),
                 web_url: default_web_url(),
+                analytics_url: default_analytics_url(),
             },
             sync: SyncConfig {
                 interval_seconds: 300,

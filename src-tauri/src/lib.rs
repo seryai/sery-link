@@ -1,3 +1,4 @@
+mod analytics;
 mod audit;
 mod auth;
 mod commands;
@@ -181,6 +182,25 @@ pub fn run() {
             // without bothering the user.
             gdrive_refresh::start_refresh_loop(app.handle().clone());
 
+            // Analytics flusher: drains ~/.seryai/events.jsonl to
+            // analytics.sery.ai every 60s (or sooner if the queue
+            // grows past 50 events). No-op when telemetry_enabled =
+            // false or no pair token exists — see analytics.rs.
+            analytics::spawn_flusher();
+            // App-lifecycle event: useful for measuring run duration,
+            // crash-free sessions, etc. Fired in the setup callback
+            // (so it runs once per process), not on window show/hide.
+            tokio::spawn(async {
+                analytics::record_event(
+                    "app_started",
+                    serde_json::json!({
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "platform": std::env::consts::OS,
+                    }),
+                )
+                .await;
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -335,6 +355,13 @@ pub fn run() {
             commands::get_storage_info,
             commands::clear_gdrive_cache,
             commands::get_gdrive_skipped,
+            // Frontend-emitted product-analytics events. Most events
+            // are recorded at the Rust source where they happen;
+            // this command exists for UI-only events that don't
+            // have a Rust counterpart (settings views, picker
+            // opens, etc.). See analytics.rs for the privacy
+            // boundary rules.
+            commands::record_event,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

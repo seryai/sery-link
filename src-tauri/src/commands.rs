@@ -8,6 +8,7 @@
 //!   * Commands that mutate config always go through `Config::load → mutate →
 //!     save` so every change is durable.
 
+use crate::analytics;
 use crate::audit;
 use crate::auth::{self, AgentToken};
 use crate::config::{AuthMode, Config};
@@ -159,6 +160,11 @@ pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, Str
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
+    analytics::record_event(
+        "machine_paired",
+        serde_json::json!({"flow": "bootstrap"}),
+    )
+    .await;
     Ok(token)
 }
 
@@ -170,7 +176,26 @@ pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentTok
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
+    analytics::record_event(
+        "machine_paired",
+        serde_json::json!({"flow": "workspace_key"}),
+    )
+    .await;
     Ok(token)
+}
+
+/// Generic Tauri command — the frontend calls this to emit a product-
+/// analytics event. Use sparingly: prefer adding the call at the
+/// source in Rust where the event actually happens. The frontend
+/// hook exists mostly for UI-only events ("folder_picker_opened",
+/// "settings_pane_viewed") that have no Rust counterpart.
+///
+/// `props` must be a JSON object. The server caps props at 4 KB and
+/// rejects whitespace in event names — see app/schemas/analytics.py.
+#[tauri::command]
+pub async fn record_event(name: String, props: Value) -> Result<(), String> {
+    analytics::record_event(&name, props).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2137,6 +2162,18 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // Flip tray to "syncing" so users see the work kick off.
     crate::tray::set_state(&app, "syncing");
 
+    // Telemetry: scan started. Folder path stays local — we send only
+    // a hash so analytics can de-dupe per-folder rescans without
+    // exposing user file system structure. See analytics.rs for the
+    // privacy boundary rules.
+    analytics::record_event(
+        "scan_started",
+        serde_json::json!({
+            "folder_hash": short_hash(&folder_path),
+        }),
+    )
+    .await;
+
     // Tell the cloud we're starting. Best-effort: if the tunnel is
     // offline this is a no-op and the cloud will see "idle" until the
     // next reconnect. Either way the dashboard pill will update once
@@ -2528,7 +2565,46 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         .await;
     });
 
+    // Telemetry: scan finished. Outcome = success/cloud_sync_failed/
+    // local_only so BI can break down "what fraction of scans ever
+    // make it to the workspace" without us having to derive it from
+    // negative signals. `cloud_resp.synced` is the source of truth.
+    let outcome = if cloud_resp.get("synced").and_then(|v| v.as_bool()).unwrap_or(false) {
+        "success"
+    } else {
+        cloud_resp
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+    };
+    analytics::record_event(
+        "scan_completed",
+        serde_json::json!({
+            "folder_hash": short_hash(&folder_path),
+            "dataset_count": dataset_count,
+            "column_count": column_count,
+            "total_bytes": total_bytes,
+            "duration_ms": duration_ms,
+            "outcome": outcome,
+        }),
+    )
+    .await;
+
     Ok(cloud_resp)
+}
+
+/// Short stable hash of a string for telemetry. We use this on folder
+/// paths so BI can deduplicate "user rescanned the same folder N
+/// times" without sending the path itself. SHA-256 truncated to 16
+/// hex chars (64 bits) is plenty of entropy for the no-collision
+/// scale we operate at; it's not a security primitive — just an
+/// opaque stable id per-string.
+fn short_hash(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    let digest = h.finalize();
+    digest.iter().take(8).map(|b| format!("{:02x}", b)).collect()
 }
 
 /// 2/sec throttle for scan_status emissions. Returns true if at least
