@@ -86,35 +86,90 @@ pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<Age
         .map_err(|e| e.to_string())
 }
 
-/// Persist workspace_id + agent_id to disk so offline-capable paths
-/// (scanner cache, schema-diff) don't have to round-trip /v1/agent/info
-/// on every call. Non-fatal on save failure — token persistence already
-/// happened in the keyring, so auth is still complete.
+/// Persist workspace_id + agent_id + auth mode to disk so offline-
+/// capable paths (scanner cache, schema-diff) don't have to round-trip
+/// /v1/agent/info on every call, AND so `cloud_sync_enabled()` returns
+/// true on subsequent scans.
+///
+/// History note: pre-v0.7.9 we only persisted the IDs here, NOT the
+/// auth mode. The token went into the keyring, but `selected_auth_mode`
+/// stayed `None` (or `LocalOnly` for users who had clicked through the
+/// first-run picker). `cloud_sync_enabled()` requires
+/// `WorkspaceKey { .. }` explicitly, so every scan after a fresh pair
+/// silently skipped the metadata POST. The dashboard then showed the
+/// agent as online but with zero indexed datasets, and the only way
+/// out was the catch-up dialog (or `migrate_if_needed` on next launch).
+/// Persisting the auth mode here closes that gap on the pair itself.
+///
+/// Non-fatal on save failure — token persistence already happened in
+/// the keyring, so auth is still complete; sync just degrades to
+/// next-launch via `migrate_if_needed` until the user retriggers.
 fn persist_identity(workspace_id: &str, agent_id: &str) {
     if let Ok(mut config) = Config::load() {
         config.agent.workspace_id = Some(workspace_id.to_string());
         config.agent.agent_id = Some(agent_id.to_string());
+        // The actual key is in the OS keyring — same placeholder
+        // pattern as Config::migrate_if_needed. `cloud_sync_enabled`
+        // checks the *variant*, not the inner key value.
+        config.app.selected_auth_mode = Some(AuthMode::WorkspaceKey {
+            key: "<from_keyring>".to_string(),
+        });
         let _ = config.save();
+    }
+}
+
+/// Post-pair smoke test + heartbeat. POSTs an empty dataset list to
+/// `/v1/agent/sync-metadata` immediately after auth succeeds. Two
+/// reasons:
+///
+///   1. Smoke test the auth pipeline end-to-end. If the token wasn't
+///      written correctly, or the API URL is wrong, or the user is
+///      offline, we surface that here rather than waiting until the
+///      first folder scan (which could be hours later).
+///   2. Tell the backend "I'm here, currently empty." Without this,
+///      a freshly-paired agent with no folders watched stays silent
+///      until the user adds a folder. The /network/[id] page then
+///      reads "No datasets indexed on this machine yet" with no way
+///      to tell the difference between "paired, awaiting folders"
+///      and "paired but the sync pipeline is broken."
+///
+/// Best-effort: failures are logged + drop `CLOUD_OFFLINE` so the
+/// next folder scan won't blindly skip the POST. We never propagate
+/// the error — the pair itself is still successful (token is in
+/// the keyring), and the periodic scan loop will retry.
+async fn post_pair_heartbeat(api_url: &str, token: &str) {
+    match scanner::sync_metadata_to_cloud(api_url, token, Vec::new()).await {
+        Ok(_) => {
+            eprintln!("[post-pair] heartbeat sync ok");
+        }
+        Err(e) => {
+            eprintln!("[post-pair] heartbeat sync failed: {e}");
+            // Don't trip CLOUD_OFFLINE — this is the FIRST POST of
+            // a fresh pair. If it fails, the next folder scan should
+            // retry, not silently skip for the rest of the session.
+        }
     }
 }
 
 #[tauri::command]
 pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    let token = auth::bootstrap_workspace(display_name, config.cloud.api_url)
+    let token = auth::bootstrap_workspace(display_name, config.cloud.api_url.clone())
         .await
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
+    post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
     Ok(token)
 }
 
 #[tauri::command]
 pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    let token = auth::auth_with_workspace_key(key, display_name, config.cloud.api_url)
+    let token = auth::auth_with_workspace_key(key, display_name, config.cloud.api_url.clone())
         .await
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
+    post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
     Ok(token)
 }
 
