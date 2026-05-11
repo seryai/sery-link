@@ -50,12 +50,21 @@ pub async fn execute_query(sql: &str, file_path: &str, config: &Config) -> Resul
     // calls, and execute_query_blocking substitutes `{{file}}` with the
     // right read_func call for the file's extension.
     let (resolved_path, resolved_sql) = if file_path.starts_with("local://") {
-        let path = resolve_local_url(file_path, config).ok_or_else(|| {
-            AgentError::Database(format!(
-                "Could not resolve {}: agent_id mismatch, or the file is not in any currently-watched folder. The cloud catalog entry may be stale (folder was un-watched or the file was moved). Re-add the folder in Sery Link to refresh the catalog.",
-                file_path
-            ))
-        })?;
+        let path = match resolve_local_url(file_path, config) {
+            Ok(p) => p,
+            Err(e) => {
+                // Log on the desktop too so the user can see what was
+                // checked in Sery Link's logs without round-tripping
+                // through the cloud agent's paraphrase. Especially
+                // useful for AgentMismatch (catches re-pair drift)
+                // and NotFoundIn (shows the exact candidate paths
+                // tried — usually one's a typo or a missing folder).
+                eprintln!("[tunnel] resolve failed for {file_path}: {e}");
+                return Err(AgentError::Database(format!(
+                    "Could not resolve {file_path}: {e}"
+                )));
+            }
+        };
         (
             path.to_string_lossy().to_string(),
             rewrite_local_url_to_placeholder(sql, file_path),
@@ -391,52 +400,96 @@ fn
     })
 }
 
+/// Why a `local://...` URL failed to resolve. Each variant carries
+/// enough detail for the cloud-side agent to surface a precise next
+/// step to the user instead of generic "not available" copy.
+#[derive(Debug)]
+enum ResolveError {
+    BadFormat,
+    NoAgentId,
+    AgentMismatch { expected: String, got: String },
+    NotFoundIn { tried: Vec<String> },
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::BadFormat => {
+                write!(f, "URL is not in the expected local://AGENT_ID/REL_PATH shape")
+            }
+            ResolveError::NoAgentId => write!(
+                f,
+                "this machine has no agent_id configured — pair Sery Link with the workspace first"
+            ),
+            ResolveError::AgentMismatch { expected, got } => write!(
+                f,
+                "agent_id mismatch — the URL is addressed to {got} but this machine is {expected}. \
+                 The query was misrouted, OR you re-paired and the cloud catalog still references the previous machine id. \
+                 Re-add the folder in Sery Link so the new agent_id appears in the catalog."
+            ),
+            ResolveError::NotFoundIn { tried } => write!(
+                f,
+                "file is not in any currently-watched folder or local source. \
+                 Tried these paths and none exist: [{}]. \
+                 The catalog entry may be stale (folder un-watched, file moved or deleted). \
+                 Re-add the folder in Sery Link to refresh.",
+                tried.join(", ")
+            ),
+        }
+    }
+}
+
 /// Resolve a `local://AGENT_ID/REL_PATH` URL to a real filesystem
 /// path by locating REL_PATH inside one of the user's watched folders
-/// or F42 local sources. Returns None when:
-///
-///   - The URL doesn't have the `local://` prefix.
-///   - AGENT_ID doesn't match this machine's `config.agent.agent_id`
-///     (the query was meant for a different machine and was misrouted —
-///     don't try to satisfy it from our own filesystem).
-///   - No watched folder or local source contains REL_PATH.
+/// or F42 local sources.
 ///
 /// REL_PATH is URL-decoded before lookup so percent-encoded names
 /// like `%E6%9C%BA%E7%A5%A8/...` resolve to the literal UTF-8 path
 /// the OS sees. The optional `#SheetName` suffix used for Excel
 /// multi-sheet queries is stripped for the existence check (the
 /// sheet selector isn't part of the filesystem path).
-fn resolve_local_url(url: &str, config: &Config) -> Option<PathBuf> {
-    let rest = url.strip_prefix("local://")?;
-    let (agent_id, rel_path) = rest.split_once('/')?;
-    if config.agent.agent_id.as_deref() != Some(agent_id) {
-        return None;
+fn resolve_local_url(url: &str, config: &Config) -> std::result::Result<PathBuf, ResolveError> {
+    let rest = url.strip_prefix("local://").ok_or(ResolveError::BadFormat)?;
+    let (agent_id, rel_path) = rest.split_once('/').ok_or(ResolveError::BadFormat)?;
+
+    let our_agent_id = config
+        .agent
+        .agent_id
+        .as_deref()
+        .ok_or(ResolveError::NoAgentId)?;
+    if our_agent_id != agent_id {
+        return Err(ResolveError::AgentMismatch {
+            expected: our_agent_id.to_string(),
+            got: agent_id.to_string(),
+        });
     }
-    let rel_path_decoded = urlencoding::decode(rel_path).ok()?.into_owned();
-    // Excel: `path/file.xlsx#Sheet1` — strip the sheet selector for
-    // the on-disk lookup. The actual sheet selection happens later in
-    // execute_query_blocking via the cached-CSV pipeline.
+
+    let rel_path_decoded = urlencoding::decode(rel_path)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| rel_path.to_string());
     let rel_for_lookup = rel_path_decoded
         .split('#')
         .next()
         .unwrap_or(&rel_path_decoded);
 
+    let mut tried = Vec::new();
     for folder in &config.watched_folders {
         let candidate = Path::new(&folder.path).join(rel_for_lookup);
         if candidate.exists() {
-            return Some(candidate);
+            return Ok(candidate);
         }
+        tried.push(candidate.to_string_lossy().to_string());
     }
-    // F42 post-migration sources of truth — Local kind only.
     for source in &config.sources {
         if let crate::sources::SourceKind::Local { path, .. } = &source.kind {
             let candidate = path.join(rel_for_lookup);
             if candidate.exists() {
-                return Some(candidate);
+                return Ok(candidate);
             }
+            tried.push(candidate.to_string_lossy().to_string());
         }
     }
-    None
+    Err(ResolveError::NotFoundIn { tried })
 }
 
 /// Rewrite SQL so `read_FORMAT('<url>')` calls become the `{{file}}`
