@@ -14,11 +14,21 @@ pub enum AuthMode {
     LocalOnly,
     BYOK {
         provider: String,
-        #[serde(skip_serializing)]
+        // The actual key lives in the OS keyring (or BYOK provider
+        // creds); the in-config copy is a transient placeholder. We
+        // skip on serialize so the secret never lands on disk, AND
+        // default on deserialize so a previously-saved config with
+        // no `api_key` field round-trips cleanly.
+        #[serde(skip_serializing, default)]
         api_key: String,
     },
     WorkspaceKey {
-        #[serde(skip_serializing)]
+        // Same pattern as BYOK::api_key — actual key is in the OS
+        // keyring. Without `default`, round-tripping a saved
+        // config crashes with "missing field `key`" because
+        // skip_serializing strips it on write but deserialize
+        // refuses to fill it back in.
+        #[serde(skip_serializing, default)]
         key: String,
     },
 }
