@@ -32,6 +32,7 @@
 //! channel. See TELEMETRY.md for the user-facing policy.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,6 +46,26 @@ use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::config::Config;
+
+/// Consecutive flush failures. Used to throttle stderr noise when
+/// the analytics endpoint is unreachable (DNS not configured,
+/// service not deployed, user offline for an extended period).
+/// We log the first failure of a streak normally, then every 10th
+/// retry — so a permanently unreachable endpoint produces one line
+/// per ~10 minutes instead of one per minute. Resets on success.
+static FLUSH_CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// Decide whether to print a flush-failure log line. Always logs the
+/// first failure of a streak (count was 0 before this call), then
+/// every 10th. Increments the counter as a side effect.
+fn should_log_flush_failure() -> bool {
+    let prev = FLUSH_CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    prev == 0 || prev % 10 == 0
+}
+
+fn reset_flush_failures() {
+    FLUSH_CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+}
 
 /// Flush every 60 seconds OR whenever the queue grows past 10 events,
 /// whichever comes first. The threshold is low because we only emit
@@ -277,16 +298,22 @@ async fn flush_once() {
     let resp = match client.post(&url).json(&batch).send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[analytics] flush: network error: {e}");
+            if should_log_flush_failure() {
+                eprintln!(
+                    "[analytics] flush: network error: {e} (further failures suppressed)"
+                );
+            }
             drop(guard);
             return;
         }
     };
     if !resp.status().is_success() {
-        eprintln!(
-            "[analytics] flush: non-2xx ({}) — leaving queue for retry",
-            resp.status()
-        );
+        if should_log_flush_failure() {
+            eprintln!(
+                "[analytics] flush: non-2xx ({}) — leaving queue for retry (further failures suppressed)",
+                resp.status()
+            );
+        }
         drop(guard);
         return;
     }
@@ -294,6 +321,9 @@ async fn flush_once() {
     if let Err(e) = fs::write(&st.file_path, b"").await {
         eprintln!("[analytics] flush: truncate failed: {e}");
     }
+    // Got a 200 — clear the failure counter so the next streak gets
+    // its own first-line log.
+    reset_flush_failures();
     drop(guard);
 }
 
