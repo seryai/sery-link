@@ -192,8 +192,10 @@ pub fn run() {
             analytics::spawn_flusher();
             // Launch ping — one per process start. Covers the
             // "user launches, quits 5 minutes later" case that the
-            // 12h heartbeat would miss.
-            tokio::spawn(async {
+            // 12h heartbeat would miss. Uses async_runtime::spawn
+            // (not tokio::spawn) since setup runs before a tokio
+            // runtime is in scope on the main thread.
+            tauri::async_runtime::spawn(async {
                 analytics::record_ping().await;
             });
 

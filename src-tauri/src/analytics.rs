@@ -297,13 +297,20 @@ async fn flush_once() {
     drop(guard);
 }
 
-/// Background task entry point. Spawn once at app startup. Two
-/// concurrent loops:
+/// Background task entry point. Spawn once at app startup from the
+/// Tauri `setup` callback. Two concurrent loops:
 ///   - flusher: drains the on-disk queue to the server (60s timer
 ///     OR when threshold is crossed by record_event)
 ///   - heartbeat: fires a `daily_ping` every 12 hours while running
+///
+/// Uses `tauri::async_runtime::spawn` (not `tokio::spawn`) because
+/// the setup callback runs on the main thread BEFORE a tokio
+/// runtime is in scope on that thread — `tokio::spawn` panics with
+/// "there is no reactor running" in that context. The async_runtime
+/// wrapper grabs Tauri's runtime regardless of which thread we're
+/// on. Same pattern as gdrive_refresh.rs / tray.rs.
 pub fn spawn_flusher() {
-    tokio::spawn(async {
+    tauri::async_runtime::spawn(async {
         let st = state();
         loop {
             tokio::select! {
@@ -316,7 +323,7 @@ pub fn spawn_flusher() {
             }
         }
     });
-    tokio::spawn(async {
+    tauri::async_runtime::spawn(async {
         // Heartbeat: while the app is running, ensure we emit at
         // least one daily_ping per UTC day even if the user never
         // restarts.
