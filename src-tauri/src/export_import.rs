@@ -246,6 +246,7 @@ mod tests {
                 api_url: "http://localhost:8000".to_string(),
                 websocket_url: "ws://localhost:8000/ws".to_string(),
                 web_url: "http://localhost:3000".to_string(),
+                analytics_url: "http://localhost:8001".to_string(),
             },
             sync: crate::config::SyncConfig {
                 interval_seconds: 300,
@@ -265,6 +266,8 @@ mod tests {
                 schema_change_toasts_enabled: true,
                 selected_byok_provider: None,
                 byok_models: std::collections::HashMap::new(),
+                telemetry_enabled: true,
+                install_id: None,
             },
         }
     }
