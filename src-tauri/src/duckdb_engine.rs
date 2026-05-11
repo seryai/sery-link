@@ -1,7 +1,8 @@
 use duckdb::Connection;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use crate::config::Config;
 use crate::error::{AgentError, Result};
@@ -34,6 +35,37 @@ pub struct QueryResult {
 }
 
 pub async fn execute_query(sql: &str, file_path: &str, config: &Config) -> Result<QueryResult> {
+    // ─── local:// URL resolution ───────────────────────────────────────────
+    // The cloud agent's system prompt teaches the LLM to emit SQL like
+    // `read_parquet('local://AGENT_ID/REL_PATH')` and ships `database_path`
+    // as the same `local://` URL. The existing security gates below
+    // expect (a) `file_path` to be a real filesystem path and (b) the
+    // SQL to use `{{file}}` as its placeholder (no inline read_parquet
+    // calls). We bridge by resolving the URL to an actual filesystem
+    // path against the user's watched folders, then rewriting the SQL
+    // so the read_FORMAT('local://...') call becomes `{{file}}`. The
+    // existing pipeline below then runs unchanged: is_path_allowed
+    // checks the resolved filesystem path against watched_folders,
+    // validate_sql_payload sees `{{file}}` and zero forbidden read_*
+    // calls, and execute_query_blocking substitutes `{{file}}` with the
+    // right read_func call for the file's extension.
+    let (resolved_path, resolved_sql) = if file_path.starts_with("local://") {
+        let path = resolve_local_url(file_path, config).ok_or_else(|| {
+            AgentError::Database(format!(
+                "Could not resolve {}: agent_id mismatch, or the file is not in any currently-watched folder. The cloud catalog entry may be stale (folder was un-watched or the file was moved). Re-add the folder in Sery Link to refresh the catalog.",
+                file_path
+            ))
+        })?;
+        (
+            path.to_string_lossy().to_string(),
+            rewrite_local_url_to_placeholder(sql, file_path),
+        )
+    } else {
+        (file_path.to_string(), sql.to_string())
+    };
+    let file_path = resolved_path.as_str();
+    let sql = resolved_sql.as_str();
+
     // ─── Security gate ─────────────────────────────────────────────────────
     // The SQL string comes from the cloud tunnel. Before letting DuckDB
     // touch it we enforce three invariants that together bound the
@@ -357,6 +389,84 @@ fn
         let folder_path = Path::new(&folder.path);
         path.starts_with(folder_path)
     })
+}
+
+/// Resolve a `local://AGENT_ID/REL_PATH` URL to a real filesystem
+/// path by locating REL_PATH inside one of the user's watched folders
+/// or F42 local sources. Returns None when:
+///
+///   - The URL doesn't have the `local://` prefix.
+///   - AGENT_ID doesn't match this machine's `config.agent.agent_id`
+///     (the query was meant for a different machine and was misrouted —
+///     don't try to satisfy it from our own filesystem).
+///   - No watched folder or local source contains REL_PATH.
+///
+/// REL_PATH is URL-decoded before lookup so percent-encoded names
+/// like `%E6%9C%BA%E7%A5%A8/...` resolve to the literal UTF-8 path
+/// the OS sees. The optional `#SheetName` suffix used for Excel
+/// multi-sheet queries is stripped for the existence check (the
+/// sheet selector isn't part of the filesystem path).
+fn resolve_local_url(url: &str, config: &Config) -> Option<PathBuf> {
+    let rest = url.strip_prefix("local://")?;
+    let (agent_id, rel_path) = rest.split_once('/')?;
+    if config.agent.agent_id.as_deref() != Some(agent_id) {
+        return None;
+    }
+    let rel_path_decoded = urlencoding::decode(rel_path).ok()?.into_owned();
+    // Excel: `path/file.xlsx#Sheet1` — strip the sheet selector for
+    // the on-disk lookup. The actual sheet selection happens later in
+    // execute_query_blocking via the cached-CSV pipeline.
+    let rel_for_lookup = rel_path_decoded
+        .split('#')
+        .next()
+        .unwrap_or(&rel_path_decoded);
+
+    for folder in &config.watched_folders {
+        let candidate = Path::new(&folder.path).join(rel_for_lookup);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    // F42 post-migration sources of truth — Local kind only.
+    for source in &config.sources {
+        if let crate::sources::SourceKind::Local { path, .. } = &source.kind {
+            let candidate = path.join(rel_for_lookup);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Rewrite SQL so `read_FORMAT('<url>')` calls become the `{{file}}`
+/// placeholder the existing pipeline knows how to substitute.
+///
+/// The cloud agent emits SQL like:
+///
+///     SELECT * FROM read_parquet('local://AGENT/REL') LIMIT 10
+///
+/// but the security validation below requires `{{file}}` AND forbids
+/// inline `read_parquet` / `read_csv*` / etc. Rather than weakening
+/// those checks, we strip the read_* call here and let the existing
+/// substitution put the correct read_func back in for the resolved
+/// file's actual extension. The whole-call replacement also drops
+/// any extra args like `header=true` — fine in practice because the
+/// agent's prompt only generates single-arg calls for local files.
+fn rewrite_local_url_to_placeholder(sql: &str, url: &str) -> String {
+    let escaped = regex::escape(url);
+    // Match: read_<word>( ['"]<url>['"] [, anything-without-paren]* )
+    // Case-insensitive on the function name. Greedy-tolerant on
+    // whitespace. The non-paren extra-args clause keeps simple
+    // arg lists in scope without venturing into nested-paren land.
+    let pattern = format!(
+        r#"(?i)read_[a-z_]+\s*\(\s*['"]{}['"](?:\s*,[^)]*)?\s*\)"#,
+        escaped
+    );
+    match Regex::new(&pattern) {
+        Ok(re) => re.replace_all(sql, "{{file}}").into_owned(),
+        Err(_) => sql.to_string(),
+    }
 }
 
 #[cfg(test)]
