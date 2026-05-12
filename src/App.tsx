@@ -24,7 +24,6 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from './stores/agentStore';
-import seryLogo from './assets/logo.svg';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
 import { ToastProvider, useToast } from './components/Toast';
@@ -242,9 +241,7 @@ function AppInner() {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside className="flex w-56 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center border-b border-slate-200 px-4 py-4 dark:border-slate-800">
-            <img src={seryLogo} alt="Sery" className="h-7 w-auto" />
-          </div>
+
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
             <NavLink
