@@ -18,7 +18,7 @@ const PADDED = path.join(ICONS, '_padded-1024.png');
 // _source-1024.png is the raw artwork at full bleed; we shrink it here so the
 // icon doesn't appear oversized next to other apps in the dock.
 const CANVAS = 1024;
-const PADDING = Math.round(CANVAS * 0.08); // 8% each side → content = 84% of canvas
+const PADDING = Math.round(CANVAS * 0.10); // 10% each side → content = 80% of canvas
 const INNER = CANVAS - PADDING * 2;        // 819px
 
 if (!fs.existsSync(SOURCE)) {
