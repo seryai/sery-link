@@ -24,7 +24,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from './stores/agentStore';
-import seryLogo from './assets/sery-logo.svg';
+import seryLogo from './assets/logo.svg';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
 import { ToastProvider, useToast } from './components/Toast';
@@ -242,16 +242,8 @@ function AppInner() {
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside className="flex w-56 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
-            <img src={seryLogo} alt="Sery" className="h-8 w-8" />
-            <div>
-              <h1 className="text-base font-bold text-slate-900 dark:text-slate-50">
-                Sery Link
-              </h1>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Understand your data
-              </p>
-            </div>
+          <div className="flex items-center border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+            <img src={seryLogo} alt="Sery" className="h-7 w-auto" />
           </div>
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
