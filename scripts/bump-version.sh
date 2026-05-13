@@ -38,10 +38,9 @@ git -C "$SERY_LINK" commit -m "chore: bump version to $NEW"
 
 # ── homebrew-tap ─────────────────────────────────────────────────────────────
 
-sed -i '' "s/VERSION=\"$OLD\"/VERSION=\"$NEW\"/" "$HOMEBREW_TAP/install.sh"
 sed -i '' "s/version \"$OLD\"/version \"$NEW\"/" "$HOMEBREW_TAP/Casks/sery-link.rb"
 
-git -C "$HOMEBREW_TAP" add install.sh Casks/sery-link.rb
+git -C "$HOMEBREW_TAP" add Casks/sery-link.rb
 git -C "$HOMEBREW_TAP" commit -m "chore: bump version to $NEW (sha256 TBD after release)"
 
 # ── scoop-bucket ─────────────────────────────────────────────────────────────
@@ -54,19 +53,11 @@ sed -i '' "s|_${OLD}_|_${NEW}_|g" "$SCOOP_BUCKET/bucket/sery-link.json"
 git -C "$SCOOP_BUCKET" add bucket/sery-link.json
 git -C "$SCOOP_BUCKET" commit -m "chore: bump version to $NEW (hash TBD after release)"
 
-# ── website ───────────────────────────────────────────────────────────────────
-
-sed -i '' "s/VERSION=\"$OLD\"/VERSION=\"$NEW\"/" "$WEBSITE/public/install.sh"
-
-git -C "$WEBSITE" add public/install.sh
-git -C "$WEBSITE" commit -m "chore: bump install.sh to v$NEW"
-
 # ── tag + push all ───────────────────────────────────────────────────────────
 
 git -C "$SERY_LINK" push
 git -C "$HOMEBREW_TAP" push
 git -C "$SCOOP_BUCKET" push
-git -C "$WEBSITE" push
 
 git -C "$SERY_LINK" tag "v$NEW"
 git -C "$SERY_LINK" push origin "v$NEW"
