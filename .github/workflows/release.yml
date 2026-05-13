@@ -77,6 +77,14 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      # On macOS 14 runners Homebrew's Rust can shadow ~/.cargo/bin before
+      # dtolnay/rust-toolchain finishes setting up PATH. Prepend explicitly.
+      - name: Ensure cargo is on PATH
+        if: runner.os == 'macOS'
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo --version
+
       - run: pnpm install --frozen-lockfile
 
       # The Python markitdown sidecar (179 MB per platform) was
