@@ -154,16 +154,16 @@ jobs:
 
       - name: Pre-sign bundled binaries (macOS only)
         if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         shell: bash
         run: |
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Signing identity: $IDENTITY"
           for BINARY in \
             src-tauri/resources/pandoc/pandoc \
             src-tauri/resources/libpdfium/libpdfium.dylib; do
             if [ -f "$BINARY" ]; then
               codesign --force --options runtime --timestamp \
-                --sign "$APPLE_SIGNING_IDENTITY" "$BINARY"
+                --sign "$IDENTITY" "$BINARY"
               echo "Signed: $BINARY"
             fi
           done
