@@ -77,13 +77,19 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
-      # On macOS 14 runners Homebrew's Rust can shadow ~/.cargo/bin before
-      # dtolnay/rust-toolchain finishes setting up PATH. Prepend explicitly.
+      # On macOS 14 runners Homebrew's Rust shadows ~/.cargo/bin. Source
+      # cargo env, set default toolchain, and prepend to GITHUB_PATH so
+      # all subsequent steps (including tauri-action) get the right cargo.
       - name: Ensure cargo is on PATH
         if: runner.os == 'macOS'
+        shell: bash
         run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          rustup default stable
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
           cargo --version
+          which cargo
 
       - run: pnpm install --frozen-lockfile
 
