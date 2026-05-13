@@ -666,7 +666,7 @@ function AboutPanel({
         <Row label="Workspace" value={workspaceId ?? '—'} mono />
         <Row label="Platform" value={draft.agent.platform} />
         <Row label="Hostname" value={draft.agent.hostname} />
-        <Row label="API endpoint" value={draft.cloud.api_url} mono />
+
       </div>
 
       <OAuthProvidersSection />
