@@ -5,6 +5,7 @@ use crate::error::{AgentError, Result};
 
 const SERVICE_NAME: &str = "seryai-agent";
 const ACCESS_TOKEN_KEY: &str = "access_token";
+const WORKSPACE_KEY_KEY: &str = "workspace_key";
 
 // Process-wide token cache. macOS prompts the user *every* keychain
 // read on ad-hoc-signed builds (no stable code signature for the OS
@@ -56,6 +57,27 @@ pub fn delete_token() -> Result<()> {
 
 pub fn has_token() -> bool {
     get_token().is_ok()
+}
+
+pub fn save_workspace_key(key: &str) -> Result<()> {
+    let entry = Entry::new(SERVICE_NAME, WORKSPACE_KEY_KEY)
+        .map_err(|e| AgentError::Keyring(format!("Failed to create keyring entry: {}", e)))?;
+    entry
+        .set_password(key)
+        .map_err(|e| AgentError::Keyring(format!("Failed to save workspace key: {}", e)))?;
+    Ok(())
+}
+
+pub fn get_workspace_key() -> Result<String> {
+    let entry = Entry::new(SERVICE_NAME, WORKSPACE_KEY_KEY)
+        .map_err(|e| AgentError::Keyring(format!("Failed to create keyring entry: {}", e)))?;
+    entry
+        .get_password()
+        .map_err(|e| AgentError::Keyring(format!("Failed to retrieve workspace key: {}", e)))
+}
+
+pub fn has_workspace_key() -> bool {
+    get_workspace_key().is_ok()
 }
 
 // BYOK keyring helpers were removed in the v0.5.3 → file-manager

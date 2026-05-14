@@ -12,11 +12,13 @@
 //! The older `start(token)` entry point is preserved for headless / test use
 //! where an `AppHandle` isn't available.
 
+use crate::auth;
 use crate::config::Config;
 use crate::duckdb_engine;
 use crate::error::{AgentError, Result};
 use crate::events;
 use crate::history;
+use crate::keyring_store;
 use crate::stats;
 use futures::{SinkExt, StreamExt};
 use serde_json::Value;
@@ -152,7 +154,7 @@ impl WebSocketClient {
     }
 
     async fn maintain_connection<R: Runtime>(
-        token: String,
+        mut token: String,
         config: Arc<RwLock<Config>>,
         status: Arc<RwLock<ConnectionStatus>>,
         app: Option<AppHandle<R>>,
@@ -175,9 +177,28 @@ impl WebSocketClient {
                     reconnect_delay = Duration::from_secs(RECONNECT_DELAY_SECS);
                 }
                 Err(AgentError::WebSocket(ref e)) if is_auth_error(e) => {
-                    // Terminal — bail out of the reconnect loop and prompt for
-                    // re-auth. The user's token is no longer valid.
-                    eprintln!("Auth expired, halting reconnect: {}", e);
+                    eprintln!("Auth error on WebSocket: {}", e);
+
+                    // Workspace-key users: silently exchange the saved key for
+                    // a fresh agent token instead of surfacing the re-auth modal.
+                    if let Ok(saved_key) = keyring_store::get_workspace_key() {
+                        eprintln!("Attempting silent re-auth with saved workspace key");
+                        let api_url = cfg.cloud.api_url.clone();
+                        let display_name = cfg.agent.name.clone();
+                        match auth::auth_with_workspace_key(saved_key, display_name, api_url).await {
+                            Ok(new_token) => {
+                                eprintln!("Silent re-auth succeeded, resuming tunnel");
+                                token = new_token.access_token;
+                                reconnect_delay = Duration::from_secs(RECONNECT_DELAY_SECS);
+                                continue;
+                            }
+                            Err(e) => {
+                                eprintln!("Silent re-auth failed: {}", e);
+                            }
+                        }
+                    }
+
+                    // No saved key or re-auth failed — prompt the user.
                     *status.write().await = ConnectionStatus::AuthExpired;
                     if let Some(app) = &app {
                         events::emit_auth_expired(app);

@@ -233,6 +233,7 @@ pub async fn auth_with_workspace_key(
 
     let token: AgentToken = response.json().await?;
     keyring_store::save_token(&token.access_token)?;
+    keyring_store::save_workspace_key(&key)?;
     Ok(token)
 }
 
