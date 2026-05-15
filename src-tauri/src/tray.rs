@@ -173,14 +173,11 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
 }
 
 fn status_dot(state: &str) -> &'static str {
-    // Plain Unicode filled circle — text-sized, not emoji.
-    // The status item is rendered as ENABLED so macOS keeps the text in its
-    // primary color (black / white depending on appearance) rather than
-    // graying it out. Clicks on it fall through to the `_ => {}` arm in
-    // on_menu_event and are silently ignored.
     match state {
-        "online" | "syncing" | "connecting" | "error" => "●",
-        _ => "○",
+        "online" => "🟢",
+        "syncing" | "connecting" => "🟡",
+        "error" => "🔴",
+        _ => "⚪",
     }
 }
 
