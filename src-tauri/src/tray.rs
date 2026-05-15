@@ -14,86 +14,10 @@ use crate::stats;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 use tauri::{
-    image::Image,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
-
-static BASE_ICON: &[u8] = include_bytes!("../icons/tray-44x44.png");
-
-/// True when macOS is running in dark mode (dark menu bar).
-/// On non-macOS platforms always returns false.
-fn is_dark_mode() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .eq_ignore_ascii_case("dark")
-            })
-            .unwrap_or(false)
-    }
-    #[cfg(not(target_os = "macos"))]
-    false
-}
-
-/// Draw a small filled circle badge in the bottom-right corner of the tray
-/// icon. Returns raw PNG bytes. Returns `None` for offline (use plain template).
-///
-/// In dark mode the base icon pixels are inverted (black → white) so the
-/// Sery logo remains visible against the dark menu bar.
-fn badge_icon_bytes(state: &str) -> Option<Vec<u8>> {
-    let color: [u8; 4] = match state {
-        "online" => [52, 211, 153, 255],                 // emerald-400
-        "syncing" | "connecting" => [251, 191, 36, 255], // amber-400
-        "error" => [248, 113, 113, 255],                 // rose-400
-        _ => return None,
-    };
-
-    let dark = is_dark_mode();
-    let mut img = image::load_from_memory(BASE_ICON).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-
-    // Invert dark pixels for dark mode so the icon stays visible.
-    // Template icons are black-on-transparent; inverting gives white-on-transparent.
-    if dark {
-        for pixel in img.pixels_mut() {
-            let [r, g, b, a] = pixel.0;
-            if a > 32 {
-                *pixel = image::Rgba([255 - r, 255 - g, 255 - b, a]);
-            }
-        }
-    }
-
-    let r = 7i32;
-    let cx = w as i32 - r - 2;
-    let cy = h as i32 - r - 2;
-    // Badge border color: dark in light mode, dark in dark mode (contrast against white base)
-    let border: [u8; 4] = if dark { [30, 30, 30, 200] } else { [255, 255, 255, 220] };
-
-    for py in 0..h {
-        for px in 0..w {
-            let dx = px as i32 - cx;
-            let dy = py as i32 - cy;
-            if dx * dx + dy * dy <= r * r {
-                img.put_pixel(px, py, image::Rgba(color));
-            } else if dx * dx + dy * dy <= (r + 1) * (r + 1) {
-                img.put_pixel(px, py, image::Rgba(border));
-            }
-        }
-    }
-
-    let mut buf = Vec::new();
-    use image::ImageEncoder;
-    image::codecs::png::PngEncoder::new(&mut buf)
-        .write_image(img.as_raw(), w, h, image::ColorType::Rgba8)
-        .ok()?;
-    Some(buf)
-}
 
 // ---------------------------------------------------------------------------
 // Menu item IDs — keep in sync with the match arms in `on_menu_event`.
@@ -135,7 +59,7 @@ static TRAY_STATE: Lazy<Arc<RwLock<TrayState>>> = Lazy::new(|| {
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = build_menu(app, &TrayState::default())?;
 
-    let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-44x44.png"))
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-44x44.png"))
         .expect("failed to load tray icon");
 
     let _tray = TrayIconBuilder::with_id("main")
@@ -188,24 +112,6 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
                 let _ = tray.set_menu(Some(menu));
             }
             let _ = tray.set_tooltip(Some(tooltip_for(&state)));
-
-            // Swap icon: badge states use a non-template icon with a colored
-            // dot in the bottom-right corner; offline falls back to the plain
-            // template icon so macOS auto-adapts it for dark/light mode.
-            match badge_icon_bytes(&state.connection) {
-                Some(bytes) => {
-                    if let Ok(icon) = Image::from_bytes(&bytes) {
-                        let _ = tray.set_icon(Some(icon));
-                        let _ = tray.set_icon_as_template(false);
-                    }
-                }
-                None => {
-                    if let Ok(icon) = Image::from_bytes(BASE_ICON) {
-                        let _ = tray.set_icon(Some(icon));
-                        let _ = tray.set_icon_as_template(true);
-                    }
-                }
-            }
         }
     });
 }
@@ -267,12 +173,13 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
 }
 
 fn status_dot(state: &str) -> &'static str {
-    // Unicode dots — keeps things lightweight without bundling extra icons.
+    // Emoji circles render in full color in macOS menu items, even when
+    // the item is disabled (unlike plain Unicode text which goes gray).
     match state {
-        "online" => "●",
-        "syncing" => "◐",
-        "error" => "●",
-        _ => "○",
+        "online" => "🟢",
+        "syncing" | "connecting" => "🟡",
+        "error" => "🔴",
+        _ => "⚪",
     }
 }
 
