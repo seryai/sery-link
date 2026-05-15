@@ -2727,7 +2727,7 @@ pub async fn mark_recipe_run(recipe_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn logout() -> Result<(), String> {
+pub async fn logout<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     // Close websocket + watcher before clearing credentials so we don't leave
     // a connected client trying to authenticate with a dead token.
     let mut ws_guard = WS_CLIENT.write().await;
@@ -2738,7 +2738,9 @@ pub async fn logout() -> Result<(), String> {
     *watcher_guard = None;
     drop(watcher_guard);
 
-    keyring_store::delete_token().map_err(|e| e.to_string())
+    keyring_store::delete_token().map_err(|e| e.to_string())?;
+    crate::tray::set_state(&app, "offline");
+    Ok(())
 }
 
 #[tauri::command]
@@ -2789,6 +2791,8 @@ pub async fn set_local_only_mode<R: Runtime>(
         let mut ws_guard = WS_CLIENT.write().await;
         *ws_guard = None;
         drop(ws_guard);
+
+        crate::tray::set_state(&app, "offline");
 
         // 3. Note: the keyring token and watcher are deliberately NOT
         //    touched. Local file watching keeps working; the user's

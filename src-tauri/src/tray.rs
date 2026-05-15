@@ -123,10 +123,10 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
 fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Result<Menu<R>> {
     let stats_snapshot = stats::load().unwrap_or_default();
 
-    // Status header — disabled so it looks like a label. Shows current
-    // connection state with a leading dot so users can scan it quickly.
+    // Status header — enabled so macOS renders it in full (non-grayed) text.
+    // Clicks are silently ignored in on_menu_event.
     let status_label = format!("{} {}", status_dot(&state.connection), status_text(state));
-    let status = MenuItem::with_id(app, MI_STATUS, status_label, false, None::<&str>)?;
+    let status = MenuItem::with_id(app, MI_STATUS, status_label, true, None::<&str>)?;
 
     // Stats line — also a disabled label.
     let stats_label = format!(
@@ -173,13 +173,14 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
 }
 
 fn status_dot(state: &str) -> &'static str {
-    // Emoji circles render in full color in macOS menu items, even when
-    // the item is disabled (unlike plain Unicode text which goes gray).
+    // Plain Unicode filled circle — text-sized, not emoji.
+    // The status item is rendered as ENABLED so macOS keeps the text in its
+    // primary color (black / white depending on appearance) rather than
+    // graying it out. Clicks on it fall through to the `_ => {}` arm in
+    // on_menu_event and are silently ignored.
     match state {
-        "online" => "🟢",
-        "syncing" | "connecting" => "🟡",
-        "error" => "🔴",
-        _ => "⚪",
+        "online" | "syncing" | "connecting" | "error" => "●",
+        _ => "○",
     }
 }
 
