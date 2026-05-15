@@ -264,8 +264,6 @@ mod tests {
                 window_hide_notified: false,
                 selected_auth_mode: None,
                 schema_change_toasts_enabled: true,
-                selected_byok_provider: None,
-                byok_models: std::collections::HashMap::new(),
                 telemetry_enabled: true,
                 install_id: None,
             },

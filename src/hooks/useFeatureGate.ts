@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 
 export type AuthMode =
   | { type: 'LocalOnly' }
-  | { type: 'BYOK'; provider: string }
   | { type: 'WorkspaceKey' };
 
 export interface FeatureGateResult {
@@ -16,7 +15,7 @@ export interface FeatureGateResult {
  * Hook to check if a feature is available in the current auth mode.
  *
  * Features:
- * - ai_queries: Requires BYOK or WorkspaceKey
+ * - ai_queries: Requires WorkspaceKey
  * - cloud_sync: Requires WorkspaceKey
  * - team_sharing: Requires WorkspaceKey
  *

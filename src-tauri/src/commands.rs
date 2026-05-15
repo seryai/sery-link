@@ -58,8 +58,8 @@ fn mark_cloud_offline() {
 
 /// Returns true only when the user has explicitly set up a workspace
 /// connection AND a token is present in the keyring AND we haven't
-/// already seen the cloud misbehave this session. LocalOnly / BYOK
-/// users (and legacy users with a stale bootstrap token they never
+/// already seen the cloud misbehave this session. LocalOnly users
+/// (and legacy users with a stale bootstrap token they never
 /// re-authenticated) never attempt metadata sync.
 pub(crate) fn cloud_sync_enabled() -> bool {
     if cloud_offline() {
@@ -2766,7 +2766,7 @@ pub async fn set_auth_mode(mode: AuthMode) -> Result<(), String> {
 /// feature gates (`ai_queries`, `cloud_sync`, `team_sharing`) all return
 /// false until the user toggles it back. The keyring token is **left
 /// intact** — toggling back restores whatever auth mode the keyring/env-vars
-/// imply (WorkspaceKey or BYOK), and the WebSocket reconnects.
+/// imply (WorkspaceKey), and the WebSocket reconnects.
 ///
 /// This is the implementation of ROADMAP F6: the "we're a network, not a
 /// store" promise is structural only if the user can verify "if I turn the
@@ -2796,8 +2796,8 @@ pub async fn set_local_only_mode<R: Runtime>(
         //    is one click rather than re-pairing.
     } else {
         // 1. Clear the pinned mode so auth detection auto-picks the right
-        //    state from the keyring / env vars (WorkspaceKey, BYOK, or
-        //    LocalOnly fallback if no creds exist).
+        //    state from the keyring (WorkspaceKey, or LocalOnly fallback
+        //    if no creds exist).
         config.app.selected_auth_mode = None;
         config.save().map_err(|e| e.to_string())?;
 
@@ -3171,7 +3171,7 @@ pub async fn reveal_audit_file_in_finder() -> Result<String, String> {
     if let Some(parent) = p.parent() {
         // Make sure the directory exists so the OS doesn't error on a
         // missing path. If the file itself doesn't exist yet (no syncs
-        // and no BYOK calls), opening the parent still gives the user a
+        // and no syncs yet), opening the parent still gives the user a
         // useful destination — they see ~/.seryai/ with whatever else
         // is there.
         let _ = std::fs::create_dir_all(parent);

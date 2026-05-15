@@ -76,13 +76,3 @@ pub fn get_workspace_key() -> Result<String> {
         .map_err(|e| AgentError::Keyring(format!("Failed to retrieve workspace key: {}", e)))
 }
 
-#[allow(dead_code)]
-pub fn has_workspace_key() -> bool {
-    get_workspace_key().is_ok()
-}
-
-// BYOK keyring helpers were removed in the v0.5.3 → file-manager
-// pivot. AI now happens cloud-side via the dashboard, so the
-// desktop no longer holds per-provider API keys. Existing keychain
-// entries (`byok_<provider>`) are left in place — they're harmless
-// and the user can clear them via Keychain Access if they want.

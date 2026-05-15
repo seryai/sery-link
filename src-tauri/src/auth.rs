@@ -260,75 +260,47 @@ async fn exchange_token(code: String, api_url: String) -> Result<AgentToken> {
 // Auth mode detection
 // ---------------------------------------------------------------------------
 
-/// Detect the current authentication mode based on stored credentials and environment.
+/// Detect the current authentication mode based on stored credentials.
 ///
 /// Detection order:
-/// 1. Check keyring for workspace token (WorkspaceKey mode)
-/// 2. Check environment variables for BYOK (BYOK mode)
-/// 3. Default to LocalOnly mode
+/// 1. Explicit selection in config
+/// 2. Workspace token in keyring → WorkspaceKey
+/// 3. Default to LocalOnly
 pub fn get_auth_mode(config: &Config) -> AuthMode {
-    // Check explicit selection first
     if let Some(mode) = &config.app.selected_auth_mode {
         return mode.clone();
     }
 
-    // Auto-detect based on stored credentials
-
-    // 1. Check keyring for workspace token. Single read — `has_token`
-    // used to be called first as a precheck, but it just calls
-    // `get_token` internally, so on ad-hoc-signed builds (every
-    // build, today) macOS prompted the user twice for the same item.
-    // The token cache in keyring_store collapses this to one prompt
-    // per launch even if other code paths still hit `has_token`.
+    // Single keyring read — `has_token` used to be called first as a
+    // precheck, but it just calls `get_token` internally, so on
+    // ad-hoc-signed builds macOS prompted the user twice for the same
+    // item. The token cache in keyring_store collapses this to one
+    // prompt per launch.
     if let Ok(token) = keyring_store::get_token() {
-        return AuthMode::WorkspaceKey {
-            key: token,
-        };
+        return AuthMode::WorkspaceKey { key: token };
     }
 
-    // 2. (Removed in v0.5.3 pivot.) The OS-keychain BYOK lookup
-    //    used to live here — desktop no longer holds per-provider
-    //    API keys. Existing keychain entries are left alone; AI
-    //    happens cloud-side via the dashboard now.
-
-    // 3. Fallback: env var (legacy / power-user path; useful in CI and dev).
-    if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !api_key.is_empty() {
-            return AuthMode::BYOK {
-                provider: "anthropic".to_string(),
-                api_key,
-            };
-        }
-    }
-
-    // 4. Default to local-only
     AuthMode::LocalOnly
 }
 
 /// Check if a feature is available in the current auth mode.
 ///
 /// Feature availability:
-/// - LocalOnly: free_recipes only
-/// - BYOK: free_recipes + pro_recipes
-/// - WorkspaceKey: free_recipes + pro_recipes + team features
+/// - LocalOnly: free_recipes + local_sql only
+/// - WorkspaceKey: all features
 pub fn feature_available(mode: &AuthMode, feature: &str) -> bool {
     match (mode, feature) {
         // Free features - available in all modes
         (_, "free_recipes") => true,
         (_, "local_sql") => true,
 
-        // Pro features - require BYOK or WorkspaceKey
-        (AuthMode::BYOK { .. }, "pro_recipes") => true,
+        // Pro + team features - require WorkspaceKey
         (AuthMode::WorkspaceKey { .. }, "pro_recipes") => true,
-        (AuthMode::BYOK { .. }, "ai_queries") => true,
         (AuthMode::WorkspaceKey { .. }, "ai_queries") => true,
-
-        // Team features - require WorkspaceKey only
         (AuthMode::WorkspaceKey { .. }, "cloud_sync") => true,
         (AuthMode::WorkspaceKey { .. }, "team_sharing") => true,
         (AuthMode::WorkspaceKey { .. }, "performance_mode") => true,
 
-        // Default deny
         _ => false,
     }
 }
@@ -350,27 +322,6 @@ mod tests {
         assert!(!feature_available(&mode, "ai_queries"));
 
         // TEAM features should be blocked
-        assert!(!feature_available(&mode, "cloud_sync"));
-        assert!(!feature_available(&mode, "team_sharing"));
-        assert!(!feature_available(&mode, "performance_mode"));
-    }
-
-    #[test]
-    fn test_byok_mode_features() {
-        let mode = AuthMode::BYOK {
-            provider: "anthropic".to_string(),
-            api_key: "sk-ant-test-key".to_string(),
-        };
-
-        // FREE features should be available
-        assert!(feature_available(&mode, "free_recipes"));
-        assert!(feature_available(&mode, "local_sql"));
-
-        // PRO features should be available
-        assert!(feature_available(&mode, "pro_recipes"));
-        assert!(feature_available(&mode, "ai_queries"));
-
-        // TEAM features should still be blocked
         assert!(!feature_available(&mode, "cloud_sync"));
         assert!(!feature_available(&mode, "team_sharing"));
         assert!(!feature_available(&mode, "performance_mode"));
@@ -405,48 +356,20 @@ mod tests {
 
     #[test]
     fn test_auth_mode_equality() {
-        let local1 = AuthMode::LocalOnly;
-        let local2 = AuthMode::LocalOnly;
-        assert_eq!(local1, local2);
-
-        let byok1 = AuthMode::BYOK {
-            provider: "anthropic".to_string(),
-            api_key: "key1".to_string(),
-        };
-        let byok2 = AuthMode::BYOK {
-            provider: "anthropic".to_string(),
-            api_key: "key1".to_string(),
-        };
-        assert_eq!(byok1, byok2);
-
-        let workspace1 = AuthMode::WorkspaceKey {
-            key: "key1".to_string(),
-        };
-        let workspace2 = AuthMode::WorkspaceKey {
-            key: "key1".to_string(),
-        };
-        assert_eq!(workspace1, workspace2);
+        assert_eq!(AuthMode::LocalOnly, AuthMode::LocalOnly);
+        assert_eq!(
+            AuthMode::WorkspaceKey { key: "k".to_string() },
+            AuthMode::WorkspaceKey { key: "k".to_string() },
+        );
     }
 
     #[test]
     fn test_auth_mode_serialization() {
         use serde_json;
 
-        // LocalOnly serialization
         let local = AuthMode::LocalOnly;
         let json = serde_json::to_string(&local).unwrap();
         assert!(json.contains("LocalOnly"));
-
-        // BYOK serialization (api_key should be skipped)
-        let byok = AuthMode::BYOK {
-            provider: "anthropic".to_string(),
-            api_key: "secret-key".to_string(),
-        };
-        let json = serde_json::to_string(&byok).unwrap();
-        assert!(json.contains("BYOK"));
-        assert!(json.contains("anthropic"));
-        // api_key should not be serialized
-        assert!(!json.contains("secret-key"));
 
         // WorkspaceKey serialization (key should be skipped)
         let workspace = AuthMode::WorkspaceKey {
@@ -470,26 +393,7 @@ mod tests {
 
     #[test]
     fn test_tier_progression() {
-        // Verify that each tier builds on the previous one
-        let modes = vec![
-            ("LocalOnly", AuthMode::LocalOnly),
-            (
-                "BYOK",
-                AuthMode::BYOK {
-                    provider: "test".to_string(),
-                    api_key: "test".to_string(),
-                },
-            ),
-            (
-                "WorkspaceKey",
-                AuthMode::WorkspaceKey {
-                    key: "test".to_string(),
-                },
-            ),
-        ];
-
-        // Count available features for each mode
-        let test_features = vec![
+        let test_features = [
             "free_recipes",
             "local_sql",
             "pro_recipes",
@@ -501,24 +405,15 @@ mod tests {
 
         let local_count = test_features
             .iter()
-            .filter(|f| feature_available(&modes[0].1, f))
-            .count();
-        let byok_count = test_features
-            .iter()
-            .filter(|f| feature_available(&modes[1].1, f))
+            .filter(|f| feature_available(&AuthMode::LocalOnly, f))
             .count();
         let workspace_count = test_features
             .iter()
-            .filter(|f| feature_available(&modes[2].1, f))
+            .filter(|f| feature_available(&AuthMode::WorkspaceKey { key: "test".to_string() }, f))
             .count();
 
-        // Each tier should have more features than the previous
-        assert!(local_count < byok_count);
-        assert!(byok_count < workspace_count);
-
-        // Expected counts
-        assert_eq!(local_count, 2); // free_recipes, local_sql
-        assert_eq!(byok_count, 4); // + pro_recipes, ai_queries
-        assert_eq!(workspace_count, 7); // + cloud_sync, team_sharing, performance_mode
+        assert!(local_count < workspace_count);
+        assert_eq!(local_count, 2);    // free_recipes, local_sql
+        assert_eq!(workspace_count, 7); // all features
     }
 }

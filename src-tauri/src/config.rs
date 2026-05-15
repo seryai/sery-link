@@ -12,21 +12,10 @@ use crate::sources::{migrate_watched_folder_to_source, DataSource, SourceKind};
 #[serde(tag = "type")]
 pub enum AuthMode {
     LocalOnly,
-    BYOK {
-        provider: String,
-        // The actual key lives in the OS keyring (or BYOK provider
-        // creds); the in-config copy is a transient placeholder. We
-        // skip on serialize so the secret never lands on disk, AND
-        // default on deserialize so a previously-saved config with
-        // no `api_key` field round-trips cleanly.
-        #[serde(skip_serializing, default)]
-        api_key: String,
-    },
     WorkspaceKey {
-        // Same pattern as BYOK::api_key — actual key is in the OS
-        // keyring. Without `default`, round-tripping a saved
-        // config crashes with "missing field `key`" because
-        // skip_serializing strips it on write but deserialize
+        // The actual key lives in the OS keyring. Without `default`,
+        // round-tripping a saved config crashes with "missing field `key`"
+        // because skip_serializing strips it on write but deserialize
         // refuses to fill it back in.
         #[serde(skip_serializing, default)]
         key: String,
@@ -277,19 +266,6 @@ pub struct AppConfig {
     // transient popup, which scan-heavy users can find noisy.
     #[serde(default = "default_true")]
     pub schema_change_toasts_enabled: bool,
-    /// DEPRECATED in v0.5.3 → file-manager pivot. Held the active
-    /// BYOK provider name back when text-to-SQL ran on the desktop.
-    /// Kept on the struct so existing user configs deserialize
-    /// without losing their other fields; the value is no longer
-    /// read by anything. Will be removed in v0.7.0.
-    #[serde(default)]
-    pub selected_byok_provider: Option<String>,
-    /// DEPRECATED in v0.5.3 → file-manager pivot. Per-provider
-    /// model overrides for the now-removed local BYOK Ask page.
-    /// Same back-compat reason as `selected_byok_provider`. Will
-    /// be removed in v0.7.0.
-    #[serde(default)]
-    pub byok_models: std::collections::HashMap<String, String>,
     /// Whether to send anonymous install-count + DAU pings to
     /// analytics.sery.ai. Default ON. Off entirely silences
     /// `analytics::record_event` (it returns immediately without
@@ -339,8 +315,6 @@ impl Default for AppConfig {
             window_hide_notified: false,
             selected_auth_mode: None,
             schema_change_toasts_enabled: true,
-            selected_byok_provider: None,
-            byok_models: std::collections::HashMap::new(),
             telemetry_enabled: true,
             install_id: None,
         }
@@ -996,15 +970,6 @@ mod tests {
         config.app.selected_auth_mode = Some(AuthMode::LocalOnly);
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("LocalOnly"));
-
-        // Test BYOK mode (api_key should not be serialized)
-        config.app.selected_auth_mode = Some(AuthMode::BYOK {
-            provider: "anthropic".to_string(),
-            api_key: "secret-key".to_string(),
-        });
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("BYOK"));
-        assert!(!json.contains("secret-key"));
 
         // Test WorkspaceKey mode (key should not be serialized)
         config.app.selected_auth_mode = Some(AuthMode::WorkspaceKey {
