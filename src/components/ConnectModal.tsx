@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open as openUrl } from '@tauri-apps/plugin-opener';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { ExternalLink, Key, X } from 'lucide-react';
 import { useAgentStore, type AgentToken } from '../stores/agentStore';
 import { useToast } from './Toast';
