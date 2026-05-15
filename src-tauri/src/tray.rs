@@ -210,10 +210,7 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
         MI_PAUSE_SYNC => set_paused(app, true),
         MI_RESUME_SYNC => set_paused(app, false),
         MI_OPEN_WEB => {
-            if let Ok(config) = Config::load() {
-                let url = config.cloud.web_url.clone();
-                let _ = open::that(url);
-            }
+            let _ = open::that("https://app.sery.ai");
         }
         MI_QUIT => {
             app.exit(0);
