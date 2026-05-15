@@ -20,6 +20,49 @@ use tauri::{
     AppHandle, Manager, Runtime,
 };
 
+static BASE_ICON: &[u8] = include_bytes!("../icons/tray-44x44.png");
+
+/// Draw a small filled circle badge in the bottom-right corner of the tray
+/// icon. Returns raw PNG bytes. Color is RGBA. Returns `None` when the state
+/// needs no badge (offline → plain template icon).
+fn badge_icon_bytes(state: &str) -> Option<Vec<u8>> {
+    let color: [u8; 4] = match state {
+        "online" => [52, 211, 153, 255],      // emerald-400
+        "syncing" | "connecting" => [251, 191, 36, 255], // amber-400
+        "error" => [248, 113, 113, 255],       // rose-400
+        _ => return None,
+    };
+
+    let mut img = image::load_from_memory(BASE_ICON).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+
+    let r = 7i32; // badge radius in pixels
+    let cx = w as i32 - r - 2;
+    let cy = h as i32 - r - 2;
+
+    for py in 0..h {
+        for px in 0..w {
+            let dx = px as i32 - cx;
+            let dy = py as i32 - cy;
+            // inner filled circle
+            if dx * dx + dy * dy <= r * r {
+                img.put_pixel(px, py, image::Rgba(color));
+            }
+            // white border ring (1px) for contrast over the base icon
+            else if dx * dx + dy * dy <= (r + 1) * (r + 1) {
+                img.put_pixel(px, py, image::Rgba([255, 255, 255, 220]));
+            }
+        }
+    }
+
+    let mut buf = Vec::new();
+    use image::ImageEncoder;
+    image::codecs::png::PngEncoder::new(&mut buf)
+        .write_image(img.as_raw(), w, h, image::ColorType::Rgba8)
+        .ok()?;
+    Some(buf)
+}
+
 // ---------------------------------------------------------------------------
 // Menu item IDs — keep in sync with the match arms in `on_menu_event`.
 // ---------------------------------------------------------------------------
@@ -113,6 +156,24 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
                 let _ = tray.set_menu(Some(menu));
             }
             let _ = tray.set_tooltip(Some(tooltip_for(&state)));
+
+            // Swap icon: badge states use a non-template icon with a colored
+            // dot in the bottom-right corner; offline falls back to the plain
+            // template icon so macOS auto-adapts it for dark/light mode.
+            match badge_icon_bytes(&state.connection) {
+                Some(bytes) => {
+                    if let Ok(icon) = Image::from_bytes(&bytes) {
+                        let _ = tray.set_icon(Some(icon));
+                        let _ = tray.set_icon_as_template(false);
+                    }
+                }
+                None => {
+                    if let Ok(icon) = Image::from_bytes(BASE_ICON) {
+                        let _ = tray.set_icon(Some(icon));
+                        let _ = tray.set_icon_as_template(true);
+                    }
+                }
+            }
         }
     });
 }
@@ -150,7 +211,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, state: &TrayState) -> tauri::Resul
         MenuItem::with_id(app, MI_PAUSE_SYNC, "Pause Syncing", true, None::<&str>)?
     };
 
-    let open_web = MenuItem::with_id(app, MI_OPEN_WEB, "Open Sery in Browser", true, None::<&str>)?;
+    let open_web = MenuItem::with_id(app, MI_OPEN_WEB, "Open Dashboard", true, None::<&str>)?;
 
     let sep3 = PredefinedMenuItem::separator(app)?;
 

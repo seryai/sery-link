@@ -13,6 +13,7 @@
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openUrl } from '@tauri-apps/plugin-opener';
 import { ExternalLink, Key, X } from 'lucide-react';
 import { useAgentStore, type AgentToken } from '../stores/agentStore';
 import { useToast } from './Toast';
@@ -201,15 +202,14 @@ export function ConnectModal({
           <p className="text-slate-600 dark:text-slate-300">
             Don't have a workspace key yet?
           </p>
-          <a
-            href="https://app.sery.ai/settings/workspace-keys"
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={() => openUrl('https://app.sery.ai/settings/workspace-keys')}
             className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
           >
             Open the dashboard to create one
             <ExternalLink className="h-3.5 w-3.5" />
-          </a>
+          </button>
         </div>
 
         {errorMsg && (

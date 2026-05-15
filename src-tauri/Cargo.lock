@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "SeryLink"
-version = "0.7.8"
+version = "0.8.3"
 dependencies = [
  "anytomd",
  "axum",
@@ -17,6 +17,7 @@ dependencies = [
  "futures",
  "glob",
  "hostname",
+ "image 0.24.9",
  "keyring",
  "mdkit",
  "notify",
@@ -1189,6 +1190,12 @@ checksum = "48f68d061bc2828ae826206326e61251aca94c1e4a5305cf52d9138639c918b4"
 dependencies = [
  "encoding_rs",
 ]
+
+[[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
 name = "colorchoice"
@@ -3148,6 +3155,19 @@ dependencies = [
 
 [[package]]
 name = "image"
+version = "0.24.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+ "color_quant",
+ "num-traits",
+ "png 0.17.16",
+]
+
+[[package]]
+name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
@@ -4788,7 +4808,7 @@ dependencies = [
  "chrono",
  "console_error_panic_hook",
  "console_log",
- "image",
+ "image 0.25.10",
  "itertools",
  "js-sys",
  "libloading 0.8.9",
@@ -6971,7 +6991,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http 1.4.0",
- "image",
+ "image 0.25.10",
  "jni 0.21.1",
  "libc",
  "log",

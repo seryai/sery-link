@@ -39,8 +39,8 @@ const CONNECTED_STATUS: Record<
     bg: 'bg-white dark:bg-slate-900',
   },
   offline: {
-    dot: 'bg-slate-400',
-    ring: 'ring-slate-400/30',
+    dot: 'bg-amber-500 animate-pulse',
+    ring: 'ring-amber-500/30',
     label: 'Reconnecting…',
     bg: 'bg-white dark:bg-slate-900',
   },
