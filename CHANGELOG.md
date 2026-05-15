@@ -5,6 +5,103 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] — 2026-05-15 — Launchpad fix + proper Apple Developer signing
+
+Patch release. Fixes two macOS distribution issues introduced when
+Sery Link first shipped as a signed app.
+
+### Fixed
+
+- **Sery Link now appears in Launchpad.** The app was visible in
+  `/Applications` but missing from Launchpad entirely. Root cause:
+  `tauri.conf.json` had no `category` field, so Tauri generated an
+  `Info.plist` without `LSApplicationCategoryType`. macOS Launchpad
+  uses this field to index apps — without it, the app is silently
+  skipped. Added `"category": "Utility"` to the bundle config.
+
+  Existing installs can force a Launchpad rescan:
+  ```
+  defaults write com.apple.dock ResetLaunchPad -bool true && killall Dock
+  ```
+
+- **Release builds are now properly signed with Apple Developer ID.**
+  The hardcoded `"signingIdentity": "-"` (ad-hoc signing) has been
+  removed. CI now reads `APPLE_SIGNING_IDENTITY` from GitHub Secrets
+  and signs + notarizes the DMG automatically. Previously distributed
+  builds were ad-hoc signed, which triggered Gatekeeper on first
+  launch and could prevent LaunchServices from registering the app.
+
+---
+
+## [0.8.2] — 2026-05-14 — Auth + icon polish
+
+### Fixed
+
+- **Silent re-auth for workspace-key users on token expiry.** Users
+  authenticating via a workspace key were kicked to the login screen
+  when their token expired instead of silently refreshing. The auth
+  refresh path now handles workspace-key sessions correctly.
+
+- **App icon inset corrected.** Regenerated all icon variants from the
+  rounded source with 9% padding so the mark sits within Apple's
+  recommended safe area on all surfaces (Dock, Launchpad, Finder).
+
+---
+
+## [0.8.1] — 2026-05-13 — About panel cleanup
+
+### Fixed
+
+- **Removed internal API endpoint row from the About panel.** The
+  About dialog was displaying the raw API base URL, which is an
+  implementation detail not useful to end users.
+
+- **App icon padding set to 9%** to match macOS system icon sizing.
+
+---
+
+## [0.8.0] — 2026-05-13 — Analytics + sidebar logo + tunnel fixes
+
+Minor release. Adds privacy-respecting local analytics, replaces the
+sidebar text brand with the SVG logo mark, and fixes several auth and
+tunnel bugs found during the v0.7 rollout.
+
+### Added
+
+- **Local-first analytics.** Sery Link now sends a daily ping and
+  install ID to `analytics.sery.ai` — nothing else. No file paths,
+  no query content, no user data. Events queue locally and flush in
+  the background; the app works identically if the endpoint is
+  unreachable. Narrowed from a broader event system to just
+  `install_id + daily_ping` to keep the surface minimal.
+
+### Fixed
+
+- **Sidebar shows the Sery logo instead of text branding.** The
+  text "Sery Link" header has been replaced with the SVG mark,
+  matching the website and dashboard.
+
+- **`AuthMode` config round-trip no longer crashes.** Loading a
+  config file that had `WorkspaceKey` auth mode caused a panic
+  ("missing field key") due to a missing serde default. Fixed.
+
+- **Tunnel queries on `local://` sources now resolve correctly.**
+  Queries routed through the cloud tunnel to local sources were
+  failing because the URL was forwarded un-resolved. The agent now
+  resolves `local://` to an absolute path before executing.
+
+- **Workspace-key auth mode persists across restarts.** After pairing
+  with a workspace key, the auth mode was reverting to `Cloud` on the
+  next launch. The pair flow now writes `WorkspaceKey` to the config
+  and triggers a heartbeat immediately after pairing.
+
+- **CI: Apple notarization now succeeds end-to-end.** Pre-signs
+  bundled third-party binaries (pandoc, libpdfium) before tauri-action
+  bundles them — notarization rejected the entire app when these
+  arrived unsigned.
+
+---
+
 ## [0.7.8] — 2026-05-10 — Crash + CI fixes, brand polish
 
 Patch release. Fixes a recurring crash that killed the app during
