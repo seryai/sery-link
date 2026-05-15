@@ -5,6 +5,51 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] — 2026-05-15 — Tray menu polish + BYOK removal
+
+Patch release. Cleans up the system-tray menu and removes the
+long-deprecated BYOK (bring-your-own API key) code path.
+
+### Fixed
+
+- **Tray menu "Open Dashboard" now opens app.sery.ai.** The handler
+  was reading `web_url` from the user's config file, which could hold
+  a stale `https://sery.ai` from an older install. URL is now
+  hardcoded in the handler.
+
+- **Tray menu status dot is colored.** The status line (first item in
+  the right-click menu) now shows 🟢 / 🟡 / 🔴 / ⚪ matching the
+  connection state. Previously all states rendered as a gray Unicode
+  circle because the item was marked disabled.
+
+- **Tray menu shows "Offline" immediately after disconnect.** Clicking
+  Disconnect or enabling Local-Only mode now calls `tray::set_state`
+  synchronously, so the menu reflects the new state right away instead
+  of staying stale at "Connected".
+
+- **"Open Sery in Browser" renamed to "Open Dashboard"** in the
+  right-click menu.
+
+- **"Open the dashboard to create one" link in the Connect dialog
+  now actually opens the browser.** The `<a href>` tag was silently
+  swallowed by Tauri's webview; replaced with `openUrl()` from
+  `@tauri-apps/plugin-opener`.
+
+- **Reconnecting… badge is now amber instead of gray** in the
+  in-app status bar, making it visually distinct from the
+  never-connected (Local only) state.
+
+### Changed
+
+- BYOK (bring-your-own Anthropic/OpenAI API key) support fully
+  removed. AI runs cloud-side via the dashboard. The `AuthMode::BYOK`
+  variant, deprecated config fields (`selected_byok_provider`,
+  `byok_models`), and the "Use My Own API Key" upgrade prompt button
+  are all gone. Old audit log entries (`byok_call`) still deserialize
+  correctly for users inspecting historic privacy logs.
+
+---
+
 ## [0.8.3] — 2026-05-15 — Launchpad fix + proper Apple Developer signing
 
 Patch release. Fixes two macOS distribution issues introduced when
