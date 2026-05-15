@@ -76,6 +76,7 @@ pub fn get_workspace_key() -> Result<String> {
         .map_err(|e| AgentError::Keyring(format!("Failed to retrieve workspace key: {}", e)))
 }
 
+#[allow(dead_code)]
 pub fn has_workspace_key() -> bool {
     get_workspace_key().is_ok()
 }

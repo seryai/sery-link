@@ -22,35 +22,67 @@ use tauri::{
 
 static BASE_ICON: &[u8] = include_bytes!("../icons/tray-44x44.png");
 
+/// True when macOS is running in dark mode (dark menu bar).
+/// On non-macOS platforms always returns false.
+fn is_dark_mode() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .eq_ignore_ascii_case("dark")
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 /// Draw a small filled circle badge in the bottom-right corner of the tray
-/// icon. Returns raw PNG bytes. Color is RGBA. Returns `None` when the state
-/// needs no badge (offline → plain template icon).
+/// icon. Returns raw PNG bytes. Returns `None` for offline (use plain template).
+///
+/// In dark mode the base icon pixels are inverted (black → white) so the
+/// Sery logo remains visible against the dark menu bar.
 fn badge_icon_bytes(state: &str) -> Option<Vec<u8>> {
     let color: [u8; 4] = match state {
-        "online" => [52, 211, 153, 255],      // emerald-400
+        "online" => [52, 211, 153, 255],                 // emerald-400
         "syncing" | "connecting" => [251, 191, 36, 255], // amber-400
-        "error" => [248, 113, 113, 255],       // rose-400
+        "error" => [248, 113, 113, 255],                 // rose-400
         _ => return None,
     };
 
+    let dark = is_dark_mode();
     let mut img = image::load_from_memory(BASE_ICON).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
 
-    let r = 7i32; // badge radius in pixels
+    // Invert dark pixels for dark mode so the icon stays visible.
+    // Template icons are black-on-transparent; inverting gives white-on-transparent.
+    if dark {
+        for pixel in img.pixels_mut() {
+            let [r, g, b, a] = pixel.0;
+            if a > 32 {
+                *pixel = image::Rgba([255 - r, 255 - g, 255 - b, a]);
+            }
+        }
+    }
+
+    let r = 7i32;
     let cx = w as i32 - r - 2;
     let cy = h as i32 - r - 2;
+    // Badge border color: dark in light mode, dark in dark mode (contrast against white base)
+    let border: [u8; 4] = if dark { [30, 30, 30, 200] } else { [255, 255, 255, 220] };
 
     for py in 0..h {
         for px in 0..w {
             let dx = px as i32 - cx;
             let dy = py as i32 - cy;
-            // inner filled circle
             if dx * dx + dy * dy <= r * r {
                 img.put_pixel(px, py, image::Rgba(color));
-            }
-            // white border ring (1px) for contrast over the base icon
-            else if dx * dx + dy * dy <= (r + 1) * (r + 1) {
-                img.put_pixel(px, py, image::Rgba([255, 255, 255, 220]));
+            } else if dx * dx + dy * dy <= (r + 1) * (r + 1) {
+                img.put_pixel(px, py, image::Rgba(border));
             }
         }
     }
