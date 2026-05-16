@@ -5,6 +5,53 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] — 2026-05-16 — Stable machine identity + source detection fixes
+
+Identity and sources reliability release. Introduces a persistent
+machine ID so disconnect/reconnect always reuses the same network
+record, and fixes source detection on the dashboard for local folders
+and S3 resources.
+
+### Added
+
+- **Stable machine ID.** A UUID is generated on first install, stored
+  in the OS keyring (survives config deletion), and sent on every auth
+  request. The API now looks up agents by machine ID first, then by
+  name — so renaming an agent or rotating a workspace key no longer
+  creates a duplicate network record on the dashboard.
+
+### Fixed
+
+- **Source roots reported on every sync.** Sery Link now sends the full
+  list of configured source roots (`source_roots`) with every cloud
+  sync. The dashboard uses this list to show the correct sources
+  immediately — no rescan needed.
+
+- **Local folder paths embedded in query_path.** Each dataset's
+  `relative_path` is now prefixed with its source folder path so the
+  dashboard can map datasets back to individual watched folders
+  (e.g. `/Users/foo/Documents/report.csv` instead of `report.csv`).
+
+- **S3 sources no longer wrapped in local://.** Remote source URLs
+  (`s3://`, `https://`, etc.) are no longer incorrectly prefixed with
+  the local folder path, producing malformed query paths like
+  `local://agent_id/s3://bucket/…`.
+
+- **Session expired on API restart.** A single 401 during WebSocket
+  reconnect (common while the API is restarting) no longer immediately
+  shows "session expired". The reconnect loop now tolerates up to two
+  transient auth errors before prompting re-authentication.
+
+- **OAuth redirect goes to production dashboard.** The agent authorize
+  endpoint now uses `PUBLIC_DASHBOARD_URL` (e.g. `https://app.sery.ai`)
+  instead of defaulting to `http://localhost:3001`.
+
+---
+
+## [0.8.7] — 2026-05-16 — (yanked, superseded by 0.8.8)
+
+---
+
 ## [0.8.6] — 2026-05-16 — CI: auto-rebuild website on release
 
 CI patch. Adds a post-release job that triggers a sery.ai website
