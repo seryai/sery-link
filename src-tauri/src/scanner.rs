@@ -1998,8 +1998,26 @@ pub(crate) fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_js
 pub async fn sync_metadata_to_cloud(
     api_url: &str,
     token: &str,
+    // Watched folder or source root that produced these datasets.
+    // When provided, each relative_path is prefixed with the full folder
+    // path (minus leading slash) so the cloud can group datasets by source.
+    // e.g. folder "/Users/foo/Documents" + relative "data.csv"
+    //   → relative_path sent = "Users/foo/Documents/data.csv"
+    //   → query_path in DB  = "local://agent_id/Users/foo/Documents/data.csv"
+    // Backward-compat: existing records (bare relative_path) stay valid;
+    // the desktop resolver tries the absolute path first (see duckdb_engine).
+    folder_path: Option<&str>,
     mut datasets: Vec<DatasetMetadata>,
 ) -> Result<serde_json::Value> {
+    if let Some(fp) = folder_path {
+        let prefix = fp.trim_start_matches('/').trim_end_matches('/');
+        if !prefix.is_empty() {
+            for d in datasets.iter_mut() {
+                d.relative_path = format!("{}/{}", prefix, d.relative_path);
+            }
+        }
+    }
+
     // ROADMAP F2 — opt-in for uploading extracted document text. The
     // toggle defaults to OFF, which means we strip `document_markdown`
     // from every dataset before serializing the sync payload. The cloud

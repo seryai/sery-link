@@ -390,13 +390,17 @@ fn
 }
 
 #[allow(dead_code)]
-fn
- is_path_allowed(path: &str, config: &Config) -> bool {
+fn is_path_allowed(path: &str, config: &Config) -> bool {
     let path = Path::new(path);
 
     config.watched_folders.iter().any(|folder| {
-        let folder_path = Path::new(&folder.path);
-        path.starts_with(folder_path)
+        path.starts_with(Path::new(&folder.path))
+    }) || config.sources.iter().any(|source| {
+        if let crate::sources::SourceKind::Local { path: source_path, .. } = &source.kind {
+            path.starts_with(source_path)
+        } else {
+            false
+        }
     })
 }
 
@@ -472,6 +476,14 @@ fn resolve_local_url(url: &str, config: &Config) -> std::result::Result<PathBuf,
         .next()
         .unwrap_or(&rel_path_decoded);
 
+    // New format: relative_path prefixed with the full folder path
+    // (e.g. "Users/foo/Documents/data.csv"). Try as absolute path first.
+    let abs_candidate = PathBuf::from("/").join(rel_for_lookup);
+    if abs_candidate.exists() {
+        return Ok(abs_candidate);
+    }
+
+    // Legacy format: relative_path is relative to each source/folder root.
     let mut tried = Vec::new();
     for folder in &config.watched_folders {
         let candidate = Path::new(&folder.path).join(rel_for_lookup);

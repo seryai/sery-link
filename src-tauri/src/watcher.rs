@@ -275,7 +275,7 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
         .map_err(|e| AgentError::Config(format!("missing token: {}", e)))?;
 
     let sync_result =
-        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets).await;
+        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(folder_path), datasets).await;
 
     match sync_result {
         Ok(_) => {

@@ -138,7 +138,7 @@ fn persist_identity(workspace_id: &str, agent_id: &str) {
 /// the error — the pair itself is still successful (token is in
 /// the keyring), and the periodic scan loop will retry.
 async fn post_pair_heartbeat(api_url: &str, token: &str) {
-    match scanner::sync_metadata_to_cloud(api_url, token, Vec::new()).await {
+    match scanner::sync_metadata_to_cloud(api_url, token, None, Vec::new()).await {
         Ok(_) => {
             eprintln!("[post-pair] heartbeat sync ok");
         }
@@ -2455,7 +2455,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     let cloud_resp = if cloud_sync_enabled() {
         match (Config::load(), keyring_store::get_token()) {
             (Ok(config), Ok(token)) => {
-                match scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets.clone())
+                match scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(&folder_path), datasets.clone())
                     .await
                 {
                     Ok(r) => {
@@ -2555,7 +2555,7 @@ fn scan_status_should_emit(last_emit_ms: &std::sync::atomic::AtomicI64) -> bool 
 pub async fn sync_metadata(datasets: Vec<DatasetMetadata>) -> Result<Value, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
     let token = keyring_store::get_token().map_err(|e| e.to_string())?;
-    scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, datasets)
+    scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, None, datasets)
         .await
         .map_err(|e| e.to_string())
 }
