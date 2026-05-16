@@ -2078,3 +2078,38 @@ pub async fn sync_metadata_to_cloud(
     Ok(result)
 }
 
+
+/// Tell the cloud to delete all datasets whose query_path starts with
+/// `source_prefix`. Called when a watched folder or source is removed so
+/// the dashboard stops showing stale entries.
+///
+/// `source_prefix` must already be the virtual query_path prefix, e.g.
+///   "local://<agent_id>/Users/foo/Documents/"  (local folder)
+///   "local://<agent_id>/s3://bucket/prefix/"   (S3 source)
+///
+/// Best-effort: network failures are logged but not surfaced to the UI
+/// because the local removal already succeeded.
+pub async fn delete_source_datasets(api_url: &str, token: &str, source_prefix: &str) {
+    let client = reqwest::Client::new();
+    match client
+        .delete(format!("{}/v1/agent/datasets/by-source", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .query(&[("source_prefix", source_prefix)])
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            eprintln!("[scanner] deleted cloud datasets for prefix {}", source_prefix);
+        }
+        Ok(r) => {
+            eprintln!(
+                "[scanner] delete-by-source {} returned {}",
+                source_prefix,
+                r.status()
+            );
+        }
+        Err(e) => {
+            eprintln!("[scanner] delete-by-source network error: {}", e);
+        }
+    }
+}

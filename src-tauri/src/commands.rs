@@ -34,6 +34,20 @@ use tokio::sync::RwLock;
 
 /// Collect absolute paths for all configured local sources + watched folders.
 /// Sent to the cloud so the dashboard can display the correct source list.
+/// Build the virtual query_path prefix for a source so the cloud can
+/// purge all its datasets in one call.
+/// Local:  "/Users/foo/Docs"       → "local://<aid>/Users/foo/Docs/"
+/// Remote: "s3://bucket/prefix/"   → "local://<aid>/s3://bucket/prefix/"
+fn build_source_prefix(agent_id: &str, path: &str) -> String {
+    if path.contains("://") {
+        let trimmed = path.trim_end_matches('/');
+        format!("local://{}/{}/", agent_id, trimmed)
+    } else {
+        let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+        format!("local://{}/{}/", agent_id, trimmed)
+    }
+}
+
 fn collect_source_roots(config: &crate::config::Config) -> Vec<String> {
     let mut roots: Vec<String> = config
         .watched_folders
@@ -882,24 +896,31 @@ pub async fn get_gdrive_skipped(limit: Option<usize>) -> Result<GdriveSkippedSum
 
 #[tauri::command]
 pub async fn remove_watched_folder(path: String) -> Result<(), String> {
-    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    // Snapshot agent_id + cloud config before mutating so we can build
+    // the query_path prefix for the cloud purge below.
+    let agent_id = config.agent.agent_id.clone();
+    let api_url = config.cloud.api_url.clone();
+
+    let mut config = config;
     config.remove_watched_folder(&path);
     config.save().map_err(|e| e.to_string())?;
-    // Clear any S3 credentials we stored for this URL — otherwise a
-    // keyring entry lingers after the source is gone. Failure here is
-    // non-fatal: the user can remove the entry manually from Keychain
-    // Access if needed.
+
     if crate::url::is_s3_url(&path) {
         let _ = crate::remote_creds::delete(&path);
     }
-    // Drop any cached scan results for this folder — otherwise re-adding
-    // the same path later would surface rows for files that may have
-    // moved or been deleted in the meantime. Goes through the shared
-    // cache singleton. Same for the preview cache (row + profile
-    // payloads keyed under the same folder_path).
     let _ = crate::scan_cache::with_cache(|c| c.invalidate_folder(&path));
     let _ = crate::preview_cache::with_cache(|c| c.invalidate_folder(&path));
     let _ = restart_file_watcher().await;
+
+    // Tell the cloud to purge datasets for this source so the dashboard
+    // stops showing stale entries immediately.
+    if let (Some(aid), Ok(token)) = (agent_id, keyring_store::get_token()) {
+        let prefix = build_source_prefix(&aid, &path);
+        scanner::delete_source_datasets(&api_url, &token, &prefix).await;
+    }
+
     Ok(())
 }
 
@@ -3491,6 +3512,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     // remove_watched_folder cleanup so removing via the Sources
     // sidebar leaves the same residue as removing via the legacy
     // Folders tab — no orphan keychain entry, no stale cache.
+    let cloud_purge_path = cleanup_url.clone();
     if let Some(url) = cleanup_url {
         if crate::url::is_s3_url(&url) {
             let _ = crate::remote_creds::delete(&url);
@@ -3514,6 +3536,18 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         let _ = crate::onedrive_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
+
+    // Purge cloud datasets for this source.
+    if let Some(path) = cloud_purge_path {
+        let cfg = Config::load().ok();
+        if let (Some(c), Ok(token)) = (cfg, keyring_store::get_token()) {
+            if let Some(aid) = &c.agent.agent_id {
+                let prefix = build_source_prefix(aid, &path);
+                scanner::delete_source_datasets(&c.cloud.api_url, &token, &prefix).await;
+            }
+        }
+    }
+
     Ok(())
 }
 
