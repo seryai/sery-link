@@ -5,6 +5,38 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] — 2026-05-16 — CI: auto-rebuild website on release
+
+CI patch. Adds a post-release job that triggers a sery.ai website
+rebuild automatically so the About page and blog stay current without
+a manual deploy step.
+
+### Changed
+
+- Release workflow now fires a `repository_dispatch` to `seryai/website`
+  after all platform builds complete, keeping sery.ai in sync with each
+  new release.
+
+---
+
+## [0.8.5] — 2026-05-15 — Sidebar restructure + Apple-signed releases
+
+Sidebar polish and distribution fixes. Renames "Results" to "History",
+promotes Settings to a top-level nav link, and moves Notifications and
+Privacy into a More dropdown. Apple Developer ID signing is now fully
+wired through CI.
+
+### Changed
+
+- **Results → History** in the sidebar nav label (route `/results` unchanged).
+- **Settings** promoted from the More dropdown to a direct nav link.
+- **Notifications** and **Privacy** moved into the More dropdown.
+- Release builds are now signed and notarized with Apple Developer ID via
+  `APPLE_SIGNING_IDENTITY` / `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD`
+  secrets in GitHub Actions.
+
+---
+
 ## [0.8.4] — 2026-05-15 — Tray menu polish + BYOK removal
 
 Patch release. Cleans up the system-tray menu and removes the
