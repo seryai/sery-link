@@ -161,6 +161,12 @@ impl WebSocketClient {
     ) {
         let mut reconnect_delay = Duration::from_secs(RECONNECT_DELAY_SECS);
         let max_delay = Duration::from_secs(MAX_RECONNECT_DELAY_SECS);
+        // Consecutive auth errors before surfacing "session expired". A
+        // single 401 during the handshake can be a transient startup issue
+        // (API restarting, load-balancer draining), not a real token problem.
+        // Three consecutive failures almost certainly mean the token is gone.
+        let mut consecutive_auth_errors: u32 = 0;
+        const AUTH_ERROR_THRESHOLD: u32 = 3;
 
         loop {
             *status.write().await = ConnectionStatus::Connecting;
@@ -172,12 +178,27 @@ impl WebSocketClient {
             match Self::connect_and_run(&ws_url, &token, config.clone(), status.clone(), app.clone()).await {
                 Ok(_) => {
                     eprintln!("WebSocket disconnected gracefully");
+                    consecutive_auth_errors = 0;
                     *status.write().await = ConnectionStatus::Offline;
                     emit_status(&app, "offline", None);
                     reconnect_delay = Duration::from_secs(RECONNECT_DELAY_SECS);
                 }
                 Err(AgentError::WebSocket(ref e)) if is_auth_error(e) => {
-                    eprintln!("Auth error on WebSocket: {}", e);
+                    consecutive_auth_errors += 1;
+                    eprintln!(
+                        "Auth error on WebSocket ({}/{}): {}",
+                        consecutive_auth_errors, AUTH_ERROR_THRESHOLD, e
+                    );
+
+                    if consecutive_auth_errors < AUTH_ERROR_THRESHOLD {
+                        // Might be a transient API restart — back off and retry
+                        // before concluding the token is actually invalid.
+                        *status.write().await = ConnectionStatus::Error(e.to_string());
+                        emit_status(&app, "error", Some(e.to_string()));
+                        tokio::time::sleep(reconnect_delay).await;
+                        reconnect_delay = std::cmp::min(reconnect_delay * 2, max_delay);
+                        continue;
+                    }
 
                     // Workspace-key users: silently exchange the saved key for
                     // a fresh agent token instead of surfacing the re-auth modal.
@@ -189,6 +210,7 @@ impl WebSocketClient {
                             Ok(new_token) => {
                                 eprintln!("Silent re-auth succeeded, resuming tunnel");
                                 token = new_token.access_token;
+                                consecutive_auth_errors = 0;
                                 reconnect_delay = Duration::from_secs(RECONNECT_DELAY_SECS);
                                 continue;
                             }
@@ -206,6 +228,7 @@ impl WebSocketClient {
                     return;
                 }
                 Err(e) => {
+                    consecutive_auth_errors = 0;
                     eprintln!(
                         "WebSocket error: {}, reconnecting in {:?}",
                         e, reconnect_delay
