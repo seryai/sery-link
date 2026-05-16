@@ -235,3 +235,17 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  notify-website:
+    name: Trigger website rebuild
+    needs: release
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Dispatch to seryai/website
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.WEBSITE_DEPLOY_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/seryai/website/dispatches \
+            -d '{"event_type":"sery-link-release","client_payload":{"version":"${{ github.ref_name }}"}}'
