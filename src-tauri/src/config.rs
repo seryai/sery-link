@@ -87,6 +87,15 @@ pub struct AgentConfig {
     // when they return a fresh AgentToken.
     #[serde(default)]
     pub workspace_id: Option<String>,
+    // Stable machine identity — generated once on first install, stored in
+    // config forever. Sent to the API on every auth/reconnect so the agent
+    // record survives renames and workspace-key rotations.
+    #[serde(default = "new_machine_id")]
+    pub machine_id: String,
+}
+
+fn new_machine_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,6 +348,7 @@ impl Default for Config {
                 hostname,
                 agent_id: None,
                 workspace_id: None,
+                machine_id: new_machine_id(),
             },
             watched_folders: Vec::new(),
             gdrive_watched_folders: Vec::new(),

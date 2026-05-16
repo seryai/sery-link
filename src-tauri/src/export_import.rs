@@ -238,6 +238,7 @@ mod tests {
                 hostname: "test-host".to_string(),
                 agent_id: None,
                 workspace_id: None,
+                machine_id: "test-machine-id".to_string(),
             },
             watched_folders: vec![test_folder()],
             gdrive_watched_folders: Vec::new(),

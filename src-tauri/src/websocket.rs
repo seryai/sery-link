@@ -206,7 +206,8 @@ impl WebSocketClient {
                         eprintln!("Attempting silent re-auth with saved workspace key");
                         let api_url = cfg.cloud.api_url.clone();
                         let display_name = cfg.agent.name.clone();
-                        match auth::auth_with_workspace_key(saved_key, display_name, api_url).await {
+                        let machine_id = cfg.agent.machine_id.clone();
+                        match auth::auth_with_workspace_key(saved_key, display_name, machine_id, api_url).await {
                             Ok(new_token) => {
                                 eprintln!("Silent re-auth succeeded, resuming tunnel");
                                 token = new_token.access_token;

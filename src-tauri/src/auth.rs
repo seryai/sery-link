@@ -30,6 +30,7 @@ pub struct AgentToken {
 pub async fn start_oauth_flow(
     agent_name: String,
     platform: String,
+    machine_id: String,
     api_url: String,
 ) -> Result<AgentToken> {
     let hostname = hostname::get()
@@ -39,11 +40,12 @@ pub async fn start_oauth_flow(
 
     // Build authorization URL
     let auth_url = format!(
-        "{}/v1/agent/authorize?agent_name={}&platform={}&hostname={}&redirect_uri=http://localhost:{}",
+        "{}/v1/agent/authorize?agent_name={}&platform={}&hostname={}&machine_id={}&redirect_uri=http://localhost:{}",
         api_url,
         urlencoding::encode(&agent_name),
         urlencoding::encode(&platform),
         urlencoding::encode(&hostname),
+        urlencoding::encode(&machine_id),
         CALLBACK_PORT
     );
 
@@ -201,6 +203,7 @@ pub async fn bootstrap_workspace(
 pub async fn auth_with_workspace_key(
     key: String,
     display_name: String,
+    machine_id: String,
     api_url: String,
 ) -> Result<AgentToken> {
     let hostname = hostname::get()
@@ -217,6 +220,7 @@ pub async fn auth_with_workspace_key(
             "display_name": display_name,
             "platform": platform,
             "hostname": hostname,
+            "machine_id": machine_id,
         }))
         .send()
         .await?;

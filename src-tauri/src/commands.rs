@@ -101,7 +101,7 @@ pub(crate) fn cloud_sync_enabled() -> bool {
 #[tauri::command]
 pub async fn start_auth_flow(agent_name: String, platform: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    auth::start_oauth_flow(agent_name, platform, config.cloud.api_url)
+    auth::start_oauth_flow(agent_name, platform, config.agent.machine_id, config.cloud.api_url)
         .await
         .map_err(|e| e.to_string())
 }
@@ -186,7 +186,7 @@ pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, Str
 #[tauri::command]
 pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    let token = auth::auth_with_workspace_key(key, display_name, config.cloud.api_url.clone())
+    let token = auth::auth_with_workspace_key(key, display_name, config.agent.machine_id, config.cloud.api_url.clone())
         .await
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
