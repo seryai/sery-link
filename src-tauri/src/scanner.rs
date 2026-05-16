@@ -2089,6 +2089,45 @@ pub async fn sync_metadata_to_cloud(
 ///
 /// Best-effort: network failures are logged but not surfaced to the UI
 /// because the local removal already succeeded.
+/// POST current source_roots to the cloud so it can delete datasets for
+/// sources that are no longer configured. Called after WebSocket connect.
+///
+/// Handles all divergence scenarios:
+///   - Folder removed while offline (cloud still has its datasets)
+///   - Delete API call that failed on a previous attempt
+///   - First connect after migrating from an old install
+///
+/// Best-effort: never blocks the main tunnel loop.
+pub async fn reconcile_with_cloud(api_url: &str, token: &str, source_roots: Vec<String>) {
+    if source_roots.is_empty() {
+        return;
+    }
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({ "source_roots": source_roots });
+    match client
+        .post(format!("{}/v1/agent/reconcile", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(json) = r.json::<serde_json::Value>().await {
+                let deleted = json.get("deleted").and_then(|v| v.as_u64()).unwrap_or(0);
+                if deleted > 0 {
+                    eprintln!("[scanner] reconcile: removed {} stale cloud dataset(s)", deleted);
+                }
+            }
+        }
+        Ok(r) => {
+            eprintln!("[scanner] reconcile returned {}", r.status());
+        }
+        Err(e) => {
+            eprintln!("[scanner] reconcile network error: {}", e);
+        }
+    }
+}
+
 pub async fn delete_source_datasets(api_url: &str, token: &str, source_prefix: &str) {
     let client = reqwest::Client::new();
     match client

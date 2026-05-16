@@ -295,6 +295,34 @@ impl WebSocketClient {
         }
         let _outbound_guard = OutboundGuard;
 
+        // Reconcile cloud dataset records against current source_roots.
+        // Deletes stale datasets for sources removed while offline, failed
+        // deletes, etc. Spawned detached so it never blocks the tunnel loop.
+        {
+            let cfg = config.read().await.clone();
+            let api_url = cfg.cloud.api_url.clone();
+            let token_clone = token.to_string();
+            let source_roots: Vec<String> = cfg
+                .sources
+                .iter()
+                .filter_map(|s| {
+                    use crate::sources::SourceKind;
+                    match &s.kind {
+                        SourceKind::Local { path, .. } => {
+                            Some(path.to_string_lossy().to_string())
+                        }
+                        SourceKind::S3 { url } | SourceKind::Https { url } => {
+                            Some(url.clone())
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            tokio::spawn(async move {
+                crate::scanner::reconcile_with_cloud(&api_url, &token_clone, source_roots).await;
+            });
+        }
+
         // Replay the last scan_status snapshot if we reconnected
         // mid-scan. Without this, a tunnel blip leaves the cloud
         // dashboard pill blank until the next 30s keepalive tick or
