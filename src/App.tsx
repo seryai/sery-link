@@ -72,7 +72,7 @@ function AppInner() {
   } = useAgentStore();
 
   // Check if current route is in More dropdown
-  const isMoreActive = location.pathname.startsWith('/settings') || location.pathname.startsWith('/privacy');
+  const isMoreActive = location.pathname.startsWith('/notifications') || location.pathname.startsWith('/privacy');
 
   // Keep the `html.dark` class and `html.theme` in sync with config
   useTheme();
@@ -281,7 +281,7 @@ function AppInner() {
               }
             >
               <BarChart3 className="h-4 w-4" />
-              Results
+              History
             </NavLink>
             {/* Machines + Recipes are workspace-scoped — hidden until
                 the user connects to a Sery cloud workspace. Their
@@ -317,12 +317,25 @@ function AppInner() {
                 </NavLink>
               </>
             )}
-            <NotificationsNavLink />
-
-            {/* Spacer to push More to bottom */}
+            {/* Spacer to push bottom items down */}
             <div className="flex-1" />
 
-            {/* More dropdown */}
+            {/* Settings — direct link, always visible */}
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <SettingsIcon className="h-4 w-4" />
+              Settings
+            </NavLink>
+
+            {/* More dropdown — low-frequency items */}
             <div className="dropdown-container relative">
               <button
                 onClick={(e) => {
@@ -336,33 +349,36 @@ function AppInner() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <SettingsIcon className="h-4 w-4" />
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform ${showMoreDropdown ? 'rotate-180' : ''}`}
+                  />
                   <span>More</span>
                 </div>
-                <ChevronDown
-                  className={`h-4 w-4 transition-transform ${showMoreDropdown ? 'rotate-180' : ''}`}
-                />
+                <MoreNotificationsBadge />
               </button>
 
               {/* Dropdown menu */}
               {showMoreDropdown && (
                 <div className="dropdown-container absolute bottom-full left-0 mb-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                   <NavLink
-                    to="/settings"
+                    to="/notifications"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowMoreDropdown(false);
                     }}
                     className={({ isActive }) =>
-                      `flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors ${
+                      `flex w-full items-center justify-between gap-3 px-3 py-2 text-sm transition-colors ${
                         isActive
                           ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                           : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
                       }`
                     }
                   >
-                    <SettingsIcon className="h-4 w-4" />
-                    <span>Settings</span>
+                    <div className="flex items-center gap-3">
+                      <Bell className="h-4 w-4" />
+                      <span>Notifications</span>
+                    </div>
+                    <NotificationsBadge />
                   </NavLink>
                   <NavLink
                     to="/privacy"
@@ -428,34 +444,29 @@ function AppInner() {
   );
 }
 
-// Sidebar link with an unread-count badge. Split out so it can read
-// from the store independently and avoid re-rendering the whole nav
-// on every notification arrival.
-function NotificationsNavLink() {
+// Unread badge shown inside the More dropdown next to Notifications.
+function NotificationsBadge() {
   const unread = useAgentStore((s) =>
     s.schemaNotifications.reduce((n, x) => n + (x.read ? 0 : 1), 0),
   );
+  if (unread === 0) return null;
   return (
-    <NavLink
-      to="/notifications"
-      className={({ isActive }) =>
-        `flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-          isActive
-            ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-            : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-        }`
-      }
-    >
-      <div className="flex items-center gap-3">
-        <Bell className="h-4 w-4" />
-        <span>Notifications</span>
-      </div>
-      {unread > 0 && (
-        <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-          {unread > 99 ? '99+' : unread}
-        </span>
-      )}
-    </NavLink>
+    <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+      {unread > 99 ? '99+' : unread}
+    </span>
+  );
+}
+
+// Badge shown on the More button itself when there are unread notifications.
+function MoreNotificationsBadge() {
+  const unread = useAgentStore((s) =>
+    s.schemaNotifications.reduce((n, x) => n + (x.read ? 0 : 1), 0),
+  );
+  if (unread === 0) return null;
+  return (
+    <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+      {unread > 99 ? '99+' : unread}
+    </span>
   );
 }
 
