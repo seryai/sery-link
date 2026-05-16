@@ -2013,10 +2013,15 @@ pub async fn sync_metadata_to_cloud(
     mut datasets: Vec<DatasetMetadata>,
 ) -> Result<serde_json::Value> {
     if let Some(fp) = folder_path {
-        let prefix = fp.trim_start_matches('/').trim_end_matches('/');
-        if !prefix.is_empty() {
-            for d in datasets.iter_mut() {
-                d.relative_path = format!("{}/{}", prefix, d.relative_path);
+        // Only prepend the folder path for local filesystem paths.
+        // Remote sources (s3://, https://, sftp://, etc.) already carry
+        // their own scheme and must not be wrapped inside local://.
+        if !fp.contains("://") {
+            let prefix = fp.trim_start_matches('/').trim_end_matches('/');
+            if !prefix.is_empty() {
+                for d in datasets.iter_mut() {
+                    d.relative_path = format!("{}/{}", prefix, d.relative_path);
+                }
             }
         }
     }
