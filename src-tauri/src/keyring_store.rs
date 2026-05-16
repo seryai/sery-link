@@ -6,6 +6,7 @@ use crate::error::{AgentError, Result};
 const SERVICE_NAME: &str = "seryai-agent";
 const ACCESS_TOKEN_KEY: &str = "access_token";
 const WORKSPACE_KEY_KEY: &str = "workspace_key";
+const MACHINE_ID_KEY: &str = "machine_id";
 
 // Process-wide token cache. macOS prompts the user *every* keychain
 // read on ad-hoc-signed builds (no stable code signature for the OS
@@ -74,5 +75,34 @@ pub fn get_workspace_key() -> Result<String> {
     entry
         .get_password()
         .map_err(|e| AgentError::Keyring(format!("Failed to retrieve workspace key: {}", e)))
+}
+
+/// Returns the stable machine identity UUID, creating and persisting one if
+/// this is the first run (or the keyring was wiped). The `config_fallback`
+/// is the value already stored in the config file — used to migrate existing
+/// installs that have a machine_id in config but not yet in the keyring.
+pub fn get_or_create_machine_id(config_fallback: &str) -> String {
+    let entry = match Entry::new(SERVICE_NAME, MACHINE_ID_KEY) {
+        Ok(e) => e,
+        Err(_) => return config_fallback.to_string(),
+    };
+
+    // Keyring has it — return it.
+    if let Ok(id) = entry.get_password() {
+        if !id.is_empty() {
+            return id;
+        }
+    }
+
+    // Not in keyring. Prefer the value already in config (migration path for
+    // users upgrading from a build that stored machine_id only in config).
+    let id = if !config_fallback.is_empty() {
+        config_fallback.to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+
+    let _ = entry.set_password(&id); // best-effort; config fallback still works
+    id
 }
 

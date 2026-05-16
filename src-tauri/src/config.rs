@@ -399,6 +399,15 @@ impl Config {
             let _ = config.save();
         }
 
+        // Resolve machine_id through the keyring so it survives config deletion.
+        // get_or_create_machine_id migrates the config-stored value into the
+        // keyring on first run of a new binary, then always reads from keyring.
+        let resolved = crate::keyring_store::get_or_create_machine_id(&config.agent.machine_id);
+        if resolved != config.agent.machine_id {
+            config.agent.machine_id = resolved;
+            let _ = config.save();
+        }
+
         Ok(config)
     }
 
