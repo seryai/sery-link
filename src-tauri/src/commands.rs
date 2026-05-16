@@ -29,6 +29,26 @@ use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Collect absolute paths for all configured local sources + watched folders.
+/// Sent to the cloud so the dashboard can display the correct source list.
+fn collect_source_roots(config: &crate::config::Config) -> Vec<String> {
+    let mut roots: Vec<String> = config
+        .watched_folders
+        .iter()
+        .map(|f| f.path.clone())
+        .collect();
+    for s in &config.sources {
+        if let crate::sources::SourceKind::Local { path, .. } = &s.kind {
+            roots.push(path.to_string_lossy().to_string());
+        }
+    }
+    roots
+}
+
+// ---------------------------------------------------------------------------
 // Global handles
 // ---------------------------------------------------------------------------
 
@@ -138,7 +158,8 @@ fn persist_identity(workspace_id: &str, agent_id: &str) {
 /// the error — the pair itself is still successful (token is in
 /// the keyring), and the periodic scan loop will retry.
 async fn post_pair_heartbeat(api_url: &str, token: &str) {
-    match scanner::sync_metadata_to_cloud(api_url, token, None, Vec::new()).await {
+    let source_roots = Config::load().ok().map(|c| collect_source_roots(&c)).filter(|r| !r.is_empty());
+    match scanner::sync_metadata_to_cloud(api_url, token, None, source_roots, Vec::new()).await {
         Ok(_) => {
             eprintln!("[post-pair] heartbeat sync ok");
         }
@@ -2455,7 +2476,8 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     let cloud_resp = if cloud_sync_enabled() {
         match (Config::load(), keyring_store::get_token()) {
             (Ok(config), Ok(token)) => {
-                match scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(&folder_path), datasets.clone())
+                let roots = collect_source_roots(&config);
+                match scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(&folder_path), Some(roots), datasets.clone())
                     .await
                 {
                     Ok(r) => {
@@ -2555,7 +2577,8 @@ fn scan_status_should_emit(last_emit_ms: &std::sync::atomic::AtomicI64) -> bool 
 pub async fn sync_metadata(datasets: Vec<DatasetMetadata>) -> Result<Value, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
     let token = keyring_store::get_token().map_err(|e| e.to_string())?;
-    scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, None, datasets)
+    let roots = collect_source_roots(&config);
+    scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, None, Some(roots), datasets)
         .await
         .map_err(|e| e.to_string())
 }

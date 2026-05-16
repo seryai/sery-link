@@ -2007,6 +2007,9 @@ pub async fn sync_metadata_to_cloud(
     // Backward-compat: existing records (bare relative_path) stay valid;
     // the desktop resolver tries the absolute path first (see duckdb_engine).
     folder_path: Option<&str>,
+    // All configured source roots on this machine. Sent so the cloud can
+    // display the correct source list even before a full rescan completes.
+    source_roots: Option<Vec<String>>,
     mut datasets: Vec<DatasetMetadata>,
 ) -> Result<serde_json::Value> {
     if let Some(fp) = folder_path {
@@ -2042,10 +2045,15 @@ pub async fn sync_metadata_to_cloud(
 
     let client = reqwest::Client::new();
 
+    let mut body = serde_json::json!({ "datasets": datasets });
+    if let Some(roots) = source_roots {
+        body["source_roots"] = serde_json::json!(roots);
+    }
+
     let response = client
         .post(format!("{}/v1/agent/sync-metadata", api_url))
         .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "datasets": datasets }))
+        .json(&body)
         .send()
         .await?;
 

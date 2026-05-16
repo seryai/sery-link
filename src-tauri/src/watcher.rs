@@ -274,8 +274,18 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     let token = keyring_store::get_token()
         .map_err(|e| AgentError::Config(format!("missing token: {}", e)))?;
 
+    let source_roots: Vec<String> = {
+        let mut r: Vec<String> = config.watched_folders.iter().map(|f| f.path.clone()).collect();
+        for s in &config.sources {
+            if let crate::sources::SourceKind::Local { path, .. } = &s.kind {
+                r.push(path.to_string_lossy().to_string());
+            }
+        }
+        r
+    };
+
     let sync_result =
-        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(folder_path), datasets).await;
+        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(folder_path), Some(source_roots), datasets).await;
 
     match sync_result {
         Ok(_) => {
