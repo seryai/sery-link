@@ -29,7 +29,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { documentDir } from '@tauri-apps/api/path';
 import { ArrowLeft, KeyRound, Loader2, X } from 'lucide-react';
 import { useToast } from './Toast';
-import { SourceIcon } from './SourceIcon';
+import { SourceIcon, PresetSourceIcon } from './SourceIcon';
 import { GdriveBrowserPanel } from './GdriveBrowserPanel';
 import { isS3Url } from '../utils/url';
 import type { SftpAuth, WebDavAuth } from '../utils/sources';
@@ -2070,6 +2070,7 @@ function ProtocolCard({
   onClick?: () => void;
 }) {
   const iconKind = legacyIconKindForTile(tile.kind);
+  const presetKind = s3CompatiblePreset(tile.kind);
   const isComingSoon = onClick === undefined;
   return (
     <button
@@ -2092,7 +2093,9 @@ function ProtocolCard({
             : 'bg-slate-100 dark:bg-slate-700'
         }`}
       >
-        {iconKind ? (
+        {presetKind ? (
+          <PresetSourceIcon preset={presetKind} size="md" />
+        ) : iconKind ? (
           <SourceIcon kind={iconKind} size="md" />
         ) : (
           <PlaceholderIcon />
@@ -2104,6 +2107,18 @@ function ProtocolCard({
       </div>
     </button>
   );
+}
+
+function s3CompatiblePreset(
+  kind: ImplementedKind | S3CompatibleKind | ComingSoonKind,
+): 'backblaze' | 'wasabi' | 'cloudflare' | 'gcs' | null {
+  switch (kind) {
+    case 'b2': return 'backblaze';
+    case 'wasabi': return 'wasabi';
+    case 'r2': return 'cloudflare';
+    case 'gcs': return 'gcs';
+    default: return null;
+  }
 }
 
 function legacyIconKindForTile(

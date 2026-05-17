@@ -215,6 +215,24 @@ export function legacyKindStringOf(
   }
 }
 
+/** Detect which S3-compatible preset a source URL belongs to, based
+ *  on the endpoint host embedded in the URL. Returns null for plain
+ *  AWS S3 or when the host doesn't match a known preset. Used by
+ *  SourceIcon to show a provider-specific logo instead of the generic
+ *  S3 bucket. */
+export function s3PresetOf(
+  url: string,
+): 'backblaze' | 'wasabi' | 'cloudflare' | 'gcs' | null {
+  const lower = url.toLowerCase();
+  if (lower.includes('backblazeb2.com')) return 'backblaze';
+  if (lower.includes('wasabisys.com')) return 'wasabi';
+  if (lower.includes('r2.cloudflarestorage.com') || lower.includes('.r2.dev'))
+    return 'cloudflare';
+  if (lower.includes('storage.googleapis.com') || lower.includes('storage.cloud.google.com'))
+    return 'gcs';
+  return null;
+}
+
 /** Return the path/url string used as the `scansInFlight` key for
  *  this source. Mirrors the Rust resolve_source_path semantics:
  *  Local → path, Https/S3 → url, Drive → null (Drive scans don't go

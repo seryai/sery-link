@@ -45,12 +45,13 @@ import { AddSourceModal } from './AddSourceModal';
 import { EditCredentialsDialog } from './EditCredentialsDialog';
 import { EditS3CredentialsDialog } from './EditS3CredentialsDialog';
 import { ReauthOneDriveDialog } from './ReauthOneDriveDialog';
-import { SourceIcon, sourceIconBgClass } from './SourceIcon';
+import { SourceIcon, PresetSourceIcon, sourceIconBgClass } from './SourceIcon';
 import {
   groupSources,
   legacyKindStringOf,
   removeSource,
   renameSource,
+  s3PresetOf,
   reorderSources,
   scanKeyOf,
   setSourceGroup,
@@ -876,6 +877,8 @@ function SourceRow({
   dragHandle,
 }: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
+  const s3Preset =
+    source.kind.kind === 's3' ? s3PresetOf(source.kind.url) : null;
   const datasetCount = source.last_scan_stats?.datasets ?? null;
   const openable = !!onOpen && !editing;
   return (
@@ -897,7 +900,11 @@ function SourceRow({
           legacyKind,
         )}`}
       >
-        <SourceIcon kind={legacyKind} size="sm" />
+        {s3Preset ? (
+          <PresetSourceIcon preset={s3Preset} size="sm" />
+        ) : (
+          <SourceIcon kind={legacyKind} size="sm" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         {editing ? (
