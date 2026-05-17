@@ -5,103 +5,35 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] — 2026-05-17 — Source icons, modal polish, and sync reliability
+## [0.9.0] — 2026-05-17
 
 ### Added
 
-- **Brand icons for cloud sources.** Google Drive, Dropbox, Backblaze B2,
-  Wasabi, Cloudflare R2, and Google Cloud Storage now show their official
-  brand icons (via `@icons-pack/react-simple-icons`) in the sidebar and
-  Add Source modal. S3, Azure Blob, OneDrive, and WebDAV use redrawn
-  full-bleed custom SVGs sized to match.
-
-- **S3-compatible preset detection.** The sidebar and Add Source modal
-  automatically detect the provider from the endpoint URL (backblazeb2.com,
-  wasabisys.com, r2.cloudflarestorage.com, storage.googleapis.com) and
-  render the matching brand icon.
+- **Agent RPC.** Dashboard can invoke any Sery Link capability over the
+  WebSocket tunnel by name (`sources.*`, `files.*`, `sql.*`, `config.*`,
+  `system.*`, `agent.*`) and receive streaming progress back.
+- **Brand icons for cloud sources.** Drive, Dropbox, B2, Wasabi, R2, and
+  GCS show official brand icons; S3, Azure, OneDrive, WebDAV use redrawn
+  full-bleed SVGs.
+- **S3-compatible preset detection.** Sidebar and Add Source modal pick the
+  right icon automatically from the endpoint URL.
+- **Remote config sync + dashboard-triggered scans** over the tunnel.
+- **mtime-based smart re-scan** — unchanged source trees skip full re-index.
 
 ### Fixed
 
-- **Launch crash on macOS (EXC_CRASH / SIGABRT).** The auto-scan background
-  task was spawned with `tokio::spawn` inside Tauri's setup closure, which
-  runs before the Tokio reactor is initialised. Changed to
-  `tauri::async_runtime::spawn`. Affected 0.8.11 on some machines.
-
-- **Add Source modal overflowing the window.** The dialog had no maximum
-  height, pushing content off-screen on default window sizes. Fixed with
-  `max-height: calc(100vh - 2rem)` and a scrollable body region.
-
-- **Internal path exposed in OAuth error messages.** "Not configured"
-  errors for Google Drive, Dropbox, and OneDrive OAuth previously showed
-  `datalake/SETUP_*.md` paths from the build environment. Now shows a
-  user-friendly message pointing to the GitHub releases page.
-
-- **API: FK violation on `sync_metadata` when source not yet registered.**
-  Datasets arriving before `PUT /agent/sources` could violate the
-  `datasets.source_id → agent_sources.id` foreign key. The endpoint now
-  validates `source_id` against the agent's known sources (single lazy
-  query per request) and silently drops dangling references instead of
-  aborting the entire sync batch.
+- **Launch crash on macOS (EXC_CRASH / SIGABRT)** — `tokio::spawn` in setup
+  closure ran before the Tokio reactor existed; changed to
+  `tauri::async_runtime::spawn`.
+- **Add Source modal height overflow** on default window size.
+- **Internal build paths in OAuth errors** — Drive/Dropbox/OneDrive "not
+  configured" messages no longer leak `datalake/SETUP_*.md`.
+- **API FK violation on `sync_metadata`** — `source_id` now validated before
+  write; dangling references dropped gracefully instead of aborting the batch.
 
 ### Removed
 
-- **Machines page.** Removed the Machines navigation item and route — the
-  same information is available in the dashboard and the page added
-  unnecessary friction in the desktop app.
-
----
-
-## [0.8.11] — 2026-05-17 — Agent RPC: remote command execution from the dashboard
-
-MCP-style command registry so the cloud dashboard can invoke any Sery
-Link capability by name over the existing WebSocket tunnel and receive
-streaming progress events back.
-
-### Added
-
-- **Agent RPC command registry.** 18 named commands registered at
-  startup, each with a JSON Schema for input validation and a
-  streaming progress channel:
-
-  | Namespace | Commands |
-  |-----------|----------|
-  | `sources.*` | `list`, `scan`, `rename`, `remove`, `status` |
-  | `files.*`   | `list`, `preview`, `schema` |
-  | `sql.*`     | `exec` (DuckDB, capped at 10 000 rows) |
-  | `config.*`  | `get` (sanitized — no credentials), `set` (patch-style) |
-  | `system.*`  | `info`, `notify` (OS notification + in-app toast), `open` (Finder/Explorer, local sources only), `logs` (tail last N lines) |
-  | `agent.*`   | `info`, `ping`, `commands` (returns full manifest) |
-
-- **`type: "invoke"` WebSocket message.** The dashboard sends
-  `{type:"invoke", request_id, command, args}` over the existing
-  tunnel; Sery Link replies with `invoke_progress` (0..N streaming
-  events) and a final `invoke_result {ok, data|error}`. The
-  `request_id` correlates streams across reconnects.
-
-- **Remote config sync.** On tunnel connect, Sery Link fetches
-  `GET /v1/agent/config` and applies any workspace-level overrides
-  (scan interval, etc.) to local config. The cloud can also push
-  updates mid-session via a `config_update` WebSocket message.
-
-- **Dashboard-triggered source scan.** `trigger_scan` WebSocket
-  message (sent by `POST /workspace/sources/{id}/scan` on the API)
-  dispatches to the correct rescan handler for any source kind.
-
-- **mtime-based smart re-scan in the auto-scan loop.** Local sources
-  are only fully rescanned when `walk_has_newer()` detects a file
-  newer than the last scan timestamp — unchanged trees cost only a
-  fast directory walk.
-
-### Technical
-
-- `src/agent_rpc/` — new module: `registry.rs` (trait + global
-  `REGISTRY`), `dispatcher.rs` (handles `invoke` messages),
-  `commands/` (6 sub-modules).
-- `websocket.rs` — `"invoke"` arm uses `events::app_handle()` to
-  supply a concrete `Wry` handle without breaking the generic
-  `R: Runtime` callers.
-- `Cargo.toml` — `async-trait` moved from dev-dependencies to
-  regular dependencies.
+- **Machines page** — redundant with the dashboard view.
 
 ---
 
