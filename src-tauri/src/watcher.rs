@@ -27,6 +27,33 @@ use tokio::sync::mpsc;
 
 const DEBOUNCE_SECS: u64 = 2;
 
+/// Paths that are currently being synced. Prevents the fallback timer
+/// and the notify event path from running concurrent syncs on the same folder.
+static SYNCING: once_cell::sync::Lazy<std::sync::Mutex<HashSet<String>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// Try to claim a sync slot for `path`. Returns `None` if another sync is
+/// already running for that path. Drop the returned guard to release the slot.
+struct SyncGuard(String);
+
+impl SyncGuard {
+    fn try_acquire(path: &str) -> Option<Self> {
+        let mut set = SYNCING.lock().unwrap();
+        if set.contains(path) {
+            None
+        } else {
+            set.insert(path.to_string());
+            Some(Self(path.to_string()))
+        }
+    }
+}
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        SYNCING.lock().unwrap().remove(&self.0);
+    }
+}
+
 /// Handle returned by `start_watcher`. Dropping it stops the underlying
 /// notify watcher, the debounce consumer, and the periodic rescan task.
 pub struct WatcherHandle {
@@ -207,6 +234,17 @@ async fn handle_changes(paths: Vec<PathBuf>) -> Result<()> {
 /// Scan + upload + audit + emit events. The single source of truth for
 /// "something in this folder changed and we want the cloud to know".
 async fn sync_folder(folder_path: &str) -> Result<()> {
+    // Single-flight guard — if a sync is already running for this folder
+    // (e.g. a notify event fired while the fallback timer is mid-scan),
+    // skip silently. The in-progress sync will finish and its result stands.
+    let _guard = match SyncGuard::try_acquire(folder_path) {
+        Some(g) => g,
+        None => {
+            eprintln!("[watcher] {} already syncing, skipping", folder_path);
+            return Ok(());
+        }
+    };
+
     // Cheap hash check — skip the expensive DuckDB scan + cloud upload
     // when the folder contents (paths, sizes, mtimes) haven't changed.
     let current_hash = scanner::compute_folder_hash(folder_path);
