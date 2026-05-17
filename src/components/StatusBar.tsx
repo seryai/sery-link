@@ -64,6 +64,7 @@ export function StatusBar() {
   } = useAgentStore();
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
+  const [hasSavedKey, setHasSavedKey] = useState(false);
   // Catch-up follow-up: when the user clicked "Not now" on the
   // post-connect prompt, the folders stay locally indexed but
   // never make it to the workspace. Poll list_catch_up_folders
@@ -99,6 +100,13 @@ export function StatusBar() {
       unlisten.then((u) => u());
     };
   }, []);
+  useEffect(() => {
+    if (!authenticated) {
+      invoke<boolean>('has_workspace_key')
+        .then(setHasSavedKey)
+        .catch(() => setHasSavedKey(false));
+    }
+  }, [authenticated]);
   useEffect(() => {
     if (!authenticated) {
       setCatchUpFolders([]);
@@ -184,6 +192,15 @@ export function StatusBar() {
               <span className="text-slate-500 dark:text-slate-400">
                 {stats.queries_today} {stats.queries_today === 1 ? 'query' : 'queries'} today
               </span>
+            )}
+            {hasSavedKey && (
+              <button
+                onClick={() => setShowConnect(true)}
+                className="text-xs text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline dark:text-slate-400 dark:hover:text-slate-200"
+                title="Connect to a different workspace"
+              >
+                Switch workspace
+              </button>
             )}
             <button
               onClick={async () => {
