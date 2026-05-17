@@ -2222,6 +2222,23 @@ pub async fn reconcile_with_cloud(api_url: &str, token: &str, source_roots: Vec<
     }
 }
 
+/// Sync the full structured source list to PUT /v1/agent/sources.
+/// Called after any add / remove / rename. Best-effort.
+pub async fn sync_sources_to_cloud(api_url: &str, token: &str, sources: serde_json::Value) {
+    let client = reqwest::Client::new();
+    match client
+        .put(format!("{}/v1/agent/sources", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "sources": sources }))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => eprintln!("[scanner] sync_sources returned {}", r.status()),
+        Err(e) => eprintln!("[scanner] sync_sources network error: {}", e),
+    }
+}
+
 /// Push an updated machine display name to the cloud. Best-effort — a failed
 /// call is logged but not surfaced; the name is already saved locally and
 /// will be sent on the next reconnect/bootstrap anyway.

@@ -245,6 +245,25 @@ pub async fn save_config(config: Config) -> Result<(), String> {
     config.save().map_err(|e| e.to_string())
 }
 
+/// Serialize current config.sources and PUT to /v1/agent/sources.
+/// Fire-and-forget: call after any source add / remove / rename.
+async fn push_sources_to_cloud() {
+    let (token, cfg) = match (crate::keyring_store::get_token(), Config::load()) {
+        (Ok(t), Ok(c)) => (t, c),
+        _ => return,
+    };
+    use crate::config::AuthMode;
+    if matches!(cfg.app.selected_auth_mode, Some(AuthMode::LocalOnly)) {
+        return;
+    }
+    if let Ok(v) = serde_json::to_value(&cfg.sources) {
+        let api_url = cfg.cloud.api_url.clone();
+        tokio::spawn(async move {
+            crate::scanner::sync_sources_to_cloud(&api_url, &token, v).await;
+        });
+    }
+}
+
 /// Save a new machine name locally and push it to the cloud if connected.
 /// Called from Settings as a side-effect alongside save_config.
 #[tauri::command]
@@ -468,6 +487,7 @@ pub async fn add_remote_source(
     config.add_watched_folder(normalised.clone(), false);
     config.save().map_err(|e| e.to_string())?;
     // No file watcher restart — URLs aren't on the filesystem.
+    push_sources_to_cloud().await;
     Ok(normalised)
 }
 
@@ -772,6 +792,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         }),
     );
 
+    push_sources_to_cloud().await;
     Ok(serde_json::json!({
         "folder_id": folder_id,
         "files_cached": cached_count,
@@ -3545,7 +3566,9 @@ pub async fn rename_source(id: String, new_name: String) -> Result<(), String> {
     config
         .rename_source(&id, new_name)
         .map_err(|e| e.to_string())?;
-    config.save().map_err(|e| e.to_string())
+    config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -3660,6 +3683,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         }
     }
 
+    push_sources_to_cloud().await;
     Ok(())
 }
 
@@ -3763,6 +3787,7 @@ pub async fn add_sftp_source(
     }
 
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4104,6 +4129,7 @@ pub async fn add_onedrive_source(
     }
 
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4265,6 +4291,7 @@ pub async fn add_azure_blob_source(
     }
 
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4447,6 +4474,7 @@ pub async fn add_dropbox_source_oauth(
             .map_err(|e| e.to_string())?;
     }
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4543,6 +4571,7 @@ pub async fn add_dropbox_source(
     }
 
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4708,6 +4737,7 @@ pub async fn add_webdav_source(
     }
 
     config.save().map_err(|e| e.to_string())?;
+    push_sources_to_cloud().await;
     Ok(returned_id)
 }
 
@@ -4873,6 +4903,7 @@ pub async fn add_local_source(
     config.save().map_err(|e| e.to_string())?;
 
     let _ = restart_file_watcher().await;
+    push_sources_to_cloud().await;
     Ok(new_id)
 }
 
