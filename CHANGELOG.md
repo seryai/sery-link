@@ -5,6 +5,52 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-05-17 — Source icons, modal polish, and sync reliability
+
+### Added
+
+- **Brand icons for cloud sources.** Google Drive, Dropbox, Backblaze B2,
+  Wasabi, Cloudflare R2, and Google Cloud Storage now show their official
+  brand icons (via `@icons-pack/react-simple-icons`) in the sidebar and
+  Add Source modal. S3, Azure Blob, OneDrive, and WebDAV use redrawn
+  full-bleed custom SVGs sized to match.
+
+- **S3-compatible preset detection.** The sidebar and Add Source modal
+  automatically detect the provider from the endpoint URL (backblazeb2.com,
+  wasabisys.com, r2.cloudflarestorage.com, storage.googleapis.com) and
+  render the matching brand icon.
+
+### Fixed
+
+- **Launch crash on macOS (EXC_CRASH / SIGABRT).** The auto-scan background
+  task was spawned with `tokio::spawn` inside Tauri's setup closure, which
+  runs before the Tokio reactor is initialised. Changed to
+  `tauri::async_runtime::spawn`. Affected 0.8.11 on some machines.
+
+- **Add Source modal overflowing the window.** The dialog had no maximum
+  height, pushing content off-screen on default window sizes. Fixed with
+  `max-height: calc(100vh - 2rem)` and a scrollable body region.
+
+- **Internal path exposed in OAuth error messages.** "Not configured"
+  errors for Google Drive, Dropbox, and OneDrive OAuth previously showed
+  `datalake/SETUP_*.md` paths from the build environment. Now shows a
+  user-friendly message pointing to the GitHub releases page.
+
+- **API: FK violation on `sync_metadata` when source not yet registered.**
+  Datasets arriving before `PUT /agent/sources` could violate the
+  `datasets.source_id → agent_sources.id` foreign key. The endpoint now
+  validates `source_id` against the agent's known sources (single lazy
+  query per request) and silently drops dangling references instead of
+  aborting the entire sync batch.
+
+### Removed
+
+- **Machines page.** Removed the Machines navigation item and route — the
+  same information is available in the dashboard and the page added
+  unnecessary friction in the desktop app.
+
+---
+
 ## [0.8.11] — 2026-05-17 — Agent RPC: remote command execution from the dashboard
 
 MCP-style command registry so the cloud dashboard can invoke any Sery
