@@ -214,14 +214,15 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+        className="flex w-full max-w-2xl flex-col rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+        style={{ maxHeight: 'calc(100vh - 2rem)' }}
       >
         <ModalHeader
           stage={stage}
           onBack={() => setStage({ kind: 'picker' })}
           onClose={closeAll}
         />
-        <div className="p-5">
+        <div className="flex-1 overflow-y-auto p-5">
           {stage.kind === 'picker' && (
             <PickerStage
               busy={busy}
