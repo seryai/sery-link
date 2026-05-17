@@ -445,6 +445,26 @@ pub async fn add_remote_source(
     }
 
     let mut config = Config::load().map_err(|e| e.to_string())?;
+
+    // Build a proper DataSource (so the Sources sidebar shows
+    // "bucket/prefix" not "/" and the kind badge reads "S3").
+    let kind = if crate::url::is_s3_url(&normalised) {
+        crate::sources::SourceKind::S3 { url: normalised.clone() }
+    } else {
+        crate::sources::SourceKind::Https { url: normalised.clone() }
+    };
+    let source = crate::sources::DataSource {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: crate::sources::derive_name_for_url(&normalised),
+        kind,
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: config.sources.iter().map(|s| s.sort_order).max().map(|m| m + 1).unwrap_or(0),
+        group: None,
+    };
+    config.add_source(source);
+    // Mirror to watched_folders so the path-keyed scanner keeps working.
     config.add_watched_folder(normalised.clone(), false);
     config.save().map_err(|e| e.to_string())?;
     // No file watcher restart — URLs aren't on the filesystem.
@@ -702,6 +722,30 @@ pub async fn gdrive_watch_folder<R: Runtime>(
             last_walk_at: Some(now.clone()),
             file_ids,
         });
+        // Add a proper DataSource with kind GoogleDrive so the Sources
+        // sidebar shows "Google Drive · FolderName" instead of the
+        // cache dir path. The cache dir is still added to watched_folders
+        // so the path-keyed scanner picks up the downloaded files.
+        let gdrive_source_id = format!("gdrive-{}-{}", account, folder_id);
+        if !config.sources.iter().any(|s| s.id == gdrive_source_id) {
+            let display_name = if account == "default" {
+                format!("Google Drive · {}", folder_name)
+            } else {
+                format!("Google Drive ({}) · {}", account, folder_name)
+            };
+            config.add_source(crate::sources::DataSource {
+                id: gdrive_source_id,
+                name: display_name,
+                kind: crate::sources::SourceKind::GoogleDrive {
+                    account_id: account.clone(),
+                },
+                mcp_enabled: false,
+                last_scan_at: None,
+                last_scan_stats: None,
+                sort_order: config.sources.iter().map(|s| s.sort_order).max().map(|m| m + 1).unwrap_or(0),
+                group: None,
+            });
+        }
         config.add_watched_folder(cache_path_str.clone(), true);
         config.save().map_err(|e| e.to_string())?;
     }

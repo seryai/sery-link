@@ -392,6 +392,26 @@ impl Config {
 
         config.migrate_sources_if_needed();
 
+        // Remove any gdrive-cache Local sources mistakenly added before
+        // the GoogleDrive DataSource kind was used (pre-v0.8.10). These
+        // have paths like ~/.seryai/gdrive-cache/... and are confusing
+        // in the Sources sidebar. Cache dirs stay in watched_folders for
+        // the scanner; only the incorrect sidebar entries are pruned.
+        {
+            let gdrive_cache_marker = std::path::MAIN_SEPARATOR_STR.to_string() + "gdrive-cache";
+            let before = config.sources.len();
+            config.sources.retain(|s| {
+                if let SourceKind::Local { path, .. } = &s.kind {
+                    !path.to_string_lossy().contains(&gdrive_cache_marker)
+                } else {
+                    true
+                }
+            });
+            if config.sources.len() < before {
+                let _ = config.save();
+            }
+        }
+
         // First-run install_id minting. The save below persists it so
         // the next load reads the same id. Failures here are non-fatal
         // — analytics gracefully degrades to "no id, drop the ping"
@@ -466,10 +486,14 @@ impl Config {
             })
             .collect();
 
+        // Exclude gdrive-cache dirs — those are internal scanner
+        // mirrors, not user-visible sources. They get a GoogleDrive
+        // DataSource instead (added by gdrive_watch_folder).
+        let gdrive_cache_marker = std::path::MAIN_SEPARATOR_STR.to_string() + "gdrive-cache";
         let to_migrate: Vec<&WatchedFolder> = self
             .watched_folders
             .iter()
-            .filter(|wf| !known.contains(&wf.path))
+            .filter(|wf| !known.contains(&wf.path) && !wf.path.contains(&gdrive_cache_marker))
             .collect();
 
         if to_migrate.is_empty() {

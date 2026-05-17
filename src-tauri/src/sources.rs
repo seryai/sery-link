@@ -313,6 +313,17 @@ fn derive_https_name(url: &str) -> String {
     truncate_chars(trimmed, 40)
 }
 
+/// Public helper so commands.rs can build a DataSource name without
+/// constructing a full SourceKind first.
+pub fn derive_name_for_url(url: &str) -> String {
+    let lower = url.trim().to_ascii_lowercase();
+    if lower.starts_with("s3://") {
+        derive_s3_name(url)
+    } else {
+        derive_https_name(url)
+    }
+}
+
 fn derive_s3_name(url: &str) -> String {
     // For S3, the friendly name is the bucket + first prefix segment.
     // e.g. "s3://my-bucket/data/" → "my-bucket/data". Truncate at 40.
