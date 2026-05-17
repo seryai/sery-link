@@ -207,6 +207,19 @@ async fn handle_changes(paths: Vec<PathBuf>) -> Result<()> {
 /// Scan + upload + audit + emit events. The single source of truth for
 /// "something in this folder changed and we want the cloud to know".
 async fn sync_folder(folder_path: &str) -> Result<()> {
+    // Cheap hash check — skip the expensive DuckDB scan + cloud upload
+    // when the folder contents (paths, sizes, mtimes) haven't changed.
+    let current_hash = scanner::compute_folder_hash(folder_path);
+    if !current_hash.is_empty() {
+        let stored_hash = Config::load()
+            .ok()
+            .and_then(|c| c.get_folder_sync_hash(folder_path).map(|s| s.to_string()));
+        if stored_hash.as_deref() == Some(current_hash.as_str()) {
+            eprintln!("[watcher] {} unchanged (hash match), skipping sync", folder_path);
+            return Ok(());
+        }
+    }
+
     // Flip the tray to "syncing" so users see activity.
     if let Some(app) = events::app_handle() {
         tray::set_state(app, "syncing");
@@ -289,8 +302,9 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
 
     match sync_result {
         Ok(_) => {
-            // Persist scan stats on the folder so the folder card can show
-            // them next render.
+            // Persist scan stats and the content hash on the folder so the
+            // folder card can show them next render, and the next fallback
+            // rescan can skip this folder if nothing changed.
             if let Ok(mut c) = Config::load() {
                 c.update_folder_scan_stats(
                     folder_path,
@@ -303,6 +317,9 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
                     },
                     chrono::Utc::now().to_rfc3339(),
                 );
+                if !current_hash.is_empty() {
+                    c.update_folder_sync_hash(folder_path, current_hash);
+                }
                 let _ = c.save();
             }
 

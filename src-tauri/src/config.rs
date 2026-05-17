@@ -130,6 +130,11 @@ pub struct WatchedFolder {
     /// remind users which folders they've already exposed.
     #[serde(default)]
     pub mcp_enabled: bool,
+    /// SHA-256 of (path, size, mtime) for every file in the folder at the
+    /// last successful cloud sync. Used by the fallback rescan to skip
+    /// the expensive DuckDB scan when nothing has changed.
+    #[serde(default)]
+    pub last_sync_hash: Option<String>,
 }
 
 fn default_exclude_patterns() -> Vec<String> {
@@ -251,7 +256,7 @@ pub struct SyncConfig {
 }
 
 fn default_fallback_scan() -> u64 {
-    3600 // 1 hour
+    60 // 1 minute — cheap because hash check skips unchanged folders
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -537,6 +542,7 @@ impl Config {
             last_scan_stats: None,
             last_synced_to_workspace_id: None,
             mcp_enabled: false,
+            last_sync_hash: None,
         });
     }
 
@@ -592,6 +598,19 @@ impl Config {
         if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
             folder.last_scan_stats = Some(stats);
             folder.last_scan_at = Some(when);
+        }
+    }
+
+    pub fn get_folder_sync_hash(&self, path: &str) -> Option<&str> {
+        self.watched_folders
+            .iter()
+            .find(|f| f.path == path)
+            .and_then(|f| f.last_sync_hash.as_deref())
+    }
+
+    pub fn update_folder_sync_hash(&mut self, path: &str, hash: String) {
+        if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
+            folder.last_sync_hash = Some(hash);
         }
     }
 
@@ -1018,7 +1037,7 @@ mod tests {
             "sync": {
                 "interval_seconds": 300,
                 "auto_sync_on_change": true,
-                "fallback_scan_interval_seconds": 3600
+                "fallback_scan_interval_seconds": 60
             },
             "app": {
                 "theme": "system",
@@ -1214,7 +1233,7 @@ mod tests {
             "sync": {
                 "interval_seconds": 300,
                 "auto_sync_on_change": true,
-                "fallback_scan_interval_seconds": 3600,
+                "fallback_scan_interval_seconds": 60,
                 "scan_tier_overrides": {},
                 "include_document_text": false
             },

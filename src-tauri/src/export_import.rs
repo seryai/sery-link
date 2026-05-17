@@ -227,6 +227,7 @@ mod tests {
             last_scan_stats: None,
             last_synced_to_workspace_id: None,
             mcp_enabled: false,
+            last_sync_hash: None,
         }
     }
 
@@ -306,6 +307,7 @@ mod tests {
                 last_scan_stats: None,
                 last_synced_to_workspace_id: None,
                 mcp_enabled: false,
+                last_sync_hash: None,
             },
         ];
 
@@ -333,6 +335,7 @@ mod tests {
             last_scan_stats: None,
             last_synced_to_workspace_id: None,
             mcp_enabled: false,
+            last_sync_hash: None,
         }];
 
         let import_config = test_config();

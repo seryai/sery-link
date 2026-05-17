@@ -1992,6 +1992,95 @@ pub(crate) fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_js
 }
 
 // ---------------------------------------------------------------------------
+// Folder content hash — lightweight change detection
+// ---------------------------------------------------------------------------
+
+/// Walk `folder_path` and compute a SHA-256 over the sorted set of
+/// `(relative_path, size_bytes, mtime_unix_secs)` tuples for every file
+/// that would be scanned.  This is intentionally cheap — no DuckDB, no
+/// content reads — so it can run before every fallback rescan.
+///
+/// Returns a lowercase hex string.  Returns an empty string on I/O error
+/// so the caller always falls through to a real scan when in doubt.
+pub fn compute_folder_hash(folder_path: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let root = std::path::Path::new(folder_path);
+    if !root.is_dir() {
+        return String::new();
+    }
+
+    let mut entries: Vec<(String, u64, u64)> = Vec::new();
+    collect_hashed_files(root, root, &mut entries);
+
+    // Sort for determinism regardless of readdir ordering
+    entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = Sha256::new();
+    for (path, size, mtime) in &entries {
+        // Feed null-terminated records so path separators can't collide
+        hasher.update(format!("{}\0{}\0{}\0", path, size, mtime).as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn collect_hashed_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, u64, u64)>,
+) {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            // Skip noise dirs (same list as the scanner exclude defaults)
+            if matches!(name_str.as_ref(), ".git" | "node_modules" | "__pycache__" | ".DS_Store") {
+                continue;
+            }
+            collect_hashed_files(root, &path, out);
+        } else if ft.is_file() {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !matches!(
+                ext.as_str(),
+                "parquet" | "csv" | "xlsx" | "xls" | "docx" | "pptx"
+                    | "html" | "htm" | "ipynb" | "pdf"
+            ) {
+                continue;
+            }
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r.to_string_lossy().into_owned(),
+                Err(_) => continue,
+            };
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = meta.len();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d: std::time::Duration| d.as_secs())
+                .unwrap_or(0);
+            out.push((rel, size, mtime));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sync to cloud
 // ---------------------------------------------------------------------------
 
