@@ -210,6 +210,8 @@ export function legacyKindStringOf(
       return 'azure';
     case 'one_drive':
       return 'onedrive';
+    default:
+      return 'local';
   }
 }
 

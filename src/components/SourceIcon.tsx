@@ -37,9 +37,7 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
     case 'http':
       return <Globe className={`${cls} text-slate-500 dark:text-slate-400`} />;
     case 'local':
-      return (
-        <FolderIcon className={`${cls} text-purple-600 dark:text-purple-300`} />
-      );
+      return <FolderIcon className={`${cls} text-purple-600 dark:text-purple-300`} />;
     case 'sftp':
       return <SftpKeyMark className={cls} />;
     case 'webdav':
@@ -50,12 +48,14 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
       return <AzureBlobMark className={cls} />;
     case 'onedrive':
       return <OneDriveCloudMark className={cls} />;
+    default:
+      return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
 }
 
 /** Background tint for the icon's containing chip — matches the
  *  brand-ish color of the icon so the visual weight is consistent. */
-export function sourceIconBgClass(kind: SourceKind): string {
+export function sourceIconBgClass(kind: SourceKind | string): string {
   switch (kind) {
     case 'gdrive':
       return 'bg-blue-100 dark:bg-blue-950/40';
@@ -75,6 +75,8 @@ export function sourceIconBgClass(kind: SourceKind): string {
       return 'bg-cyan-100 dark:bg-cyan-950/40';
     case 'onedrive':
       return 'bg-indigo-100 dark:bg-indigo-950/40';
+    default:
+      return 'bg-slate-100 dark:bg-slate-800';
   }
 }
 
