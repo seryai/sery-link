@@ -69,8 +69,23 @@ fn collect_source_roots(config: &crate::config::Config) -> Vec<String> {
 static WS_CLIENT: once_cell::sync::Lazy<Arc<RwLock<Option<WebSocketClient>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
 
+/// Handle for the WebSocket reconnect loop. Aborting it closes the underlying
+/// TCP connection, which triggers WebSocketDisconnect on the API → the server
+/// calls disconnect() → clears Redis + sets agent status to OFFLINE.
+static WS_TASK: once_cell::sync::Lazy<Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
+
 static WATCHER: once_cell::sync::Lazy<Arc<RwLock<Option<WatcherHandle>>>> =
     once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(None)));
+
+/// Abort the WebSocket reconnect task and clear the handle. Aborting drops
+/// the WebSocketStream, closing the TCP connection so the API's finally-block
+/// runs connection_manager.disconnect() and clears the agent's Redis key.
+async fn abort_ws_task() {
+    if let Some(handle) = WS_TASK.write().await.take() {
+        handle.abort();
+    }
+}
 
 /// Process-wide "cloud sync is currently unreachable" flag. Once the first
 /// sync attempt of a session fails (network error, 500, 401, etc.) we
@@ -2774,9 +2789,8 @@ pub async fn mark_recipe_run(recipe_id: String) -> Result<(), String> {
 pub async fn logout<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     // Close websocket + watcher before clearing credentials so we don't leave
     // a connected client trying to authenticate with a dead token.
-    let mut ws_guard = WS_CLIENT.write().await;
-    *ws_guard = None;
-    drop(ws_guard);
+    abort_ws_task().await;
+    *WS_CLIENT.write().await = None;
 
     let mut watcher_guard = WATCHER.write().await;
     *watcher_guard = None;
@@ -2830,11 +2844,11 @@ pub async fn set_local_only_mode<R: Runtime>(
         config.app.selected_auth_mode = Some(AuthMode::LocalOnly);
         config.save().map_err(|e| e.to_string())?;
 
-        // 2. Drop the live WebSocket. The connection closes; auto-reconnect
-        //    won't happen because the global is now None.
-        let mut ws_guard = WS_CLIENT.write().await;
-        *ws_guard = None;
-        drop(ws_guard);
+        // 2. Abort the WebSocket task first — this closes the TCP connection
+        //    so the API's finally-block fires disconnect() and clears Redis,
+        //    making the agent appear offline on the dashboard immediately.
+        abort_ws_task().await;
+        *WS_CLIENT.write().await = None;
 
         crate::tray::set_state(&app, "offline");
 
@@ -2855,10 +2869,9 @@ pub async fn set_local_only_mode<R: Runtime>(
             if let Ok(token) = keyring_store::get_token() {
                 let new_config = Config::load().map_err(|e| e.to_string())?;
                 let client = WebSocketClient::new(new_config);
-                client.start_with_app(token, app).await;
-
-                let mut ws_guard = WS_CLIENT.write().await;
-                *ws_guard = Some(client);
+                let handle = client.start_with_app(token, app).await;
+                *WS_TASK.write().await = Some(handle);
+                *WS_CLIENT.write().await = Some(client);
             }
         }
     }
@@ -3086,10 +3099,10 @@ pub async fn start_websocket_tunnel<R: Runtime>(app: AppHandle<R>) -> Result<(),
     let token = keyring_store::get_token().map_err(|e| e.to_string())?;
 
     let client = WebSocketClient::new(config);
-    client.start_with_app(token, app).await;
+    let handle = client.start_with_app(token, app).await;
 
-    let mut ws_guard = WS_CLIENT.write().await;
-    *ws_guard = Some(client);
+    *WS_TASK.write().await = Some(handle);
+    *WS_CLIENT.write().await = Some(client);
     Ok(())
 }
 

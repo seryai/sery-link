@@ -144,13 +144,18 @@ impl WebSocketClient {
 
     /// Main entry point — spawns the reconnect loop and wires up event
     /// emission so the frontend reacts instantly to state changes.
-    pub async fn start_with_app<R: Runtime>(&self, token: String, app: AppHandle<R>) {
+    /// Returns the JoinHandle so the caller can abort the task on disconnect.
+    pub async fn start_with_app<R: Runtime>(
+        &self,
+        token: String,
+        app: AppHandle<R>,
+    ) -> tokio::task::JoinHandle<()> {
         let config = self.config.clone();
         let status = self.status.clone();
 
         tokio::spawn(async move {
             Self::maintain_connection(token, config, status, Some(app)).await;
-        });
+        })
     }
 
     async fn maintain_connection<R: Runtime>(
