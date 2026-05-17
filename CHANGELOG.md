@@ -5,6 +5,60 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.11] — 2026-05-17 — Agent RPC: remote command execution from the dashboard
+
+MCP-style command registry so the cloud dashboard can invoke any Sery
+Link capability by name over the existing WebSocket tunnel and receive
+streaming progress events back.
+
+### Added
+
+- **Agent RPC command registry.** 18 named commands registered at
+  startup, each with a JSON Schema for input validation and a
+  streaming progress channel:
+
+  | Namespace | Commands |
+  |-----------|----------|
+  | `sources.*` | `list`, `scan`, `rename`, `remove`, `status` |
+  | `files.*`   | `list`, `preview`, `schema` |
+  | `sql.*`     | `exec` (DuckDB, capped at 10 000 rows) |
+  | `config.*`  | `get` (sanitized — no credentials), `set` (patch-style) |
+  | `system.*`  | `info`, `notify` (OS notification + in-app toast), `open` (Finder/Explorer, local sources only), `logs` (tail last N lines) |
+  | `agent.*`   | `info`, `ping`, `commands` (returns full manifest) |
+
+- **`type: "invoke"` WebSocket message.** The dashboard sends
+  `{type:"invoke", request_id, command, args}` over the existing
+  tunnel; Sery Link replies with `invoke_progress` (0..N streaming
+  events) and a final `invoke_result {ok, data|error}`. The
+  `request_id` correlates streams across reconnects.
+
+- **Remote config sync.** On tunnel connect, Sery Link fetches
+  `GET /v1/agent/config` and applies any workspace-level overrides
+  (scan interval, etc.) to local config. The cloud can also push
+  updates mid-session via a `config_update` WebSocket message.
+
+- **Dashboard-triggered source scan.** `trigger_scan` WebSocket
+  message (sent by `POST /workspace/sources/{id}/scan` on the API)
+  dispatches to the correct rescan handler for any source kind.
+
+- **mtime-based smart re-scan in the auto-scan loop.** Local sources
+  are only fully rescanned when `walk_has_newer()` detects a file
+  newer than the last scan timestamp — unchanged trees cost only a
+  fast directory walk.
+
+### Technical
+
+- `src/agent_rpc/` — new module: `registry.rs` (trait + global
+  `REGISTRY`), `dispatcher.rs` (handles `invoke` messages),
+  `commands/` (6 sub-modules).
+- `websocket.rs` — `"invoke"` arm uses `events::app_handle()` to
+  supply a concrete `Wry` handle without breaking the generic
+  `R: Runtime` callers.
+- `Cargo.toml` — `async-trait` moved from dev-dependencies to
+  regular dependencies.
+
+---
+
 ## [0.8.10] — 2026-05-16 — One-click reconnect + machine rename
 
 Auth quality-of-life release. Disconnect no longer clears the workspace
