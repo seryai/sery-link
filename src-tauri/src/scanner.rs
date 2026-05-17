@@ -2002,7 +2002,15 @@ pub(crate) fn duckdb_cell_to_json(row: &duckdb::Row<'_>, idx: usize) -> serde_js
 ///
 /// Returns a lowercase hex string.  Returns an empty string on I/O error
 /// so the caller always falls through to a real scan when in doubt.
-pub fn compute_folder_hash(folder_path: &str) -> String {
+/// Compute a SHA-256 over the sorted set of `(relative_path, size, mtime)`
+/// for every scannable file under `folder_path`, applying the same exclude
+/// patterns used by `scan_folder` so the hash doesn't drift from what the
+/// scanner actually processes (e.g. temp files in excluded dirs won't
+/// trigger spurious re-syncs).
+///
+/// Returns a lowercase hex string, or an empty string on I/O error (caller
+/// falls through to a real scan when in doubt).
+pub fn compute_folder_hash(folder_path: &str, exclude_patterns: &[String]) -> String {
     use sha2::{Digest, Sha256};
 
     let root = std::path::Path::new(folder_path);
@@ -2010,15 +2018,18 @@ pub fn compute_folder_hash(folder_path: &str) -> String {
         return String::new();
     }
 
-    let mut entries: Vec<(String, u64, u64)> = Vec::new();
-    collect_hashed_files(root, root, &mut entries);
+    let globs: Vec<glob::Pattern> = exclude_patterns
+        .iter()
+        .filter_map(|g| glob::Pattern::new(g).ok())
+        .collect();
 
-    // Sort for determinism regardless of readdir ordering
+    let mut entries: Vec<(String, u64, u64)> = Vec::new();
+    collect_hashed_files(root, root, &globs, &mut entries);
+
     entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = Sha256::new();
     for (path, size, mtime) in &entries {
-        // Feed null-terminated records so path separators can't collide
         hasher.update(format!("{}\0{}\0{}\0", path, size, mtime).as_bytes());
     }
     format!("{:x}", hasher.finalize())
@@ -2027,6 +2038,7 @@ pub fn compute_folder_hash(folder_path: &str) -> String {
 fn collect_hashed_files(
     root: &Path,
     dir: &Path,
+    globs: &[glob::Pattern],
     out: &mut Vec<(String, u64, u64)>,
 ) {
     let rd = match std::fs::read_dir(dir) {
@@ -2039,14 +2051,21 @@ fn collect_hashed_files(
             Ok(t) => t,
             Err(_) => continue,
         };
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let rel = match path.strip_prefix(root) {
+            Ok(r) => r.to_string_lossy().into_owned(),
+            Err(_) => continue,
+        };
+        // Apply user-configured exclude patterns (same logic as the scanner)
+        let excluded = globs.iter().any(|g| {
+            g.matches(&name_str) || g.matches(&rel)
+        });
+        if excluded {
+            continue;
+        }
         if ft.is_dir() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            // Skip noise dirs (same list as the scanner exclude defaults)
-            if matches!(name_str.as_ref(), ".git" | "node_modules" | "__pycache__" | ".DS_Store") {
-                continue;
-            }
-            collect_hashed_files(root, &path, out);
+            collect_hashed_files(root, &path, globs, out);
         } else if ft.is_file() {
             let ext = path
                 .extension()
@@ -2060,10 +2079,6 @@ fn collect_hashed_files(
             ) {
                 continue;
             }
-            let rel = match path.strip_prefix(root) {
-                Ok(r) => r.to_string_lossy().into_owned(),
-                Err(_) => continue,
-            };
             let meta = match entry.metadata() {
                 Ok(m) => m,
                 Err(_) => continue,
@@ -2168,16 +2183,6 @@ pub async fn sync_metadata_to_cloud(
 }
 
 
-/// Tell the cloud to delete all datasets whose query_path starts with
-/// `source_prefix`. Called when a watched folder or source is removed so
-/// the dashboard stops showing stale entries.
-///
-/// `source_prefix` must already be the virtual query_path prefix, e.g.
-///   "local://<agent_id>/Users/foo/Documents/"  (local folder)
-///   "local://<agent_id>/s3://bucket/prefix/"   (S3 source)
-///
-/// Best-effort: network failures are logged but not surfaced to the UI
-/// because the local removal already succeeded.
 /// POST current source_roots to the cloud so it can delete datasets for
 /// sources that are no longer configured. Called after WebSocket connect.
 ///
@@ -2217,6 +2222,15 @@ pub async fn reconcile_with_cloud(api_url: &str, token: &str, source_roots: Vec<
     }
 }
 
+/// Tell the cloud to delete all datasets whose query_path starts with
+/// `source_prefix`. Called when a watched folder or source is removed.
+///
+/// `source_prefix` must be the virtual query_path prefix, e.g.:
+///   `local://<agent_id>/Users/foo/Documents/`  (local folder)
+///   `local://<agent_id>/s3://bucket/prefix/`   (S3 source)
+///
+/// Best-effort: network failures are logged but not surfaced to the UI
+/// because the local removal already succeeded.
 pub async fn delete_source_datasets(api_url: &str, token: &str, source_prefix: &str) {
     let client = reqwest::Client::new();
     match client

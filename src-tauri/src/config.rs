@@ -601,6 +601,25 @@ impl Config {
         }
     }
 
+    /// Return the exclude patterns for a local folder path, checking
+    /// both `watched_folders` (legacy) and `sources` (F42+).
+    pub fn get_folder_exclude_patterns(&self, path: &str) -> Vec<String> {
+        // Check watched_folders first (legacy)
+        if let Some(f) = self.watched_folders.iter().find(|f| f.path == path) {
+            return f.exclude_patterns.clone();
+        }
+        // Check sources (F42+)
+        use crate::sources::SourceKind;
+        for s in &self.sources {
+            if let SourceKind::Local { path: sp, exclude_patterns, .. } = &s.kind {
+                if sp.to_string_lossy() == path {
+                    return exclude_patterns.clone();
+                }
+            }
+        }
+        default_exclude_patterns()
+    }
+
     pub fn get_folder_sync_hash(&self, path: &str) -> Option<&str> {
         self.watched_folders
             .iter()

@@ -208,16 +208,27 @@ pub async fn start_watcher(folders: Vec<String>) -> Result<WatcherHandle> {
 }
 
 /// Fan out a batch of changed paths to their parent watched folders and
-/// rescan each one exactly once.
+/// rescan each affected folder exactly once.
 async fn handle_changes(paths: Vec<PathBuf>) -> Result<()> {
     let config = Config::load()?;
 
     let mut affected_folders: HashSet<String> = HashSet::new();
     for path in &paths {
+        // Check legacy watched_folders
         for folder in &config.watched_folders {
             if path.starts_with(&folder.path) {
                 affected_folders.insert(folder.path.clone());
                 break;
+            }
+        }
+        // Check F42 sources (Local kind only)
+        for source in &config.sources {
+            if let crate::sources::SourceKind::Local { path: sp, .. } = &source.kind {
+                let sp_str = sp.to_string_lossy();
+                if path.starts_with(sp_str.as_ref()) {
+                    affected_folders.insert(sp_str.into_owned());
+                    break;
+                }
             }
         }
     }
@@ -245,17 +256,28 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
         }
     };
 
+    // Load config once — reused throughout this function.
+    let config = Config::load()?;
+
     // Cheap hash check — skip the expensive DuckDB scan + cloud upload
     // when the folder contents (paths, sizes, mtimes) haven't changed.
-    let current_hash = scanner::compute_folder_hash(folder_path);
-    if !current_hash.is_empty() {
-        let stored_hash = Config::load()
-            .ok()
-            .and_then(|c| c.get_folder_sync_hash(folder_path).map(|s| s.to_string()));
-        if stored_hash.as_deref() == Some(current_hash.as_str()) {
-            eprintln!("[watcher] {} unchanged (hash match), skipping sync", folder_path);
-            return Ok(());
-        }
+    // Uses per-folder exclude patterns so temp files in excluded dirs don't
+    // cause spurious re-syncs. Runs in a blocking thread to avoid stalling
+    // the async runtime on large directory walks.
+    let exclude_patterns = config.get_folder_exclude_patterns(folder_path);
+    let stored_hash = config
+        .get_folder_sync_hash(folder_path)
+        .map(|s| s.to_string());
+    let path_owned = folder_path.to_string();
+    let current_hash = tokio::task::spawn_blocking(move || {
+        scanner::compute_folder_hash(&path_owned, &exclude_patterns)
+    })
+    .await
+    .unwrap_or_default();
+
+    if !current_hash.is_empty() && stored_hash.as_deref() == Some(current_hash.as_str()) {
+        eprintln!("[watcher] {} unchanged (hash match), skipping sync", folder_path);
+        return Ok(());
     }
 
     // Flip the tray to "syncing" so users see activity.
@@ -280,79 +302,63 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     let dataset_count = datasets.len() as u64;
     let column_count: u64 = datasets.iter().map(|d| d.schema.len() as u64).sum();
     let total_bytes: u64 = datasets.iter().map(|d| d.size_bytes).sum();
-
     let duration_ms = started.elapsed().as_millis() as u64;
 
     // Local-only fast path: if the user hasn't explicitly connected, or
     // an earlier sync this session already failed, skip the POST. The
-    // scan still records its stats + emits scan_complete so the UI
-    // updates, we just don't contact the server. This stops repeated
-    // 500s from spamming users who never connected.
+    // scan still records stats + emits scan_complete so the UI updates,
+    // we just don't contact the server.
     if !crate::commands::cloud_sync_enabled() {
         if let Ok(mut c) = Config::load() {
             c.update_folder_scan_stats(
                 folder_path,
-                ScanStats {
-                    datasets: dataset_count,
-                    columns: column_count,
-                    errors: 0,
-                    total_bytes,
-                    duration_ms,
-                },
+                ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms },
                 chrono::Utc::now().to_rfc3339(),
             );
             let _ = c.save();
         }
         audit::record(folder_path, dataset_count, column_count, total_bytes, None);
         if let Some(app) = events::app_handle() {
-            events::emit_scan_complete(
-                app,
-                events::ScanComplete {
-                    folder: folder_path.to_string(),
-                    datasets: dataset_count,
-                    columns: column_count,
-                    errors: 0,
-                    total_bytes,
-                    duration_ms,
-                },
-            );
+            events::emit_scan_complete(app, events::ScanComplete {
+                folder: folder_path.to_string(),
+                datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms,
+            });
             tray::set_state(app, "online");
         }
         return Ok(());
     }
 
-    let config = Config::load()?;
     let token = keyring_store::get_token()
         .map_err(|e| AgentError::Config(format!("missing token: {}", e)))?;
 
+    // Collect all local source roots, deduped. After F42 migration both
+    // watched_folders and sources may list the same path — dedup prevents
+    // sending duplicate entries to the cloud on every sync.
     let source_roots: Vec<String> = {
-        let mut r: Vec<String> = config.watched_folders.iter().map(|f| f.path.clone()).collect();
+        let mut seen = HashSet::new();
+        let mut roots: Vec<String> = Vec::new();
+        for f in &config.watched_folders {
+            if seen.insert(f.path.clone()) { roots.push(f.path.clone()); }
+        }
         for s in &config.sources {
             if let crate::sources::SourceKind::Local { path, .. } = &s.kind {
-                r.push(path.to_string_lossy().to_string());
+                let p = path.to_string_lossy().into_owned();
+                if seen.insert(p.clone()) { roots.push(p); }
             }
         }
-        r
+        roots
     };
 
-    let sync_result =
-        scanner::sync_metadata_to_cloud(&config.cloud.api_url, &token, Some(folder_path), Some(source_roots), datasets).await;
+    let sync_result = scanner::sync_metadata_to_cloud(
+        &config.cloud.api_url, &token, Some(folder_path), Some(source_roots), datasets,
+    ).await;
 
     match sync_result {
         Ok(_) => {
-            // Persist scan stats and the content hash on the folder so the
-            // folder card can show them next render, and the next fallback
-            // rescan can skip this folder if nothing changed.
             if let Ok(mut c) = Config::load() {
                 c.update_folder_scan_stats(
                     folder_path,
-                    ScanStats {
-                        datasets: dataset_count,
-                        columns: column_count,
-                        errors: 0,
-                        total_bytes,
-                        duration_ms,
-                    },
+                    ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms },
                     chrono::Utc::now().to_rfc3339(),
                 );
                 if !current_hash.is_empty() {
@@ -360,21 +366,12 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
                 }
                 let _ = c.save();
             }
-
             audit::record(folder_path, dataset_count, column_count, total_bytes, None);
-
             if let Some(app) = events::app_handle() {
-                events::emit_scan_complete(
-                    app,
-                    events::ScanComplete {
-                        folder: folder_path.to_string(),
-                        datasets: dataset_count,
-                        columns: column_count,
-                        errors: 0,
-                        total_bytes,
-                        duration_ms,
-                    },
-                );
+                events::emit_scan_complete(app, events::ScanComplete {
+                    folder: folder_path.to_string(),
+                    datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms,
+                });
                 events::emit_sync_completed(app, folder_path, dataset_count);
                 tray::set_state(app, "online");
             }
@@ -395,7 +392,7 @@ fn is_data_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()).unwrap_or(""),
         "parquet" | "csv" | "xlsx" | "xls"
-        | "docx" | "pptx" | "html" | "htm" | "ipynb"
+        | "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
     )
 }
 
