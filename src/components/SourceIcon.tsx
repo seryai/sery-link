@@ -117,95 +117,63 @@ export function sourceIconBgClass(kind: SourceKind | string): string {
 
 // ── Custom SVGs for brands not in simple-icons ─────────────────────────────
 
-/** Amazon S3 — orange (#FF9900) cylinder representing object storage.
- *  simple-icons removed the Amazon trademark; this uses brand color only. */
+/** Amazon S3 — full-bleed orange (#FF9900) cylinder.
+ *  simple-icons removed the Amazon trademark; brand color only. */
 function AwsS3Mark({ className }: { className?: string }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Amazon S3"
-    >
-      {/* Top ellipse */}
-      <ellipse cx="12" cy="5" rx="8" ry="2.5" fill="#FF9900" />
-      {/* Cylinder body */}
-      <path d="M4 5 L4 17 Q4 19.5 12 19.5 Q20 19.5 20 17 L20 5 Q20 7.5 12 7.5 Q4 7.5 4 5Z" fill="#FF9900" opacity="0.85" />
-      {/* Bottom ellipse cap */}
-      <ellipse cx="12" cy="17" rx="8" ry="2.5" fill="#FF9900" opacity="0.7" />
-      {/* Mid line to add depth */}
-      <ellipse cx="12" cy="11" rx="8" ry="2.5" fill="none" stroke="#FF6600" strokeWidth="0.5" opacity="0.6" />
+    <svg className={className} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-label="Amazon S3">
+      {/* Cylinder body — sides */}
+      <rect x="2" y="4" width="20" height="16" fill="#FF9900" opacity="0.9" />
+      {/* Bottom cap (drawn first so top cap renders on top) */}
+      <ellipse cx="12" cy="20" rx="10" ry="3.5" fill="#E68A00" />
+      {/* Mid separator ring */}
+      <ellipse cx="12" cy="12" rx="10" ry="3.5" fill="#E68A00" opacity="0.5" />
+      {/* Top cap */}
+      <ellipse cx="12" cy="4" rx="10" ry="3.5" fill="#FFAD33" />
     </svg>
   );
 }
 
-/** Azure Blob Storage — blue (#0078D4) geometric mark.
- *  Evokes Azure's layered/stacked container metaphor. */
+/** Azure Blob Storage — full-bleed blue (#0078D4) card with
+ *  three storage-row stripes suggesting blob containers. */
 function AzureBlobMark({ className }: { className?: string }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Azure Blob Storage"
-    >
-      {/* Large back square rotated as a diamond */}
-      <rect x="6" y="6" width="12" height="12" rx="1.5"
-        fill="#0078D4" opacity="0.3" transform="rotate(45 12 12)" />
-      {/* Front square */}
-      <rect x="7" y="7" width="10" height="10" rx="1.5" fill="#0078D4" />
-      {/* Inner highlight */}
-      <rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="#50B0F0" opacity="0.5" />
+    <svg className={className} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-label="Azure Blob Storage">
+      <rect x="2" y="2" width="20" height="20" rx="3" fill="#0078D4" />
+      <rect x="5" y="6"    width="14" height="3.5" rx="1.5" fill="white" opacity="0.35" />
+      <rect x="5" y="11.5" width="14" height="3.5" rx="1.5" fill="white" opacity="0.35" />
+      <rect x="5" y="17"   width="9"  height="3.5" rx="1.5" fill="white" opacity="0.35" />
     </svg>
   );
 }
 
-/** Microsoft OneDrive — two overlapping clouds in OneDrive blue (#0078D4).
- *  Microsoft trademark removed from simple-icons; uses brand color only. */
+/** Microsoft OneDrive — two overlapping filled clouds in #0078D4.
+ *  Microsoft trademark removed from simple-icons; brand color only. */
 function OneDriveMark({ className }: { className?: string }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Microsoft OneDrive"
-    >
-      {/* Back cloud (lighter) */}
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Microsoft OneDrive">
+      {/* Back cloud — lighter, shifted upper-left */}
       <path
-        d="M9.5 16H6a3 3 0 0 1-.39-5.974A4 4 0 0 1 13.5 9.1"
-        stroke="#0078D4"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        opacity="0.45"
+        d="M14.5 15H5a4 4 0 0 1-.44-7.97A5 5 0 0 1 14 5.1"
+        stroke="#0078D4" strokeWidth="2" strokeLinecap="round" opacity="0.4"
       />
-      {/* Front cloud */}
+      {/* Front cloud — fills lower portion */}
       <path
-        d="M8 19H18a3.5 3.5 0 0 0 .477-6.967A5 5 0 0 0 9.1 11.5a3.5 3.5 0 0 0-1.1 7.5Z"
+        d="M6 19.5H19a4 4 0 0 0 .54-7.96A6 6 0 0 0 8 10.1 4 4 0 0 0 6 18z"
         fill="#0078D4"
       />
     </svg>
   );
 }
 
-/** WebDAV — cloud with folder inside, sky-blue. */
+/** WebDAV — large filled cloud in sky-blue. */
 function WebDavMark({ className }: { className?: string }) {
   return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="WebDAV"
-    >
-      <g className="text-sky-600 dark:text-sky-400">
-        <path d="M6.5 19a4 4 0 0 1-.5-7.95A5 5 0 0 1 15.5 10a3.5 3.5 0 0 1 .5 6.95" stroke="currentColor" />
-        <path d="M10 16 L10 21 M10 21 L8 19 M10 21 L12 19" stroke="currentColor" />
-      </g>
+    <svg className={className} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-label="WebDAV">
+      <path
+        d="M19.5 9.5a7 7 0 0 0-13.4-1.8A4.5 4.5 0 1 0 6.5 17H19a4 4 0 0 0 .5-7.5z"
+        fill="#0EA5E9"
+      />
     </svg>
   );
 }
