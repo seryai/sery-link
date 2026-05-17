@@ -5,6 +5,63 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] — 2026-05-16 — Sync reliability: reconcile on connect + hash-based change detection
+
+Sync reliability release. Cloud datasets now stay in sync with local
+sources across all offline scenarios, and the fallback rescan runs every
+minute with near-zero cost when nothing has changed.
+
+### Added
+
+- **Reconcile on connect.** Every time Sery Link connects to the cloud,
+  it sends the current source list to a new `POST /v1/agent/reconcile`
+  endpoint. The API deletes any cloud datasets whose source no longer
+  exists locally — covering: folders removed while offline, failed
+  delete calls, and first connect after migrating from an old install.
+
+- **Hash-based change detection.** Before every fallback rescan, a
+  SHA-256 is computed over `(path, size, mtime)` for every scannable
+  file in the folder using the folder's configured exclude patterns.
+  If the hash matches the last successful sync, the expensive DuckDB
+  scan and cloud upload are skipped entirely.
+
+- **1-minute fallback rescan interval** (down from 1 hour). With hash
+  detection in place, missed events (iCloud, network drives) are caught
+  within 60 seconds and unchanged folders cost only a fast directory
+  walk.
+
+- **Single-flight sync guard.** If a sync is already running for a
+  folder (e.g. a file-change event fires mid-fallback-scan), the
+  second invocation exits immediately rather than stacking work.
+
+### Fixed
+
+- **notify events missed for F42 sources.** File-change events for
+  sources added via the new Sources sidebar (`config.sources`) were
+  silently dropped — `handle_changes` only checked the legacy
+  `watched_folders` list. Both lists are now checked.
+
+- **PDF changes not triggering real-time sync.** `is_data_file` was
+  missing `"pdf"`, so PDF modifications were only caught by the
+  fallback timer.
+
+- **Spurious re-syncs from excluded directories.** The hash walk
+  previously had a hardcoded exclude list that ignored per-folder
+  config patterns (e.g. `temp/`, `*.log`). Changes in excluded dirs
+  would cause a hash mismatch and trigger a full sync that produced
+  no new datasets. The hash now uses the same exclude patterns as the
+  scanner.
+
+- **Duplicate source roots on every sync.** After F42 migration, both
+  `watched_folders` and `sources` list the same local paths, causing
+  duplicate entries in every sync payload. Deduplicated with a HashSet.
+
+- **Config loaded 3× per sync.** `Config::load()` (a TOML file read +
+  parse) was called three times per sync cycle. Now loaded once and
+  threaded through.
+
+---
+
 ## [0.8.8] — 2026-05-16 — Stable machine identity + source detection fixes
 
 Identity and sources reliability release. Introduces a persistent
