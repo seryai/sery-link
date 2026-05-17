@@ -2222,6 +2222,25 @@ pub async fn reconcile_with_cloud(api_url: &str, token: &str, source_roots: Vec<
     }
 }
 
+/// Push an updated machine display name to the cloud. Best-effort — a failed
+/// call is logged but not surfaced; the name is already saved locally and
+/// will be sent on the next reconnect/bootstrap anyway.
+pub async fn rename_agent_cloud(api_url: &str, token: &str, name: &str) {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({ "name": name });
+    match client
+        .patch(format!("{}/v1/agent/name", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => eprintln!("[scanner] rename_agent returned {}", r.status()),
+        Err(e) => eprintln!("[scanner] rename_agent network error: {}", e),
+    }
+}
+
 /// Tell the cloud to delete all datasets whose query_path starts with
 /// `source_prefix`. Called when a watched folder or source is removed.
 ///

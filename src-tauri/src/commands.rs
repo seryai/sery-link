@@ -245,6 +245,35 @@ pub async fn save_config(config: Config) -> Result<(), String> {
     config.save().map_err(|e| e.to_string())
 }
 
+/// Save a new machine name locally and push it to the cloud if connected.
+/// Called from Settings as a side-effect alongside save_config.
+#[tauri::command]
+pub async fn rename_machine(name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("name must not be empty".into());
+    }
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.agent.name = name.clone();
+    config.save().map_err(|e| e.to_string())?;
+
+    // Best-effort cloud update — only when connected (token exists + not local-only).
+    if let (Ok(token), Ok(cfg)) = (
+        crate::keyring_store::get_token(),
+        Config::load(),
+    ) {
+        use crate::config::AuthMode;
+        let is_local = matches!(cfg.app.selected_auth_mode, Some(AuthMode::LocalOnly));
+        if !is_local {
+            let api_url = cfg.cloud.api_url.clone();
+            tokio::spawn(async move {
+                crate::scanner::rename_agent_cloud(&api_url, &token, &name).await;
+            });
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn add_watched_folder(path: String) -> Result<(), String> {
     let mut config = Config::load().map_err(|e| e.to_string())?;

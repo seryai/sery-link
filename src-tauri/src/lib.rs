@@ -235,6 +235,7 @@ pub fn run() {
             commands::list_machines,
             commands::get_config,
             commands::save_config,
+            commands::rename_machine,
             commands::add_watched_folder,
             commands::add_remote_source,
             commands::remove_watched_folder,

@@ -73,6 +73,13 @@ export function Settings() {
       } catch (err) {
         console.error('Failed to toggle launch-at-login:', err);
       }
+      if (config && draft.agent.name !== config.agent.name) {
+        try {
+          await invoke('rename_machine', { name: draft.agent.name });
+        } catch (err) {
+          console.error('Failed to push machine name to cloud:', err);
+        }
+      }
 
       toast.success('Settings saved');
     } catch (err) {
