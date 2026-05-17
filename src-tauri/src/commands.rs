@@ -2674,6 +2674,32 @@ pub async fn get_agent_info() -> Result<Option<AgentToken>, String> {
     }
 }
 
+/// Returns true if a workspace key is saved in the keyring. Used by the
+/// frontend to decide whether to show "Reconnect" (one click) or "Connect"
+/// (open the key-entry modal) after a temporary disconnect.
+#[tauri::command]
+pub fn has_workspace_key() -> bool {
+    keyring_store::get_workspace_key().is_ok()
+}
+
+/// Read the saved agent token + config ids without a network call.
+/// Used by the reconnect flow to restore agentInfo in the store after
+/// set_local_only_mode(false), before the WebSocket re-establishes.
+#[tauri::command]
+pub fn get_saved_agent_info() -> Result<Option<AgentToken>, String> {
+    if !keyring_store::has_token() {
+        return Ok(None);
+    }
+    let token = keyring_store::get_token().map_err(|e| e.to_string())?;
+    let config = Config::load().map_err(|e| e.to_string())?;
+    Ok(Some(AgentToken {
+        access_token: token,
+        agent_id: config.agent.agent_id.unwrap_or_default(),
+        workspace_id: config.agent.workspace_id.unwrap_or_default(),
+        expires_in: None,
+    }))
+}
+
 // ─── Workspace recipes (ROADMAP F11 — cross-machine sync) ───────────────
 //
 // Read-only fetch of the workspace recipe library — the saved questions

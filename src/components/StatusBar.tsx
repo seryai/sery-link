@@ -17,7 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Cloud, CloudOff, FolderUp, Link as LinkIcon, Loader2, LogOut } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
-import type { ConnectionStatus } from '../stores/agentStore';
+import type { AgentToken, ConnectionStatus } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
 import { CatchUpDialog, type CatchUpFolder } from './CatchUpDialog';
 import { useToast } from './Toast';
@@ -59,6 +59,8 @@ export function StatusBar() {
     connectionDetail,
     agentInfo,
     stats,
+    setAuthenticated,
+    setAgentInfo,
   } = useAgentStore();
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
@@ -184,7 +186,24 @@ export function StatusBar() {
               </span>
             )}
             <button
-              onClick={() => setShowConnect(true)}
+              onClick={async () => {
+                try {
+                  const hasKey = await invoke<boolean>('has_workspace_key');
+                  if (hasKey) {
+                    await invoke('set_local_only_mode', { enabled: false });
+                    const saved = await invoke<AgentToken | null>('get_saved_agent_info');
+                    if (saved) {
+                      setAgentInfo(saved);
+                      setAuthenticated(true);
+                      toast.success('Reconnected.');
+                      return;
+                    }
+                  }
+                } catch {
+                  // fall through to modal
+                }
+                setShowConnect(true);
+              }}
               className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-purple-700"
             >
               <LinkIcon className="h-3 w-3" />
@@ -279,9 +298,8 @@ export function StatusBar() {
 }
 
 /**
- * Small disconnect control. Shown when connected — clears keyring,
- * stops the tunnel, drops the user back to local-only mode. Requires
- * confirm because accidentally hitting it would be annoying.
+ * Small disconnect control. Pauses the tunnel (local-only mode) without
+ * clearing the keyring so reconnecting is one click, not a re-paste.
  */
 function DisconnectButton() {
   const { setAuthenticated, setAgentInfo } = useAgentStore();
@@ -289,14 +307,14 @@ function DisconnectButton() {
 
   const handle = async () => {
     const ok = window.confirm(
-      'Disconnect from Sery.ai? Sery will keep running locally, but cross-machine queries, the Machines view, and schema-change sync will stop until you reconnect.',
+      'Disconnect from Sery.ai? Sery will keep running locally. Click Connect to reconnect — no key needed.',
     );
     if (!ok) return;
     try {
-      await invoke('logout');
+      await invoke('set_local_only_mode', { enabled: true });
       setAgentInfo(null);
       setAuthenticated(false);
-      toast.success('Disconnected. Sery is running locally.');
+      toast.success('Disconnected. Click Connect to reconnect.');
     } catch (err) {
       console.error('Disconnect failed:', err);
       toast.error(`Couldn't disconnect: ${String(err)}`);
