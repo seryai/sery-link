@@ -18,8 +18,6 @@ Sery Link works in three independent modes. Use any combination — they coexist
 
 **Storage protocols (9 implemented + 4 S3-compatible presets):** Local disk · HTTPS public URLs · S3 · Google Drive (OAuth) · SFTP · WebDAV · Dropbox (OAuth or PAT) · Azure Blob · OneDrive (OAuth) — plus Backblaze B2 / Wasabi / Cloudflare R2 / Google Cloud Storage as one-click S3 presets.
 
-> **Where did BYOK go?** v0.5.3 shipped a paste-your-own-key `/ask` tab. v0.6.0 removed it — AI now lives in the cloud dashboard's `/chat` page, where the tool-use agent runs server-side and fans out queries across all your connected sources through the existing tunnel. See the [v0.6.0 changelog entry](./CHANGELOG.md#060--2026-05-01) for the full rationale.
-
 ## Features
 
 - 🌐 **Browse every cloud you have, in one app** — 9 protocols (Local, HTTPS, S3, Drive, SFTP, WebDAV, Dropbox, Azure, OneDrive) plus 4 S3-compatible presets (B2, Wasabi, R2, GCS). Credentials in the OS keychain, fetched directly from your machine.
