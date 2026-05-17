@@ -14,7 +14,7 @@ pub fn start_autoscan_loop<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     if AUTOSCAN_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             // Read the interval from config on every tick so live changes
             // (e.g. from a config_update WebSocket message) take effect
