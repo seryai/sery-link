@@ -14,7 +14,7 @@ Sery Link works in three independent modes. Use any combination — they coexist
 |---|---|---|
 | **Local — universal data gateway** | Connect every storage you have. Column-aware search across all of them, per-file column profiles, inline tabular preview (parquet footers read over the wire — no download), CSV/Excel → Parquet conversion. Runs fully offline. | Not required |
 | **MCP stdio** | `Settings → MCP` toggle exposes a folder to Claude Desktop / Cursor / Continue via local stdio. The external LLM uses its own key. | Not required |
-| **Cloud workspace** | Connect with a workspace key — AI chat across all your sources at app.sery.ai/chat, multi-machine catalog sync, cross-machine search, MCP cloud endpoint at mcp.sery.ai. | Free or Plus |
+| **Cloud workspace** | Connect with a workspace key — AI chat across all your sources at app.sery.ai/chat, multi-machine catalog sync, cross-machine search, MCP cloud endpoint at mcp.sery.ai. The dashboard can also trigger rescans, run SQL, and send OS notifications to any connected machine via the agent RPC layer. | Free or Plus |
 
 **Storage protocols (9 implemented + 4 S3-compatible presets):** Local disk · HTTPS public URLs · S3 · Google Drive (OAuth) · SFTP · WebDAV · Dropbox (OAuth or PAT) · Azure Blob · OneDrive (OAuth) — plus Backblaze B2 / Wasabi / Cloudflare R2 / Google Cloud Storage as one-click S3 presets.
 
@@ -30,6 +30,7 @@ Sery Link works in three independent modes. Use any combination — they coexist
 - 🔄 **Convert to Parquet** — turn any CSV / TSV / Excel into Parquet next to the source. The fastest way to make a pile of CSVs queryable.
 - 📄 **Documents → markdown** — DOCX, PPTX, HTML, PDF via the in-process [`mdkit`](https://crates.io/crates/mdkit) Rust crate (bundled libpdfium + pandoc).
 - 💻 **Multi-machine workspace** (opt-in) — connect as many of your own machines as you want via one workspace key. AI chat at app.sery.ai/chat fans queries out across them.
+- 🎛️ **Remote command execution** — the cloud dashboard can invoke 18 named commands on any connected machine: trigger source rescans, run SQL, tail logs, send OS notifications, open files in Finder/Explorer. Commands stream progress events back in real time.
 - ⌨️ **Keyboard-first UX** — Command Palette (Cmd+K), Quick-Search hotkey (Cmd+Shift+S), fuzzy search.
 - 🔒 **Verifiable privacy** — every outbound network event is logged to `~/.seryai/sync_audit.jsonl` with byte counts and host but never prompt or response text. Open the file in Settings → Privacy and watch it as you work.
 - 📦 **AGPL-3.0** — the protocol, auth flow, audit log format, and command surface are all inspectable. The privacy claims on [sery.ai/trust](https://sery.ai/trust) are verifiable in the source you're reading.
@@ -111,6 +112,7 @@ The marketing site says "raw files never leave your machines, the cloud holds th
 |---|---|
 | Workspace catalog is metadata-only | [`src-tauri/src/scanner.rs`](./src-tauri/src/scanner.rs) — what gets read; [`src-tauri/src/sync.rs`](./src-tauri/src/sync.rs) — what gets uploaded |
 | Cloud AI queries fan out via the workspace tunnel, not by uploading data | [`src-tauri/src/websocket.rs`](./src-tauri/src/websocket.rs) — long-lived WebSocket; the cloud agent sends SQL, the desktop runs it on local DuckDB and streams rows back |
+| Remote commands execute locally — the cloud can invoke but not exfiltrate | [`src-tauri/src/agent_rpc/`](./src-tauri/src/agent_rpc/) — `system.open` only opens paths inside configured local sources; `sql.exec` runs DuckDB locally and returns rows, never uploads file contents |
 | Local audit log is the source of truth | [`src-tauri/src/audit.rs`](./src-tauri/src/audit.rs) — schema + rotation; `~/.seryai/sync_audit.jsonl` on disk |
 | Document text is opt-in (off by default) | [`src-tauri/src/config.rs`](./src-tauri/src/config.rs) — `SyncConfig::include_document_text = false` |
 
