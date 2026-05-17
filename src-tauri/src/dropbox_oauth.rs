@@ -271,7 +271,7 @@ mod tests {
         let r = start_oauth_flow();
         assert!(r.is_err());
         let msg = format!("{:?}", r.unwrap_err());
-        assert!(msg.contains("not yet configured") || msg.contains("DROPBOX_APP_KEY"));
+        assert!(msg.contains("not configured") || msg.contains("DROPBOX_APP_KEY"));
     }
 
     #[test]
