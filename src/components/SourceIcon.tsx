@@ -1,25 +1,36 @@
 // Brand-recognisable icons for each source kind.
 //
-// lucide-react doesn't ship logos for third-party services (and
-// Microsoft / Google / Dropbox brand guidelines disallow heavy
-// modification anyway), so the cloud-source icons are inline
-// simplified SVGs styled in official-ish brand colors. The local +
-// URL paths fall back to lucide icons we already use elsewhere.
+// Google Drive and Dropbox use simple-icons via @icons-pack/react-simple-icons
+// — correct brand geometry, single-color fill with the official hex.
 //
-// We deliberately don't use the trademarked logos directly — these
-// are simplified geometric / color-coded marks that make each
-// source visually distinct in the sidebar without crossing brand
-// guidelines.
+// Amazon S3, Azure Blob, and OneDrive were removed from simple-icons at
+// Amazon's / Microsoft's trademark request, so those use hand-drawn SVGs
+// styled in official brand colors but without copying the trademarked marks.
+//
+// SFTP, WebDAV, local folder, and HTTPS fall back to lucide icons / custom
+// shapes since they represent protocols, not branded products.
 
 import { Folder as FolderIcon, Globe, KeyRound } from 'lucide-react';
+import {
+  SiGoogledrive,
+  SiDropbox,
+  SiBackblaze,
+  SiWasabi,
+  SiCloudflare,
+  SiGooglecloudstorage,
+} from '@icons-pack/react-simple-icons';
 import type { SourceKind } from '../utils/url';
 
 interface Props {
   kind: SourceKind;
-  /** Tailwind size — defaults to h-5 w-5 to match the FolderList
-   *  card. Pass `lg` for the empty-state hero. */
   size?: 'sm' | 'md' | 'lg';
 }
+
+const SIZE_PX: Record<NonNullable<Props['size']>, number> = {
+  sm: 16,
+  md: 20,
+  lg: 32,
+};
 
 const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
   sm: 'h-4 w-4',
@@ -28,33 +39,57 @@ const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
 };
 
 export function SourceIcon({ kind, size = 'md' }: Props) {
+  const px = SIZE_PX[size];
   const cls = SIZE_CLASS[size];
+
   switch (kind) {
     case 'gdrive':
-      return <GoogleDriveLogo className={cls} />;
+      return <SiGoogledrive size={px} color="default" title="Google Drive" />;
+    case 'dropbox':
+      return <SiDropbox size={px} color="default" title="Dropbox" />;
     case 's3':
-      return <AwsS3Logo className={cls} />;
+      return <AwsS3Mark className={cls} />;
+    case 'azure':
+      return <AzureBlobMark className={cls} />;
+    case 'onedrive':
+      return <OneDriveMark className={cls} />;
     case 'http':
       return <Globe className={`${cls} text-slate-500 dark:text-slate-400`} />;
     case 'local':
       return <FolderIcon className={`${cls} text-purple-600 dark:text-purple-300`} />;
     case 'sftp':
-      return <SftpKeyMark className={cls} />;
+      return <KeyRound className={`${cls} text-slate-700 dark:text-slate-300`} />;
     case 'webdav':
-      return <WebDavCloudFolder className={cls} />;
-    case 'dropbox':
-      return <DropboxBlueDiamond className={cls} />;
-    case 'azure':
-      return <AzureBlobMark className={cls} />;
-    case 'onedrive':
-      return <OneDriveCloudMark className={cls} />;
+      return <WebDavMark className={cls} />;
     default:
       return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
 }
 
-/** Background tint for the icon's containing chip — matches the
- *  brand-ish color of the icon so the visual weight is consistent. */
+/** Used by S3-compatible preset sources (B2, Wasabi, R2, GCS) when the
+ *  UI knows which provider is behind the S3 endpoint. Not used by the
+ *  generic s3 SourceKind directly — that always shows AwsS3Mark. */
+export function PresetSourceIcon({
+  preset,
+  size = 'md',
+}: {
+  preset: 'backblaze' | 'wasabi' | 'cloudflare' | 'gcs';
+  size?: 'sm' | 'md' | 'lg';
+}) {
+  const px = SIZE_PX[size];
+  switch (preset) {
+    case 'backblaze':
+      return <SiBackblaze size={px} color="default" title="Backblaze B2" />;
+    case 'wasabi':
+      return <SiWasabi size={px} color="default" title="Wasabi" />;
+    case 'cloudflare':
+      return <SiCloudflare size={px} color="default" title="Cloudflare R2" />;
+    case 'gcs':
+      return <SiGooglecloudstorage size={px} color="default" title="Google Cloud Storage" />;
+  }
+}
+
+/** Background tint for the icon's containing chip. */
 export function sourceIconBgClass(kind: SourceKind | string): string {
   switch (kind) {
     case 'gdrive':
@@ -72,84 +107,89 @@ export function sourceIconBgClass(kind: SourceKind | string): string {
     case 'dropbox':
       return 'bg-blue-100 dark:bg-blue-950/40';
     case 'azure':
-      return 'bg-cyan-100 dark:bg-cyan-950/40';
+      return 'bg-sky-100 dark:bg-sky-950/40';
     case 'onedrive':
-      return 'bg-indigo-100 dark:bg-indigo-950/40';
+      return 'bg-blue-100 dark:bg-blue-950/40';
     default:
       return 'bg-slate-100 dark:bg-slate-800';
   }
 }
 
-// ── Brand SVGs ─────────────────────────────────────────────────────
-//
-// The Google Drive logo is the standard tri-color triangle (blue,
-// green, yellow). We use the geometric shape with the official
-// hex colors. Simplified path — not pixel-identical to Google's
-// reference SVG, but readable as Drive at 16-32px.
-function GoogleDriveLogo({ className }: { className?: string }) {
+// ── Custom SVGs for brands not in simple-icons ─────────────────────────────
+
+/** Amazon S3 — orange (#FF9900) cylinder representing object storage.
+ *  simple-icons removed the Amazon trademark; this uses brand color only. */
+function AwsS3Mark({ className }: { className?: string }) {
   return (
     <svg
       className={className}
       viewBox="0 0 24 24"
       xmlns="http://www.w3.org/2000/svg"
-      aria-label="Google Drive"
+      aria-label="Amazon S3"
     >
-      {/* Yellow left */}
-      <path d="M3.5 14.5 L8 6.5 L13 6.5 L8.5 14.5 Z" fill="#FBBC04" />
-      {/* Blue bottom */}
-      <path d="M3.5 14.5 L8.5 14.5 L11 19 L6 19 Z" fill="#1FA463" />
-      <path d="M11 19 L6 19 L8.5 14.5 L20 14.5 L17.5 19 Z" fill="#4285F4" />
-      {/* Green right */}
-      <path d="M13 6.5 L8.5 14.5 L20 14.5 L15.5 6.5 Z" fill="#34A853" />
+      {/* Top ellipse */}
+      <ellipse cx="12" cy="5" rx="8" ry="2.5" fill="#FF9900" />
+      {/* Cylinder body */}
+      <path d="M4 5 L4 17 Q4 19.5 12 19.5 Q20 19.5 20 17 L20 5 Q20 7.5 12 7.5 Q4 7.5 4 5Z" fill="#FF9900" opacity="0.85" />
+      {/* Bottom ellipse cap */}
+      <ellipse cx="12" cy="17" rx="8" ry="2.5" fill="#FF9900" opacity="0.7" />
+      {/* Mid line to add depth */}
+      <ellipse cx="12" cy="11" rx="8" ry="2.5" fill="none" stroke="#FF6600" strokeWidth="0.5" opacity="0.6" />
     </svg>
   );
 }
 
-/** Simplified Amazon S3 "bucket" mark in the AWS S3 orange. We
- *  draw a stylised bucket — official AWS guidelines forbid using
- *  the trademarked logo without permission, so we use a generic
- *  bucket shape in the brand-recognisable color instead. */
-function AwsS3Logo({ className }: { className?: string }) {
+/** Azure Blob Storage — blue (#0078D4) geometric mark.
+ *  Evokes Azure's layered/stacked container metaphor. */
+function AzureBlobMark({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-label="Azure Blob Storage"
+    >
+      {/* Large back square rotated as a diamond */}
+      <rect x="6" y="6" width="12" height="12" rx="1.5"
+        fill="#0078D4" opacity="0.3" transform="rotate(45 12 12)" />
+      {/* Front square */}
+      <rect x="7" y="7" width="10" height="10" rx="1.5" fill="#0078D4" />
+      {/* Inner highlight */}
+      <rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="#50B0F0" opacity="0.5" />
+    </svg>
+  );
+}
+
+/** Microsoft OneDrive — two overlapping clouds in OneDrive blue (#0078D4).
+ *  Microsoft trademark removed from simple-icons; uses brand color only. */
+function OneDriveMark({ className }: { className?: string }) {
   return (
     <svg
       className={className}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
       xmlns="http://www.w3.org/2000/svg"
-      aria-label="Amazon S3"
+      aria-label="Microsoft OneDrive"
     >
-      <g className="text-orange-600 dark:text-orange-400">
-        {/* Bucket outline */}
-        <path d="M5 7 L7 19 L17 19 L19 7 Z" stroke="currentColor" />
-        {/* Liquid line */}
-        <path d="M5.5 10 L18.5 10" stroke="currentColor" />
-        {/* Top oval */}
-        <ellipse cx="12" cy="7" rx="7" ry="1.5" stroke="currentColor" />
-      </g>
+      {/* Back cloud (lighter) */}
+      <path
+        d="M9.5 16H6a3 3 0 0 1-.39-5.974A4 4 0 0 1 13.5 9.1"
+        stroke="#0078D4"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        opacity="0.45"
+      />
+      {/* Front cloud */}
+      <path
+        d="M8 19H18a3.5 3.5 0 0 0 .477-6.967A5 5 0 0 0 9.1 11.5a3.5 3.5 0 0 0-1.1 7.5Z"
+        fill="#0078D4"
+      />
     </svg>
   );
 }
 
-/** SFTP icon — a key over a server-like rectangle. Distinguishes
- *  from local folder (which is a generic folder mark) by the key,
- *  which signals "credentialed remote". Slate gray to match the
- *  technical / infrastructure aesthetic. */
-function SftpKeyMark({ className }: { className?: string }) {
-  return (
-    <KeyRound
-      className={`${className} text-slate-700 dark:text-slate-300`}
-    />
-  );
-}
-
-/** WebDAV — a cloud with a folder cutout. Sky-blue: WebDAV's
- *  origin is "files over HTTP" so the cloud-and-folder pairing
- *  reads as "cloud-hosted files". */
-function WebDavCloudFolder({ className }: { className?: string }) {
+/** WebDAV — cloud with folder inside, sky-blue. */
+function WebDavMark({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -163,88 +203,8 @@ function WebDavCloudFolder({ className }: { className?: string }) {
       aria-label="WebDAV"
     >
       <g className="text-sky-600 dark:text-sky-400">
-        {/* Cloud outline */}
-        <path d="M7 17 a3.5 3.5 0 0 1 0.5 -6.95 a4.5 4.5 0 0 1 8.5 -1.55 a3.5 3.5 0 0 1 0.5 6.95 Z" stroke="currentColor" />
-        {/* Folder tab inside the cloud */}
-        <rect x="9" y="11" width="6" height="4" rx="0.5" stroke="currentColor" fill="none" />
-        <path d="M9 11 L11 11 L11.5 12 L15 12" stroke="currentColor" />
-      </g>
-    </svg>
-  );
-}
-
-/** Dropbox — the recognizable blue-diamond folded shape. Two
- *  triangular halves meeting at a horizontal seam. Approximates
- *  Dropbox's logo geometry without using their trademarked mark. */
-function DropboxBlueDiamond({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Dropbox"
-    >
-      {/* Top half — two triangles forming a mountain */}
-      <path d="M2 8 L6 4 L12 8 L8 12 Z" fill="#0061FF" />
-      <path d="M22 8 L18 4 L12 8 L16 12 Z" fill="#0061FF" />
-      {/* Bottom half — mirrored */}
-      <path d="M2 16 L6 20 L12 16 L8 12 Z" fill="#0061FF" />
-      <path d="M22 16 L18 20 L12 16 L16 12 Z" fill="#0061FF" />
-    </svg>
-  );
-}
-
-/** Azure Blob — a stack of cylinders evoking blob storage, in
- *  Azure cyan. Reuses the "containers stacked" metaphor that's
- *  common in Azure marketing without copying the official mark. */
-function AzureBlobMark({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="Azure Blob"
-    >
-      <g className="text-cyan-600 dark:text-cyan-400">
-        {/* Top cylinder */}
-        <ellipse cx="12" cy="6" rx="6" ry="2" stroke="currentColor" />
-        <path d="M6 6 L6 10 a6 2 0 0 0 12 0 L18 6" stroke="currentColor" />
-        {/* Bottom cylinder */}
-        <path d="M6 12 L6 16 a6 2 0 0 0 12 0 L18 12" stroke="currentColor" />
-        <ellipse cx="12" cy="12" rx="6" ry="2" stroke="currentColor" />
-      </g>
-    </svg>
-  );
-}
-
-/** OneDrive — overlapping cloud shapes evoking Microsoft's cloud
- *  family iconography, in Microsoft indigo. */
-function OneDriveCloudMark({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-label="OneDrive"
-    >
-      <g className="text-indigo-600 dark:text-indigo-400">
-        {/* Smaller back cloud */}
-        <path
-          d="M8 11 a2.5 2.5 0 0 1 0.5 -4.95 a3 3 0 0 1 5.5 -0.5 a2 2 0 0 1 0.5 4 Z"
-          fill="currentColor"
-          opacity="0.4"
-        />
-        {/* Front big cloud */}
-        <path
-          d="M5 18 a3.5 3.5 0 0 1 0.5 -6.95 a4.5 4.5 0 0 1 8.5 -1.55 a3.5 3.5 0 0 1 0.5 6.95 Z"
-          fill="currentColor"
-        />
+        <path d="M6.5 19a4 4 0 0 1-.5-7.95A5 5 0 0 1 15.5 10a3.5 3.5 0 0 1 .5 6.95" stroke="currentColor" />
+        <path d="M10 16 L10 21 M10 21 L8 19 M10 21 L12 19" stroke="currentColor" />
       </g>
     </svg>
   );
