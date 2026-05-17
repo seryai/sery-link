@@ -165,15 +165,20 @@ export function GdriveBrowserPanel({ onClose }: Props) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
         <div className="mb-1 font-semibold">
-          Google Drive not configured for this build
+          Google Drive not available in this build
         </div>
         <p className="leading-relaxed">
-          This Sery Link binary was compiled without a Google OAuth
-          client ID. See{' '}
-          <code className="rounded bg-amber-100 px-1 py-0.5 text-[11px] dark:bg-amber-900/40">
-            datalake/SETUP_GOOGLE_OAUTH.md
-          </code>{' '}
-          for the maintainer-side setup.
+          This binary was built without a Google OAuth client ID. Download
+          an official release from{' '}
+          <a
+            href="https://github.com/seryai/sery-link/releases"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-amber-700 dark:hover:text-amber-300"
+          >
+            github.com/seryai/sery-link/releases
+          </a>{' '}
+          to get Google Drive support.
         </p>
       </div>
     );

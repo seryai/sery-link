@@ -136,11 +136,7 @@ fn http_client() -> reqwest::Client {
 pub async fn start_device_code_flow() -> Result<DeviceCodeStart> {
     let client_id = configured_client_id().ok_or_else(|| {
         AgentError::Config(
-            "OneDrive auth not yet configured — this build was \
-             produced without MICROSOFT_CLIENT_ID. Rebuild Sery Link \
-             with the env var set. See \
-             datalake/SETUP_MICROSOFT_OAUTH.md."
-                .to_string(),
+            "not configured for this build".to_string(),
         )
     })?;
     let resp = http_client()

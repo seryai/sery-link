@@ -104,11 +104,7 @@ fn generate_pkce_pair() -> (String, String) {
 pub fn start_oauth_flow() -> Result<DropboxAuthStart> {
     let key = app_key().ok_or_else(|| {
         AgentError::Config(
-            "Dropbox OAuth not yet configured — this build was \
-             produced without DROPBOX_APP_KEY. Rebuild Sery Link \
-             with the env var set. See \
-             datalake/SETUP_DROPBOX_OAUTH.md."
-                .to_string(),
+            "not configured for this build".to_string(),
         )
     })?;
     let (verifier, challenge) = generate_pkce_pair();

@@ -34,6 +34,16 @@ import { GdriveBrowserPanel } from './GdriveBrowserPanel';
 import { isS3Url } from '../utils/url';
 import type { SftpAuth, WebDavAuth } from '../utils/sources';
 
+/** Map internal "not configured for this build" errors to a user-friendly
+ *  message. Other errors pass through unchanged. */
+function oauthError(err: unknown): string {
+  const msg = String(err);
+  if (/not configured for this build/i.test(msg)) {
+    return 'Not available in this build — download an official release from github.com/seryai/sery-link/releases.';
+  }
+  return msg;
+}
+
 interface AddSourceModalProps {
   open: boolean;
   onClose: () => void;
@@ -1100,7 +1110,7 @@ function OneDriveStage({
         intervalMs: Math.max(start.interval, 1) * 1000,
       });
     } catch (err) {
-      setError(String(err));
+      setError(oauthError(err));
       setPhase({ kind: 'idle' });
     } finally {
       setBusy(false);
@@ -1529,7 +1539,7 @@ function DropboxOAuthForm({
         authorizeUrl: start.authorize_url,
       });
     } catch (err) {
-      setError(String(err));
+      setError(oauthError(err));
     } finally {
       setBusy(false);
     }

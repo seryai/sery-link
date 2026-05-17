@@ -253,9 +253,7 @@ pub fn build_authorization_url(
 pub async fn start_flow<R: Runtime>(app: AppHandle<R>) -> Result<String> {
     let cid = client_id().ok_or_else(|| {
         AgentError::Config(
-            "Google Drive integration not configured for this build. \
-             See datalake/SETUP_GOOGLE_OAUTH.md."
-                .to_string(),
+            "not configured for this build".to_string(),
         )
     })?;
 
@@ -593,10 +591,7 @@ async fn handle_callback_inner(code: &str, state: &str, redirect_uri: &str) -> R
     })?;
     let csecret = client_secret().ok_or_else(|| {
         AgentError::Config(
-            "Google Drive integration is missing GOOGLE_OAUTH_CLIENT_SECRET. \
-             Rebuild Sery Link with both GOOGLE_OAUTH_CLIENT_ID and \
-             GOOGLE_OAUTH_CLIENT_SECRET set — see datalake/SETUP_GOOGLE_OAUTH.md."
-                .to_string(),
+            "not configured for this build".to_string(),
         )
     })?;
 
