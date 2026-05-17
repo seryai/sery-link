@@ -15,7 +15,6 @@ import {
   BarChart3,
   Bell,
   ChevronDown,
-  Laptop,
   Layers,
   Loader2,
   Search,
@@ -36,7 +35,6 @@ import { SearchPage } from './components/SearchPage';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
-import { MachinesView } from './components/MachinesView';
 import { Notifications } from './components/Notifications';
 import { Recipes } from './components/Recipes';
 import { ReAuthModal } from './components/ReAuthModal';
@@ -283,25 +281,9 @@ function AppInner() {
               <BarChart3 className="h-4 w-4" />
               History
             </NavLink>
-            {/* Machines + Recipes are workspace-scoped — hidden until
-                the user connects to a Sery cloud workspace. Their
-                routes still resolve so deep links work, but there's
-                nothing useful behind them in local-only mode. */}
+            {/* Recipes are workspace-scoped — hidden until connected. */}
             {authenticated && (
               <>
-                <NavLink
-                  to="/machines"
-                  className={({ isActive }) =>
-                    `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                    }`
-                  }
-                >
-                  <Laptop className="h-4 w-4" />
-                  Machines
-                </NavLink>
                 <NavLink
                   to="/recipes"
                   className={({ isActive }) =>
@@ -416,7 +398,6 @@ function AppInner() {
               element={<FileDetail />}
             />
             <Route path="/results" element={<History />} />
-            <Route path="/machines" element={<MachinesView />} />
             <Route path="/recipes" element={<Recipes />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />

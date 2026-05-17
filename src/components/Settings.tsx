@@ -308,7 +308,7 @@ function GeneralPanel({
 }) {
   return (
     <Panel>
-      <Field label="Machine name" hint="Shown in the Machines view and on this device.">
+      <Field label="Machine name" hint="Shown in the Sery dashboard and on this device.">
         <input
           type="text"
           value={draft.agent.name}

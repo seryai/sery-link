@@ -15,7 +15,6 @@ use crate::events;
 use crate::history::{self, QueryHistoryEntry};
 use crate::keyring_store;
 use crate::metadata_cache::{CachedDataset, SearchResult, CacheStats, MetadataCache};
-use crate::machines::{self, MachinesResponse};
 use crate::scanner::{self, DatasetMetadata};
 use crate::stats::{self, Stats};
 use crate::watcher::{self, WatcherHandle};
@@ -243,18 +242,6 @@ pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentTok
         }
     });
     Ok(token)
-}
-
-// ---------------------------------------------------------------------------
-// Machines view — list every device connected to this workspace
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub async fn list_machines() -> Result<MachinesResponse, String> {
-    let config = Config::load().map_err(|e| e.to_string())?;
-    machines::list_machines(&config.cloud.api_url)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 mod agent_rpc;
 mod analytics;
+
 mod audit;
 mod auth;
 mod autoscan;
@@ -20,7 +21,6 @@ mod gdrive_oauth;
 mod gdrive_refresh;
 mod gdrive_skipped;
 mod gdrive_walker;
-mod machines;
 mod history;
 mod hotkey;
 mod keyring_store;
@@ -241,7 +241,6 @@ pub fn run() {
             commands::start_auth_flow,
             commands::auth_with_key,
             commands::bootstrap_workspace,
-            commands::list_machines,
             commands::get_config,
             commands::save_config,
             commands::rename_machine,

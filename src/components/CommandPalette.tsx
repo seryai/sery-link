@@ -10,7 +10,6 @@ import {
   Search,
   Folder,
   FolderOpen,
-  Laptop,
   RefreshCw,
   Settings as SettingsIcon,
   Shield,
@@ -35,7 +34,7 @@ interface Command {
 interface CommandPaletteProps {
   config: AgentConfig | null;
   workspaceId: string | null;
-  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'machines' | 'privacy' | 'settings') => void;
+  onNavigate: (tab: 'folders' | 'analytics' | 'results' | 'privacy' | 'settings') => void;
   onAddFolder: () => void;
   onRescanFolder?: (path: string) => void;
   onRemoveFolder?: (path: string) => void;
@@ -83,23 +82,6 @@ export function CommandPalette({
         },
         section: 'navigation',
       },
-      // Machines is workspace-scoped; only surface it once connected.
-      ...(authenticated
-        ? [
-            {
-              id: 'nav-machines',
-              label: 'Go to Machines',
-              description: 'See all the machines connected to this workspace',
-              icon: <Laptop className="h-4 w-4" />,
-              keywords: ['machines', 'devices', 'agents', 'pair', 'navigate'],
-              action: () => {
-                onNavigate('machines');
-                setIsOpen(false);
-              },
-              section: 'navigation' as const,
-            },
-          ]
-        : []),
       {
         id: 'nav-privacy',
         label: 'Go to Privacy',
