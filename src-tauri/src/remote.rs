@@ -27,6 +27,9 @@ pub struct RemoteHeadInfo {
     pub last_modified_secs: Option<i64>,
     /// `Content-Length` header as bytes.
     pub content_length: Option<i64>,
+    /// `Content-Type` header value, used as a fallback when the URL has
+    /// no file extension (e.g. `/export`, `/download`).
+    pub content_type: Option<String>,
 }
 
 /// Blocking HEAD request with a short timeout. Used by the scanner to
@@ -78,9 +81,16 @@ pub async fn head_probe(url: &str) -> Result<RemoteHeadInfo> {
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<i64>().ok());
 
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase());
+
     Ok(RemoteHeadInfo {
         last_modified_secs,
         content_length,
+        content_type,
     })
 }
 
@@ -206,13 +216,27 @@ pub fn scan_remote_blocking_with_creds(
     let (read_func, file_format): (&str, &str) = match ext.as_str() {
         "parquet" => ("read_parquet", "parquet"),
         "csv" | "tsv" => ("read_csv_auto", "csv"),
-        // xlsx-over-HTTP requires downloading the whole file first
-        // (calamine doesn't stream). Defer to Phase B.
-        other => {
-            return Err(AgentError::Database(format!(
-                "unsupported remote file type: {}. Phase A supports csv / parquet URLs",
-                if other.is_empty() { "unknown" } else { other }
-            )));
+        // xlsx / xls require downloading the whole file (calamine doesn't
+        // stream). Fail fast rather than timing out on a large binary.
+        "xlsx" | "xls" => {
+            return Err(AgentError::Database(
+                "Excel files over HTTP must be downloaded first — \
+                 add the file to a local folder instead of using a URL source"
+                    .to_string(),
+            ));
+        }
+        // No extension or unrecognised: fall back to Content-Type from the
+        // HEAD probe, then to read_csv_auto (DuckDB's most permissive reader).
+        // DuckDB will produce a descriptive error if the content can't be
+        // parsed as tabular data.
+        _ => {
+            match head.content_type.as_deref() {
+                Some(ct) if ct.contains("parquet") => ("read_parquet", "parquet"),
+                Some(ct) if ct.contains("csv") || ct.contains("text/plain") || ct.contains("text/tab") => {
+                    ("read_csv_auto", "csv")
+                }
+                _ => ("read_csv_auto", "csv"),
+            }
         }
     };
 

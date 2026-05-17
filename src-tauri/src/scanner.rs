@@ -346,6 +346,7 @@ async fn scan_s3_listing(
         let head = crate::remote::RemoteHeadInfo {
             last_modified_secs: obj.last_modified_secs,
             content_length: obj.size_bytes,
+            content_type: None,
         };
 
         // Per-file scan. Cache key uses the LISTING URL as folder and
