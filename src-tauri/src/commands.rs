@@ -2431,7 +2431,7 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         );
     });
 
-    let datasets = scanner::scan_folder_with_events(
+    let mut datasets = scanner::scan_folder_with_events(
         &folder_path,
         Some(walk_progress_cb),
         Some(progress_cb),
@@ -2603,6 +2603,41 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // cloud-offline mode. LocalOnly users, users with stale tokens from
     // an old bootstrap attempt, and sessions that have already hit an
     // error all short-circuit here without another wasted POST.
+    // Stamp source_id on every dataset so the cloud can group them by source.
+    // Resolution order:
+    //   1. Local source whose path matches folder_path exactly.
+    //   2. Remote source whose cache dir embeds the source id in the path
+    //      (e.g. sftp-cache/<id>/, webdav-cache/<id>/, dropbox-cache/<id>/,
+    //       azure-cache/<id>/, onedrive-cache/<id>/).
+    //   3. GoogleDrive source — cache path contains "gdrive-cache/".
+    // Falls back to None for unrecognised / pre-migration folders.
+    if let Ok(cfg) = Config::load() {
+        let sid = cfg.sources.iter().find_map(|s| {
+            match &s.kind {
+                crate::sources::SourceKind::Local { path, .. } if path == &folder_path => {
+                    Some(s.id.clone())
+                }
+                crate::sources::SourceKind::Sftp { .. }
+                | crate::sources::SourceKind::WebDav { .. }
+                | crate::sources::SourceKind::Dropbox { .. }
+                | crate::sources::SourceKind::AzureBlob { .. }
+                | crate::sources::SourceKind::OneDrive { .. } => {
+                    // Cache dir is ~/.seryai/<kind>-cache/<source_id>/...
+                    if folder_path.contains(&s.id) { Some(s.id.clone()) } else { None }
+                }
+                crate::sources::SourceKind::GoogleDrive { .. } => {
+                    if folder_path.contains("gdrive-cache") { Some(s.id.clone()) } else { None }
+                }
+                _ => None,
+            }
+        });
+        if let Some(sid) = sid {
+            for d in datasets.iter_mut() {
+                d.source_id = Some(sid.clone());
+            }
+        }
+    }
+
     let cloud_resp = if cloud_sync_enabled() {
         match (Config::load(), keyring_store::get_token()) {
             (Ok(config), Ok(token)) => {
@@ -4934,6 +4969,7 @@ mod search_tests {
                 document_markdown: None,
                 sample_rows: None,
                 samples_redacted: false,
+                source_id: None,
             },
         }
     }
@@ -4952,6 +4988,7 @@ mod search_tests {
                 document_markdown: Some(markdown.to_string()),
                 sample_rows: None,
                 samples_redacted: false,
+                source_id: None,
             },
         }
     }

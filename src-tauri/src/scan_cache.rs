@@ -357,6 +357,7 @@ mod tests {
             document_markdown: None,
             sample_rows: None,
             samples_redacted: false,
+            source_id: None,
         }
     }
 

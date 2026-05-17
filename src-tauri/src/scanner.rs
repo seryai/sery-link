@@ -37,6 +37,11 @@ pub struct DatasetMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_markdown: Option<String>,
 
+    /// AgentSource UUID — set by each rescan command so the cloud can
+    /// group datasets by source when the user clicks a source card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+
     /// Up to 5 sample rows from the file, PII-scrubbed. Used by the
     /// cloud LLM for better SQL grounding. See SPEC_BACKEND_UNBLOCK.md
     /// §Metadata enrichment. `None` for documents + files that fail
@@ -1174,6 +1179,7 @@ fn extract_minimal_metadata(file_path: &Path, base_path: &str) -> Result<Dataset
         document_markdown: None,
         sample_rows: None,
         samples_redacted: false,
+        source_id: None,
     })
 }
 
@@ -1227,6 +1233,7 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
             document_markdown,
             sample_rows: None,
             samples_redacted: false,
+            source_id: None,
         })
     } else {
         // Tabular files — DuckDB schema extraction + optional sampling.
@@ -1251,6 +1258,7 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
             document_markdown: None,
             sample_rows,
             samples_redacted,
+            source_id: None,
         })
     }
 }

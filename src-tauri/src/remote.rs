@@ -269,6 +269,7 @@ pub fn scan_remote_blocking_with_creds(
         document_markdown: None,
         sample_rows,
         samples_redacted,
+        source_id: None,
     })
 }
 
