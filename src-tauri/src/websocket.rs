@@ -461,6 +461,14 @@ impl WebSocketClient {
                     }
                 }
             }
+            "invoke" => {
+                let wry_app = crate::events::app_handle().cloned();
+                let write_clone = Arc::clone(&write);
+                let msg_clone = message.clone();
+                tokio::spawn(async move {
+                    crate::agent_rpc::dispatch(&msg_clone, write_clone, wry_app).await;
+                });
+            }
             _ => {
                 eprintln!("Unknown message type: {}", msg_type);
             }

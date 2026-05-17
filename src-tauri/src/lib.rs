@@ -1,3 +1,4 @@
+mod agent_rpc;
 mod analytics;
 mod audit;
 mod auth;
