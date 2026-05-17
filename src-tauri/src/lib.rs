@@ -1,6 +1,7 @@
 mod analytics;
 mod audit;
 mod auth;
+mod autoscan;
 mod commands;
 mod config;
 mod csv;
@@ -182,6 +183,13 @@ pub fn run() {
             // without bothering the user.
             gdrive_refresh::start_refresh_loop(app.handle().clone());
 
+            // Background auto-scan loop: re-checks mtime-based change
+            // detection on every configured interval. Interval is read
+            // from config on each tick so live updates (WebSocket
+            // config_update or local set_auto_scan_interval) take
+            // effect without an app restart.
+            autoscan::start_autoscan_loop(app.handle().clone());
+
             // Analytics flusher + heartbeat: ships anonymous daily
             // pings (install_id + version + platform — nothing else)
             // to analytics.sery.ai. The flusher drains the on-disk
@@ -334,6 +342,8 @@ pub fn run() {
             commands::fetch_workspace_recipes,
             commands::open_recipe_in_browser,
             commands::mark_recipe_run,
+            commands::get_auto_scan_config,
+            commands::set_auto_scan_interval,
             // BYOK (Anthropic / OpenAI / Gemini) was removed in the
             // v0.5.3 → file-manager pivot. AI now happens cloud-side
             // via the dashboard / api server. See PR #62 (or git

@@ -256,6 +256,7 @@ mod tests {
                 fallback_scan_interval_seconds: 3600,
                 scan_tier_overrides: std::collections::HashMap::new(),
                 include_document_text: false,
+                auto_scan_interval_minutes: None,
             },
             app: crate::config::AppConfig {
                 theme: "system".to_string(),

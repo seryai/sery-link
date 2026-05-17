@@ -209,6 +209,17 @@ pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, Str
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
+    // Best-effort: fetch remote agent config and apply it.
+    tokio::spawn(async move {
+        if let (Ok(tok), Ok(cfg)) = (keyring_store::get_token(), Config::load()) {
+            if let Some(remote) = scanner::fetch_remote_config(&cfg.cloud.api_url, &tok).await {
+                if let Ok(mut c) = Config::load() {
+                    c.apply_remote_config(&remote);
+                    let _ = c.save();
+                }
+            }
+        }
+    });
     Ok(token)
 }
 
@@ -220,6 +231,17 @@ pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentTok
         .map_err(|e| e.to_string())?;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
+    // Best-effort: fetch remote agent config and apply it.
+    tokio::spawn(async move {
+        if let (Ok(tok), Ok(cfg)) = (keyring_store::get_token(), Config::load()) {
+            if let Some(remote) = scanner::fetch_remote_config(&cfg.cloud.api_url, &tok).await {
+                if let Ok(mut c) = Config::load() {
+                    c.apply_remote_config(&remote);
+                    let _ = c.save();
+                }
+            }
+        }
+    });
     Ok(token)
 }
 
@@ -2938,6 +2960,26 @@ pub async fn mark_recipe_run(recipe_id: String) -> Result<(), String> {
         return Err(format!("Failed to mark recipe run ({}): {}", status, text));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Auto-scan config commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_auto_scan_config() -> Result<serde_json::Value, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "scan_interval_minutes": config.sync.auto_scan_interval_minutes,
+        "include_document_text": config.sync.include_document_text,
+    }))
+}
+
+#[tauri::command]
+pub async fn set_auto_scan_interval(minutes: Option<u32>) -> Result<(), String> {
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    config.sync.auto_scan_interval_minutes = minutes;
+    config.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

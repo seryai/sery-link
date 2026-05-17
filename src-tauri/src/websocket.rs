@@ -439,6 +439,16 @@ impl WebSocketClient {
             "schema_change" => {
                 Self::handle_remote_schema_change(message, app);
             }
+            "config_update" => {
+                if let Some(config_val) = message.get("config") {
+                    if let Ok(remote) = serde_json::from_value::<crate::config::RemoteAgentConfig>(config_val.clone()) {
+                        if let Ok(mut c) = crate::config::Config::load() {
+                            c.apply_remote_config(&remote);
+                            let _ = c.save();
+                        }
+                    }
+                }
+            }
             _ => {
                 eprintln!("Unknown message type: {}", msg_type);
             }

@@ -253,6 +253,27 @@ pub struct SyncConfig {
     /// per Option 3 (user opt-in, default off).
     #[serde(default)]
     pub include_document_text: bool,
+    /// Cloud-pushed auto-scan interval in minutes. When set, the background
+    /// autoscan loop triggers a rescan of folders that have file-system
+    /// changes since their last scan. Absence (None) disables the loop.
+    /// Populated by `apply_remote_config`; also writable via the
+    /// `set_auto_scan_interval` Tauri command so the user can override
+    /// locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_scan_interval_minutes: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// Remote agent config (from GET /v1/agent/config)
+// ---------------------------------------------------------------------------
+
+/// Shape returned by `GET /v1/agent/config`. All fields are optional so old
+/// API versions that don't return a field still deserialize cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteAgentConfig {
+    pub scan_interval_minutes: Option<u32>,
+    pub include_document_text: bool,
+    pub scan_tier_overrides: std::collections::HashMap<String, String>,
 }
 
 fn default_fallback_scan() -> u64 {
@@ -370,6 +391,7 @@ impl Default for Config {
                 fallback_scan_interval_seconds: default_fallback_scan(),
                 scan_tier_overrides: std::collections::HashMap::new(),
                 include_document_text: false,
+                auto_scan_interval_minutes: None,
             },
             app: AppConfig::default(),
         }
@@ -919,6 +941,20 @@ impl Config {
             tail_idx += 1;
         }
         Ok(())
+    }
+
+    /// Apply a remote agent config payload fetched from `GET /v1/agent/config`.
+    /// Overwrites the local sync settings that the cloud is authoritative for:
+    /// - `sync.include_document_text`
+    /// - `sync.scan_tier_overrides`
+    /// - `sync.auto_scan_interval_minutes`
+    ///
+    /// Does NOT save to disk — callers must call `self.save()` afterwards so
+    /// the change is durable.
+    pub fn apply_remote_config(&mut self, remote: &RemoteAgentConfig) {
+        self.sync.include_document_text = remote.include_document_text;
+        self.sync.scan_tier_overrides = remote.scan_tier_overrides.clone();
+        self.sync.auto_scan_interval_minutes = remote.scan_interval_minutes;
     }
 
     /// Migrate existing users to the new auth mode system.

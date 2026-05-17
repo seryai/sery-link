@@ -2269,6 +2269,46 @@ pub async fn rename_agent_cloud(api_url: &str, token: &str, name: &str) {
 /// Tell the cloud to delete all datasets whose query_path starts with
 /// `source_prefix`. Called when a watched folder or source is removed.
 ///
+/// Fetch the remote agent config from `GET /v1/agent/config`. Returns `None`
+/// on any error (network, auth, parse) — callers treat this as best-effort.
+pub async fn fetch_remote_config(
+    api_url: &str,
+    token: &str,
+) -> Option<crate::config::RemoteAgentConfig> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/agent/config", api_url);
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            match r.json::<crate::config::RemoteAgentConfig>().await {
+                Ok(cfg) => {
+                    eprintln!("[scanner] fetched remote agent config: {:?}", cfg);
+                    Some(cfg)
+                }
+                Err(e) => {
+                    eprintln!("[scanner] failed to parse remote agent config: {}", e);
+                    None
+                }
+            }
+        }
+        Ok(r) => {
+            eprintln!(
+                "[scanner] GET /v1/agent/config returned {}",
+                r.status()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("[scanner] GET /v1/agent/config network error: {}", e);
+            None
+        }
+    }
+}
+
 /// `source_prefix` must be the virtual query_path prefix, e.g.:
 ///   `local://<agent_id>/Users/foo/Documents/`  (local folder)
 ///   `local://<agent_id>/s3://bucket/prefix/`   (S3 source)
