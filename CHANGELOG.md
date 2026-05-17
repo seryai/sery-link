@@ -5,6 +5,39 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10] — 2026-05-16 — One-click reconnect + machine rename
+
+Auth quality-of-life release. Disconnect no longer clears the workspace
+key, reconnect is one click, and machine names update immediately on the
+dashboard without a reconnect cycle.
+
+### Added
+
+- **One-click reconnect.** The Connect button in the status bar now checks
+  for a saved workspace key. If one exists, clicking Connect silently
+  re-establishes the tunnel — no modal, no re-entry of the key.
+
+- **Switch workspace link.** When a saved key is present, a secondary
+  "Switch workspace" link appears next to Connect, opening the key modal
+  for users who want to join a different workspace.
+
+- **Machine rename syncs to cloud immediately.** Saving a new machine name
+  in Settings → General now calls `PATCH /v1/agent/name` in the
+  background. The Machines view on the dashboard reflects the new name
+  without waiting for the next reconnect.
+
+### Fixed
+
+- **Disconnect kept showing online on dashboard.** The WebSocket reconnect
+  loop was a detached tokio task; dropping `WebSocketClient` didn't stop
+  it. The task handle is now stored in a static and aborted on disconnect,
+  so the API `finally` block fires and Redis clears immediately.
+
+- **Reconnect asked for workspace key again.** The Disconnect button was
+  calling `logout` (which clears the keyring). It now calls
+  `set_local_only_mode` instead, preserving the saved key for one-click
+  reconnect.
+
 ## [0.8.9] — 2026-05-16 — Sync reliability: reconcile on connect + hash-based change detection
 
 Sync reliability release. Cloud datasets now stay in sync with local
