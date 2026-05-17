@@ -392,13 +392,19 @@ impl Config {
 
         config.migrate_sources_if_needed();
 
-        // Remove any gdrive-cache Local sources mistakenly added before
-        // the GoogleDrive DataSource kind was used (pre-v0.8.10). These
-        // have paths like ~/.seryai/gdrive-cache/... and are confusing
-        // in the Sources sidebar. Cache dirs stay in watched_folders for
-        // the scanner; only the incorrect sidebar entries are pruned.
+        // ── One-time fixup for pre-v0.8.10 misclassified sources ───────
+        //
+        // Before v0.8.10, add_remote_source and gdrive_watch_folder both
+        // wrote to watched_folders only, which then migrated as Local
+        // kind. Fix the kind in-place so icons and labels are correct
+        // without requiring the user to re-add sources.
         {
-            let gdrive_cache_marker = std::path::MAIN_SEPARATOR_STR.to_string() + "gdrive-cache";
+            let gdrive_cache_marker =
+                std::path::MAIN_SEPARATOR_STR.to_string() + "gdrive-cache";
+            let mut dirty = false;
+
+            // 1. Remove gdrive-cache Local entries (replaced by GoogleDrive
+            //    DataSource added by gdrive_watch_folder going forward).
             let before = config.sources.len();
             config.sources.retain(|s| {
                 if let SourceKind::Local { path, .. } = &s.kind {
@@ -408,6 +414,32 @@ impl Config {
                 }
             });
             if config.sources.len() < before {
+                dirty = true;
+            }
+
+            // 2. Re-classify Local sources whose path is actually an S3
+            //    or HTTPS URL — they were stored with the wrong kind.
+            for source in &mut config.sources {
+                if let SourceKind::Local { path, .. } = &source.kind {
+                    let p = path.to_string_lossy().to_string();
+                    let lower = p.trim().to_ascii_lowercase();
+                    if lower.starts_with("s3://") {
+                        let url = p.clone();
+                        let new_name = crate::sources::derive_name_for_url(&url);
+                        source.name = new_name;
+                        source.kind = SourceKind::S3 { url };
+                        dirty = true;
+                    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+                        let url = p.clone();
+                        let new_name = crate::sources::derive_name_for_url(&url);
+                        source.name = new_name;
+                        source.kind = SourceKind::Https { url };
+                        dirty = true;
+                    }
+                }
+            }
+
+            if dirty {
                 let _ = config.save();
             }
         }
