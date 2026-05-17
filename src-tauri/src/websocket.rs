@@ -449,6 +449,18 @@ impl WebSocketClient {
                     }
                 }
             }
+            "trigger_scan" => {
+                if let Some(source_id) = message.get("source_id").and_then(|v| v.as_str()) {
+                    let source_id = source_id.to_string();
+                    if let Some(app_handle) = app {
+                        tokio::spawn(async move {
+                            if let Err(e) = crate::commands::rescan_source_by_id(app_handle, source_id).await {
+                                eprintln!("[ws] trigger_scan failed: {}", e);
+                            }
+                        });
+                    }
+                }
+            }
             _ => {
                 eprintln!("Unknown message type: {}", msg_type);
             }

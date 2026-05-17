@@ -161,6 +161,19 @@ pub struct DataSource {
 }
 
 impl DataSource {
+    /// All local sources are considered active (removal deletes the entry).
+    pub fn is_active(&self) -> bool {
+        true
+    }
+
+    /// Returns the local filesystem path for Local sources; None for all others.
+    pub fn local_path(&self) -> Option<String> {
+        match &self.kind {
+            SourceKind::Local { path, .. } => Some(path.to_string_lossy().to_string()),
+            _ => None,
+        }
+    }
+
     /// Convenience constructor for the four kinds we ship today.
     /// New variants added in F43+ get their own helpers.
     pub fn new_local(path: PathBuf, recursive: bool) -> Self {

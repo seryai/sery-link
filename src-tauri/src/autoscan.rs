@@ -45,20 +45,27 @@ pub fn start_autoscan_loop<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 continue;
             }
 
-            // Collect watched-folder paths. Load fresh so newly-added folders
+            // Collect all active sources. Load fresh so newly-added sources
             // are picked up without restarting the loop.
-            let folders = crate::config::Config::load()
+            let sources: Vec<(String, Option<String>)> = crate::config::Config::load()
                 .map(|c| {
-                    c.watched_folders
+                    c.sources
                         .iter()
-                        .map(|f| f.path.clone())
-                        .collect::<Vec<_>>()
+                        .filter(|s| s.is_active())
+                        .map(|s| (s.id.clone(), s.local_path()))
+                        .collect()
                 })
                 .unwrap_or_default();
 
-            for folder in folders {
-                if folder_has_changes(&folder) {
-                    let _ = crate::commands::rescan_folder(app.clone(), folder).await;
+            for (source_id, local_path) in sources {
+                // For local sources we can cheaply check mtime before scanning.
+                // For remote sources we always trigger (they'll no-op if unchanged).
+                let needs_scan = match &local_path {
+                    Some(path) => folder_has_changes(path),
+                    None => true,
+                };
+                if needs_scan {
+                    let _ = crate::commands::rescan_source_by_id(app.clone(), source_id).await;
                 }
             }
         }

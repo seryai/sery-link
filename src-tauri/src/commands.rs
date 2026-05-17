@@ -2300,6 +2300,61 @@ fn stringify_cell(v: &duckdb::types::Value) -> String {
     }
 }
 
+/// Dispatch a rescan to the right command based on source kind.
+/// Called by the WebSocket `trigger_scan` handler and the autoscan loop.
+/// Not a Tauri command — internal use only.
+pub async fn rescan_source_by_id<R: Runtime>(
+    app: AppHandle<R>,
+    source_id: String,
+) -> Result<Value, String> {
+    use crate::sources::SourceKind;
+
+    let source = Config::load()
+        .map_err(|e| e.to_string())?
+        .sources
+        .into_iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| format!("source {source_id:?} not found"))?;
+
+    match source.kind {
+        SourceKind::Local { path, .. } => {
+            rescan_folder(app, path.to_string_lossy().to_string()).await
+        }
+        SourceKind::S3 { url } | SourceKind::Https { url } => {
+            rescan_folder(app, url).await
+        }
+        SourceKind::Sftp { .. } => {
+            rescan_sftp_source(app, source_id).await
+        }
+        SourceKind::WebDav { .. } => {
+            rescan_webdav_source(app, source_id).await
+        }
+        SourceKind::Dropbox { .. } => {
+            rescan_dropbox_source(app, source_id).await
+        }
+        SourceKind::AzureBlob { .. } => {
+            rescan_azure_blob_source(app, source_id).await
+        }
+        SourceKind::OneDrive { .. } => {
+            rescan_onedrive_source(app, source_id).await
+        }
+        SourceKind::GoogleDrive { account_id } => {
+            // Re-walk all Drive folders watched under this account.
+            let folders = Config::load()
+                .map(|c| c.gdrive_watched_folders
+                    .into_iter()
+                    .filter(|f| f.account_id == account_id)
+                    .collect::<Vec<_>>())
+                .unwrap_or_default();
+            let mut last = Ok(serde_json::json!({"skipped": true}));
+            for f in folders {
+                last = gdrive_watch_folder(app.clone(), f.folder_id, f.name).await;
+            }
+            last
+        }
+    }
+}
+
 /// Rescan a folder and sync its metadata to the cloud in one shot. Emits
 /// scan_progress / scan_complete events and records an audit entry so the
 /// Privacy tab can show what was uploaded.
