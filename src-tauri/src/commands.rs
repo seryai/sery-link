@@ -2024,7 +2024,7 @@ fn pick_convert_destination(source: &std::path::Path) -> Result<std::path::PathB
 // + render bounded; the UI surfaces "showing N of M" so the user knows
 // when more rows exist.
 
-const MAX_PREVIEW_ROWS: usize = 5_000;
+const MAX_PREVIEW_ROWS: usize = 100;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DatasetRows {
