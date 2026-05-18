@@ -2681,6 +2681,16 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
                 crate::sources::SourceKind::Local { path, .. } if path == &folder_path => {
                     Some(s.id.clone())
                 }
+                crate::sources::SourceKind::S3 { url } | crate::sources::SourceKind::Https { url } => {
+                    // S3/HTTPS: folder_path IS the remote URL (e.g. "s3://bucket/prefix/").
+                    // Match when folder_path starts with the source URL (strip trailing slash for comparison).
+                    let base = url.trim_end_matches('/');
+                    if folder_path.trim_end_matches('/') == base || folder_path.starts_with(&format!("{base}/")) {
+                        Some(s.id.clone())
+                    } else {
+                        None
+                    }
+                }
                 crate::sources::SourceKind::Sftp { .. }
                 | crate::sources::SourceKind::WebDav { .. }
                 | crate::sources::SourceKind::Dropbox { .. }
