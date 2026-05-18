@@ -2126,10 +2126,25 @@ pub async fn sync_metadata_to_cloud(
     mut datasets: Vec<DatasetMetadata>,
 ) -> Result<serde_json::Value> {
     if let Some(fp) = folder_path {
-        // Only prepend the folder path for local filesystem paths.
-        // Remote sources (s3://, https://, sftp://, etc.) already carry
-        // their own scheme and must not be wrapped inside local://.
-        if !fp.contains("://") {
+        if fp.contains("://") {
+            // Remote source (s3://, https://, sftp://, etc.).
+            // relative_path is currently the key below the prefix
+            // (e.g. "1155/product_labels.parquet"). Prepend the base URL
+            // so the cloud stores the full remote URL as relative_path:
+            //   s3://bucket/prefix/1155/product_labels.parquet
+            // → query_path in DB: local://agent_id/s3://bucket/prefix/1155/product_labels.parquet
+            let base = fp.trim_end_matches('/');
+            for d in datasets.iter_mut() {
+                if !d.relative_path.contains("://") {
+                    d.relative_path = format!("{}/{}", base, d.relative_path);
+                }
+            }
+        } else {
+            // Local filesystem path: prepend folder so the full absolute
+            // path is the relative_path sent to the cloud.
+            // e.g. "/Users/foo/Documents" + "data.csv"
+            //   → relative_path: "Users/foo/Documents/data.csv"
+            //   → query_path:    "local://agent_id/Users/foo/Documents/data.csv"
             let prefix = fp.trim_start_matches('/').trim_end_matches('/');
             if !prefix.is_empty() {
                 for d in datasets.iter_mut() {
