@@ -654,11 +654,31 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
                 let dir_str = pdfium_dir.to_string_lossy();
                 match mdkit::pdf::PdfiumExtractor::with_library_path(&dir_str) {
                     Ok(ext) => {
+                        // Mirror what Engine::with_defaults does: wire in the
+                        // platform OCR backend so scanned (image-only) PDF pages
+                        // route through Apple Vision / Windows.Media.Ocr instead
+                        // of returning empty markdown. Without this, the bundled
+                        // extractor is a bare PdfiumExtractor with no OCR fallback
+                        // — text PDFs work but scanned PDFs return nothing.
+                        #[allow(unused_mut)]
+                        let mut ext = ext;
+                        #[cfg(target_os = "macos")]
+                        {
+                            ext = ext.with_ocr_fallback(Box::new(
+                                mdkit::ocr_macos::VisionOcrExtractor::new(),
+                            ));
+                        }
+                        #[cfg(target_os = "windows")]
+                        {
+                            ext = ext.with_ocr_fallback(Box::new(
+                                mdkit::ocr_windows::WindowsOcrExtractor::new(),
+                            ));
+                        }
                         engine.register(Box::new(ext));
                         let _ = PDFIUM_LIB_PATH.set(dir_str.to_string());
                         eprintln!(
                             "[scanner] mdkit: backend `pdf` registered from bundled \
-                             libpdfium at {dir_str}"
+                             libpdfium at {dir_str} (with OCR fallback)"
                         );
                     }
                     Err(e) => {
