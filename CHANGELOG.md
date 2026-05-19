@@ -5,6 +5,28 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] — 2026-05-19
+
+### Added
+
+- **Partial PDF extraction (`max_pages`)** — `files.extract` now accepts an optional
+  `max_pages` integer. When set, pdfium renders only the first N pages and returns
+  markdown with `## Page N` headers plus a truncation notice, bypassing the full
+  mdkit pipeline. Eliminates timeout failures on large PDFs; the dashboard uses
+  `max_pages: 10` for files 5–10 MB so a first preview arrives in under 5 seconds.
+
+### Fixed
+
+- **PDF serial-thread panic no longer aborts the scan** — if pdfium crashes on a
+  single file, the scan continues with a shallow record (name, size, format) instead
+  of propagating the panic to the entire folder scan task.
+- **Sources pushed to cloud on every WebSocket connect** — migrated local-folder
+  sources that were created before v0.9.2 now get `AgentSource` records on the
+  server immediately, so the dashboard can list and query them without a manual
+  rescan.
+
+---
+
 ## [0.9.2] — 2026-05-18
 
 ### Changed
