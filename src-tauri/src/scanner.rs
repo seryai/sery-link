@@ -1098,6 +1098,15 @@ fn scan_folder_blocking(
     // Run the two halves concurrently. `thread::scope` borrows the
     // surrounding stack frame so the closure can capture local refs
     // without `'static` bounds.
+
+    // Preserve shallow records before pdf_pending is consumed by the thread.
+    // Used as fallback if the PDF serial thread panics (e.g. a corrupt PDF
+    // that escapes the per-file catch_unwind via a C/pdfium-level abort).
+    let pdf_shallow_fallbacks: Vec<DatasetMetadata> = pdf_pending
+        .iter()
+        .map(|(_, shallow, _, _)| shallow.clone())
+        .collect();
+
     let mut pdf_results: Vec<DatasetMetadata> = Vec::new();
     let mut other_results: Vec<DatasetMetadata> = Vec::new();
     std::thread::scope(|s| {
@@ -1110,11 +1119,13 @@ fn scan_folder_blocking(
                 .map(&process)
                 .collect::<Vec<_>>()
         });
-        // Unwrap is acceptable: the closure already catches per-file
-        // panics, so the only way this errors is a panic in our scaffold
-        // code (rayon plumbing, AtomicUsize) — those should crash loudly
-        // rather than silently produce a partial result.
-        pdf_results = pdf_handle.join().expect("PDF serial thread panicked");
+        pdf_results = pdf_handle.join().unwrap_or_else(|_| {
+            eprintln!(
+                "[scanner] PDF serial thread panicked — falling back to {} shallow records",
+                pdf_shallow_fallbacks.len()
+            );
+            pdf_shallow_fallbacks.clone()
+        });
     });
 
     finalised.extend(pdf_results);
