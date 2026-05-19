@@ -5,6 +5,25 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-05-18
+
+### Fixed
+
+- **httpfs DRY violation** — two `commands.rs` call sites that inline-executed
+  `INSTALL httpfs; LOAD httpfs;` now delegate to `remote::install_httpfs()`,
+  the single source of truth for that operation.
+
+### Added (tests)
+
+- **Tunnel SQL rewrite** — unit test verifying `local://agent_id/s3://...`
+  references are stripped from SQL before DuckDB execution.
+- **Creds key fallback** — unit test confirming that when no source matches
+  the remote URL, `find_creds_key` falls back to the URL itself.
+- **Creds key matching** — unit test confirming that when an S3 source covers
+  the remote URL, `find_creds_key` returns the source root (e.g. `s3://bucket`).
+
+---
+
 ## [0.9.0] — 2026-05-17
 
 ### Added
