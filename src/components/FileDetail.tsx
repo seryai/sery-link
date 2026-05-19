@@ -18,6 +18,8 @@ import { agentInvoke } from '../utils/agentInvoke';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowLeft,
+  Check,
+  Clipboard,
   Database,
   FileText,
   Folder as FolderIcon,
@@ -255,6 +257,13 @@ export function FileDetail() {
                   }}
                 />
               )}
+            {dataset && fileCategory(dataset.file_format) === 'tabular' && (
+              <CopySqlButton filePath={
+                isRemoteUrl(folderPath)
+                  ? `${folderPath.replace(/\/$/, '')}/${relativePath}`
+                  : absolutePath
+              } format={dataset.file_format} />
+            )}
             {!isRemoteUrl(folderPath) && (
               <button
                 onClick={reveal}
@@ -500,6 +509,37 @@ export function FileDetail() {
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Copy SQL snippet ──────────────────────────────────────────────────
+
+function sqlSnippet(filePath: string, fmt: string): string {
+  const f = fmt.toLowerCase();
+  const esc = filePath.replace(/'/g, "''");
+  if (f === 'parquet') return `SELECT * FROM read_parquet('${esc}') LIMIT 100`;
+  if (f === 'csv' || f === 'tsv') return `SELECT * FROM read_csv_auto('${esc}', header=true) LIMIT 100`;
+  if (f === 'json') return `SELECT * FROM read_json_auto('${esc}') LIMIT 100`;
+  return `SELECT * FROM read_parquet('${esc}') LIMIT 100`;
+}
+
+function CopySqlButton({ filePath, format }: { filePath: string; format: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(sqlSnippet(filePath, format)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <button
+      onClick={copy}
+      title="Copy a ready-to-use SQL snippet for this file"
+      className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Clipboard className="h-3.5 w-3.5" />}
+      {copied ? 'Copied!' : 'Copy SQL'}
+    </button>
   );
 }
 
