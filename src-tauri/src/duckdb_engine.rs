@@ -49,16 +49,23 @@ pub async fn execute_query(sql: &str, file_path: &str, config: &Config) -> Resul
     // validate_sql_payload sees `{{file}}` and zero forbidden read_*
     // calls, and execute_query_blocking substitutes `{{file}}` with the
     // right read_func call for the file's extension.
+    // ─── local://agent_id/s3://... fast-path ──────────────────────────────────
+    // When the user adds an S3 source in Sery Link, files are indexed with
+    // query_path = "local://agent_id/s3://bucket/key". The tunnel sends that
+    // value as database_path. Strip the local:// wrapper and run the query
+    // directly against S3 on this machine — Sery Link holds the credentials.
+    if file_path.starts_with("local://") {
+        let rest = file_path.strip_prefix("local://").unwrap_or(file_path);
+        let inner = rest.splitn(2, '/').nth(1).unwrap_or("");
+        if crate::url::is_remote_url(inner) {
+            return execute_remote_tunnel_query(sql, file_path, inner, config).await;
+        }
+    }
+
     let (resolved_path, resolved_sql) = if file_path.starts_with("local://") {
         let path = match resolve_local_url(file_path, config) {
             Ok(p) => p,
             Err(e) => {
-                // Log on the desktop too so the user can see what was
-                // checked in Sery Link's logs without round-tripping
-                // through the cloud agent's paraphrase. Especially
-                // useful for AgentMismatch (catches re-pair drift)
-                // and NotFoundIn (shows the exact candidate paths
-                // tried — usually one's a typo or a missing folder).
                 eprintln!("[tunnel] resolve failed for {file_path}: {e}");
                 return Err(AgentError::Database(format!(
                     "Could not resolve {file_path}: {e}"
@@ -390,6 +397,84 @@ fn
 }
 
 #[allow(dead_code)]
+/// Execute a tunnel query whose `database_path` is `local://agent_id/s3://...`.
+/// Rewrites every `local://agent_id/s3://...` reference in the SQL back to
+/// the bare S3 URL, then runs DuckDB locally with httpfs + credentials from
+/// the matching remote source in config.
+async fn execute_remote_tunnel_query(
+    sql: &str,
+    local_url: &str,   // full local://agent_id/s3://... (for SQL rewrite)
+    remote_url: &str,  // just s3://bucket/key
+    config: &Config,
+) -> Result<QueryResult> {
+    // Replace any occurrence of the local:// form in the SQL with the bare
+    // remote URL so DuckDB can resolve it via httpfs.
+    let rewritten = sql.replace(local_url, remote_url);
+
+    // Find the source that covers this remote URL so we can grab its creds.
+    // Use the source path (e.g., "s3://bucket") as the credential lookup key,
+    // matching how apply_s3_credentials looks up creds by listing URL.
+    let creds_key = config.sources.iter()
+        .find_map(|s| {
+            let p = s.kind.url_root();
+            if remote_url.starts_with(p.as_deref().unwrap_or("__no_match__")) {
+                p
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| remote_url.to_string());
+
+    eprintln!("[tunnel] remote S3 query on {remote_url} (creds from {creds_key})");
+
+    let rewritten_owned = rewritten.clone();
+    let remote_owned = remote_url.to_string();
+    let creds_key_owned = creds_key.clone();
+
+    let start = std::time::Instant::now();
+    let task = tokio::task::spawn_blocking(move || {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| AgentError::Database(format!("open: {e}")))?;
+        conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
+            .map_err(|e| AgentError::Database(format!("load httpfs: {e}")))?;
+        if crate::url::is_s3_url(&remote_owned) {
+            crate::remote::apply_s3_credentials(&conn, &creds_key_owned)
+                .map_err(|e| AgentError::Database(e.to_string()))?;
+        }
+        let mut stmt = conn.prepare(&rewritten_owned)
+            .map_err(|e| AgentError::Database(format!("prepare: {e}")))?;
+        let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let mut rows_out: Vec<Vec<serde_json::Value>> = Vec::new();
+        let mut truncated = false;
+        let mut raw = stmt.query([])
+            .map_err(|e| AgentError::Database(format!("query: {e}")))?;
+        while let Some(row) = raw.next().map_err(|e| AgentError::Database(e.to_string()))? {
+            if rows_out.len() >= MAX_ROWS_PER_QUERY {
+                truncated = true;
+                break;
+            }
+            let vals: Vec<serde_json::Value> = (0..col_names.len())
+                .map(|i| row_value_to_json(row, i).unwrap_or(serde_json::Value::Null))
+                .collect();
+            rows_out.push(vals);
+        }
+        Ok(QueryResult {
+            columns: col_names,
+            row_count: rows_out.len(),
+            rows: rows_out,
+            duration_ms: start.elapsed().as_millis() as u64,
+            truncated,
+        })
+    });
+
+    match tokio::time::timeout(Duration::from_secs(QUERY_TIMEOUT_SECS), task).await {
+        Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
+        Err(_) => Err(AgentError::Database(format!(
+            "Remote query timed out after {QUERY_TIMEOUT_SECS}s"
+        ))),
+    }
+}
+
 fn is_path_allowed(path: &str, config: &Config) -> bool {
     let path = Path::new(path);
 

@@ -122,6 +122,19 @@ fn default_sftp_port() -> u16 {
     22
 }
 
+impl SourceKind {
+    /// Return the "root URL" used as the credential lookup key for remote
+    /// sources (e.g. `Some("s3://bucket")` for S3, `Some("https://x/f.csv")`
+    /// for single-file HTTPS). Returns `None` for local sources.
+    pub fn url_root(&self) -> Option<String> {
+        match self {
+            SourceKind::S3 { url } => Some(url.clone()),
+            SourceKind::Https { url } => Some(url.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// One bookmarked source in the Sources sidebar. Future surfaces
 /// (rename, reorder, group) are spec'd in F51.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
