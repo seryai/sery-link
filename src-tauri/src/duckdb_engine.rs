@@ -396,6 +396,28 @@ fn
     }
 }
 
+/// Replace every `local://agent_id/s3://...` occurrence in SQL with the bare
+/// remote URL so DuckDB can resolve it via httpfs.
+fn rewrite_local_sql(sql: &str, local_url: &str, remote_url: &str) -> String {
+    sql.replace(local_url, remote_url)
+}
+
+/// Return the source URL root to use as the credential lookup key for
+/// `remote_url`, falling back to `remote_url` itself when no configured
+/// source covers it.
+fn find_creds_key(remote_url: &str, config: &Config) -> String {
+    config.sources.iter()
+        .find_map(|s| {
+            let p = s.kind.url_root();
+            if remote_url.starts_with(p.as_deref().unwrap_or("__no_match__")) {
+                p
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| remote_url.to_string())
+}
+
 #[allow(dead_code)]
 /// Execute a tunnel query whose `database_path` is `local://agent_id/s3://...`.
 /// Rewrites every `local://agent_id/s3://...` reference in the SQL back to
@@ -407,23 +429,8 @@ async fn execute_remote_tunnel_query(
     remote_url: &str,  // just s3://bucket/key
     config: &Config,
 ) -> Result<QueryResult> {
-    // Replace any occurrence of the local:// form in the SQL with the bare
-    // remote URL so DuckDB can resolve it via httpfs.
-    let rewritten = sql.replace(local_url, remote_url);
-
-    // Find the source that covers this remote URL so we can grab its creds.
-    // Use the source path (e.g., "s3://bucket") as the credential lookup key,
-    // matching how apply_s3_credentials looks up creds by listing URL.
-    let creds_key = config.sources.iter()
-        .find_map(|s| {
-            let p = s.kind.url_root();
-            if remote_url.starts_with(p.as_deref().unwrap_or("__no_match__")) {
-                p
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| remote_url.to_string());
+    let rewritten = rewrite_local_sql(sql, local_url, remote_url);
+    let creds_key = find_creds_key(remote_url, config);
 
     eprintln!("[tunnel] remote S3 query on {remote_url} (creds from {creds_key})");
 
@@ -763,5 +770,50 @@ mod tests {
             "ATTACH '/tmp/x.db' AS y; SELECT * FROM {{file}}"
         )
         .is_err());
+    }
+
+    // ─── Tunnel SQL rewrite tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_sql_rewrite_strips_local_prefix() {
+        let local_url = "local://agent123/s3://my-bucket/file.parquet";
+        let remote_url = "s3://my-bucket/file.parquet";
+        let sql = format!("SELECT * FROM read_parquet('{local_url}') LIMIT 10");
+        let rewritten = rewrite_local_sql(&sql, local_url, remote_url);
+        assert_eq!(
+            rewritten,
+            "SELECT * FROM read_parquet('s3://my-bucket/file.parquet') LIMIT 10"
+        );
+        // Verify the local:// form is fully gone.
+        assert!(!rewritten.contains("local://"));
+    }
+
+    #[test]
+    fn test_creds_lookup_no_matching_source() {
+        // Config with no sources → creds_key falls back to the remote_url itself.
+        let config = Config::default();
+        let remote_url = "s3://other-bucket/data/file.parquet";
+        let key = find_creds_key(remote_url, &config);
+        assert_eq!(key, remote_url);
+    }
+
+    #[test]
+    fn test_creds_lookup_matching_source() {
+        use crate::sources::{DataSource, SourceKind};
+        let mut config = Config::default();
+        config.sources.push(DataSource {
+            id: "src1".to_string(),
+            name: "My bucket".to_string(),
+            kind: SourceKind::S3 { url: "s3://my-bucket".to_string() },
+            mcp_enabled: false,
+            last_scan_at: None,
+            last_scan_stats: None,
+            sort_order: 0,
+            group: None,
+        });
+        let remote_url = "s3://my-bucket/data/2024/file.parquet";
+        let key = find_creds_key(remote_url, &config);
+        // Should match the source root, not fall back to the full path.
+        assert_eq!(key, "s3://my-bucket");
     }
 }
