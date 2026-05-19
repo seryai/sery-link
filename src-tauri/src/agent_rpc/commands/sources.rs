@@ -169,3 +169,28 @@ impl AgentCommand for SourceStatusCommand {
         }))
     }
 }
+
+// ── sources.add ────────────────────────────────────────────────────────────
+
+pub struct AddSourceCommand;
+
+#[async_trait]
+impl AgentCommand for AddSourceCommand {
+    fn name(&self) -> &'static str { "sources.add" }
+    fn description(&self) -> &'static str { "Add a local folder as a watched source." }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute path to the folder" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
+        let path = ctx.args["path"].as_str().ok_or("missing path")?.to_string();
+        crate::commands::add_watched_folder(path.clone()).await?;
+        Ok(json!({ "added": path }))
+    }
+}

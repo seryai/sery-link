@@ -1481,6 +1481,47 @@ pub async fn scan_folder(folder_path: String) -> Result<Vec<DatasetMetadata>, St
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn reextract_file(
+    folder_path: String,
+    relative_path: String,
+) -> Result<DatasetMetadata, String> {
+    let folder_path2 = folder_path.clone();
+    let relative_path2 = relative_path.clone();
+    let meta = tokio::task::spawn_blocking(move || {
+        scanner::reextract_file(&folder_path2, &relative_path2)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    // Best-effort: push document_text to cloud so the dashboard reflects it.
+    if let Some(ref markdown) = meta.document_markdown {
+        if let (Ok(token), Ok(config)) = (crate::keyring_store::get_token(), crate::config::Config::load()) {
+            let agent_id = config.agent.machine_id.clone();
+            let abs = format!("{}/{}", folder_path.trim_end_matches('/'), relative_path);
+            let inner = abs.trim_start_matches('/');
+            let query_path = format!("local://{}/{}", agent_id, inner);
+            let api_url = config.cloud.api_url.clone();
+            let markdown = markdown.clone();
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                let _ = client
+                    .patch(format!("{}/v1/datasets/by-path/document-text", api_url))
+                    .header("Authorization", format!("Bearer {}", token))
+                    .json(&serde_json::json!({
+                        "query_path": query_path,
+                        "document_text": markdown,
+                    }))
+                    .send()
+                    .await;
+            });
+        }
+    }
+
+    Ok(meta)
+}
+
 // ---------------------------------------------------------------------------
 // Per-file profiling — used by the FileDetail page's "Profile this file"
 // action to show per-column stats (null %, unique count, min/max/avg) without
@@ -5034,6 +5075,18 @@ pub async fn add_local_source(
     let _ = restart_file_watcher().await;
     push_sources_to_cloud().await;
     Ok(new_id)
+}
+
+/// Generic local RPC gateway — same command/args shape the dashboard uses via HTTP.
+/// Lets the Sery Link UI call any registered RPC command without needing a
+/// per-command Tauri binding.
+#[tauri::command]
+pub async fn agent_invoke(
+    command: String,
+    args: serde_json::Value,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    crate::agent_rpc::dispatcher::dispatch_local(&command, args, Some(app)).await
 }
 
 #[cfg(test)]

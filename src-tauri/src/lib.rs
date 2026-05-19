@@ -284,6 +284,7 @@ pub fn run() {
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,
+            commands::reextract_file,
             commands::search_all_folders,
             commands::profile_dataset,
             commands::read_dataset_rows,
@@ -366,6 +367,7 @@ pub fn run() {
             commands::get_storage_info,
             commands::clear_gdrive_cache,
             commands::get_gdrive_skipped,
+            commands::agent_invoke,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

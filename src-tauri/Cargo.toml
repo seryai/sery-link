@@ -79,6 +79,8 @@ once_cell = "1.21.4"
 calamine = "0.24"
 glob = "0.3"
 zip = "0.6"
+kamadak-exif = "0.5"
+imagesize = "0.12"
 anytomd = { version = "0.1", default-features = false }
 # mdkit replaces the Python markitdown sidecar (179 MB → ~10 MB compiled
 # in). Default features cover PDF, HTML, IPYNB, plus calamine + csv (we

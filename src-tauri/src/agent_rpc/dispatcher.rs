@@ -86,6 +86,21 @@ pub async fn dispatch(
     }
 }
 
+/// Dispatch a command locally (no WebSocket). Used by the `agent_invoke` Tauri
+/// command so the Sery Link UI can call the same RPC registry the dashboard uses.
+pub async fn dispatch_local(
+    command: &str,
+    args: serde_json::Value,
+    app: Option<tauri::AppHandle<tauri::Wry>>,
+) -> Result<serde_json::Value, String> {
+    let cmd = REGISTRY
+        .get(command)
+        .ok_or_else(|| format!("unknown command: {command}"))?;
+    let (progress_tx, _progress_rx) = mpsc::channel::<Progress>(64);
+    let ctx = Ctx { args, progress: progress_tx, app };
+    cmd.execute(ctx).await
+}
+
 async fn send_error(write: &WsWriter, request_id: &str, error: &str) {
     send_ws(
         write,

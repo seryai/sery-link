@@ -59,6 +59,17 @@ pub struct DatasetMetadata {
 /// File extensions classified as document (non-tabular) types.
 const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb", "pdf"];
 
+/// Plain-text and source-code extensions whose content can be read directly as UTF-8.
+/// Excludes `json` and `csv` — those are handled as tabular formats separately.
+const TEXT_EXTENSIONS: &[&str] = &[
+    "txt", "md", "markdown", "rst",
+    "py", "js", "ts", "jsx", "tsx", "mjs", "cjs",
+    "rs", "go", "java", "kt", "swift", "c", "cpp", "h", "hpp", "cs", "rb", "php",
+    "sql", "sh", "bash", "zsh", "fish",
+    "yaml", "yml", "toml", "ini",
+    "xml", "log",
+];
+
 /// How much work the scanner should do for a given file.
 ///
 /// - `Full`: extract schema, row count, and sample rows. Only makes sense for
@@ -750,7 +761,22 @@ fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOu
         })
         .flatten();
         if let Some(hit) = hit {
-            return WalkOutcome::CacheHit(hit);
+            // For document-format files, a cached entry with no extracted
+            // markdown means a previous extraction failed (e.g. libpdfium
+            // not yet available). Treat it as a miss so the next scan
+            // retries extraction rather than serving the stale empty record.
+            let is_doc = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|e| is_document_ext(e))
+                .unwrap_or(false);
+            if !is_doc || hit.document_markdown.is_some() {
+                return WalkOutcome::CacheHit(hit);
+            }
+            eprintln!(
+                "[scanner] cache hit for document {:?} has no markdown — forcing re-extraction",
+                path
+            );
         }
     }
 
@@ -1100,6 +1126,34 @@ fn scan_folder_blocking(
     Ok(finalised)
 }
 
+/// Re-extract content for a single file, bypassing the cache. Updates the
+/// cache entry so subsequent reads (e.g. `get_cached_folder_metadata`) see
+/// the fresh result. Returns the updated `DatasetMetadata`.
+pub fn reextract_file(folder_path: &str, relative_path: &str) -> Result<DatasetMetadata> {
+    let path = std::path::Path::new(folder_path).join(relative_path);
+    let file_metadata = std::fs::metadata(&path)
+        .map_err(|e| AgentError::FileSystem(format!("stat failed: {e}")))?;
+    let cache_key = crate::scan_cache::CacheKey::from_metadata(&path, folder_path, &file_metadata)
+        .ok_or_else(|| AgentError::FileSystem("could not build cache key".into()))?;
+    let shallow = extract_minimal_metadata(&path, folder_path)?;
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+
+    // Text / code files: read UTF-8 content directly, truncate at 500 KB.
+    if is_text_ext(&ext) && !is_document_ext(&ext) {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| AgentError::FileSystem(format!("read failed: {e}")))?;
+        let markdown = if content.len() > 512_000 {
+            format!("{}\n\n[content truncated at 500 KB]", &content[..512_000])
+        } else {
+            content
+        };
+        return Ok(DatasetMetadata { document_markdown: Some(markdown), ..shallow });
+    }
+
+    let tier = default_tier_for(&ext);
+    Ok(extract_one(&path, folder_path, &cache_key, tier, &shallow))
+}
+
 fn is_supported(path: &Path) -> bool {
     is_supported_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
 }
@@ -1118,6 +1172,10 @@ pub fn is_supported_ext(ext: &str) -> bool {
 
 fn is_document_ext(ext: &str) -> bool {
     DOCUMENT_EXTENSIONS.contains(&ext)
+}
+
+fn is_text_ext(ext: &str) -> bool {
+    TEXT_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
 fn is_excluded(path: &Path, base: &str, patterns: &[Pattern]) -> bool {

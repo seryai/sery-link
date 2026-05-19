@@ -13,6 +13,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { agentInvoke } from '../utils/agentInvoke';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowLeft,
@@ -31,9 +33,26 @@ import type {
   DatasetMetadataPayload as DatasetMetadata,
 } from '../types/events';
 
-const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf']);
-function isDocumentFormat(fmt: string) {
-  return DOCUMENT_FORMATS.has(fmt.toLowerCase());
+const DOCUMENT_FORMATS = new Set(['pdf', 'docx', 'pptx', 'html', 'htm', 'ipynb']);
+const TEXT_FORMATS = new Set([
+  'txt', 'md', 'markdown', 'rst',
+  'py', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs',
+  'rs', 'go', 'java', 'kt', 'swift', 'c', 'cpp', 'h', 'hpp', 'cs', 'rb', 'php',
+  'sql', 'sh', 'bash', 'zsh', 'yaml', 'yml', 'toml', 'ini', 'xml', 'log',
+]);
+const IMAGE_FORMATS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff', 'ico', 'heic', 'avif']);
+const ARCHIVE_FORMATS = new Set(['zip', 'tar', 'gz', 'bz2', '7z', 'rar', 'tgz', 'xz']);
+
+type FileCategory = 'document' | 'text' | 'image' | 'archive' | 'tabular' | 'other';
+
+function fileCategory(fmt: string): FileCategory {
+  const f = fmt.toLowerCase();
+  if (DOCUMENT_FORMATS.has(f)) return 'document';
+  if (TEXT_FORMATS.has(f)) return 'text';
+  if (IMAGE_FORMATS.has(f)) return 'image';
+  if (ARCHIVE_FORMATS.has(f)) return 'archive';
+  if (['parquet', 'csv', 'tsv', 'xlsx', 'xls', 'json'].includes(f)) return 'tabular';
+  return 'other';
 }
 
 export function FileDetail() {
@@ -52,6 +71,7 @@ export function FileDetail() {
   const [dataset, setDataset] = useState<DatasetMetadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
 
   // Column profile — lazy-loaded on user action ("Profile this file")
   // because SUMMARIZE touches every row and can take several seconds on
@@ -61,18 +81,20 @@ export function FileDetail() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
 
+  const [richMeta, setRichMeta] = useState<Record<string, unknown> | null>(null);
+
   useEffect(() => {
     if (!folderPath || !relativePath) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const rows = await invoke<DatasetMetadata[]>(
-          'get_cached_folder_metadata',
-          { folderPath },
+        const resp = await agentInvoke<{ datasets: DatasetMetadata[] }>(
+          'files.get_metadata',
+          { folder_path: folderPath },
         );
         if (cancelled) return;
-        const match = rows.find((r) => r.relative_path === relativePath) ?? null;
+        const match = resp.datasets.find((r) => r.relative_path === relativePath) ?? null;
         setDataset(match);
         setError(null);
       } catch (err) {
@@ -118,18 +140,18 @@ export function FileDetail() {
 
     if (!folderPath || !relativePath) return;
     if (!dataset || dataset.schema.length === 0) return;
-    if (isDocumentFormat(dataset.file_format)) return;
+    if (fileCategory(dataset.file_format) !== 'tabular') return;
 
     let cancelled = false;
     setProfileLoading(true);
     (async () => {
       try {
-        const result = await invoke<ColumnProfile[]>('profile_dataset', {
-          folderPath,
-          relativePath,
+        const resp = await agentInvoke<{ columns: ColumnProfile[] }>('files.profile', {
+          folder_path: folderPath,
+          relative_path: relativePath,
         });
         if (cancelled) return;
-        setProfile(result);
+        setProfile(resp.columns);
       } catch (err) {
         if (cancelled) return;
         setProfileError(String(err));
@@ -141,6 +163,23 @@ export function FileDetail() {
     return () => {
       cancelled = true;
     };
+  }, [folderPath, relativePath, dataset]);
+
+  // Fetch rich metadata (dimensions, EXIF, archive stats) for non-tabular
+  // non-text file types where there is no extracted content to show.
+  useEffect(() => {
+    setRichMeta(null);
+    if (!dataset || !folderPath || !relativePath) return;
+    const cat = fileCategory(dataset.file_format);
+    if (cat !== 'image' && cat !== 'archive' && cat !== 'other') return;
+    let cancelled = false;
+    agentInvoke<Record<string, unknown>>('files.rich_metadata', {
+      folder_path: folderPath,
+      relative_path: relativePath,
+    })
+      .then((r) => { if (!cancelled) setRichMeta(r); })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
   }, [folderPath, relativePath, dataset]);
 
   return (
@@ -172,7 +211,7 @@ export function FileDetail() {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-              {dataset && isDocumentFormat(dataset.file_format) ? (
+              {dataset && fileCategory(dataset.file_format) !== 'tabular' ? (
                 <FileText className="h-6 w-6 text-slate-500 dark:text-slate-400" />
               ) : (
                 <Database className="h-6 w-6 text-purple-600 dark:text-purple-400" />
@@ -304,11 +343,7 @@ export function FileDetail() {
 
         {dataset && (
           <div className="space-y-4">
-            {/* One unified "Columns" section. Shows schema immediately
-                (from the scan cache) and fills in computed stats as
-                they arrive. No separate "profile" / "schema" split —
-                the user sees one table that answers "what's in each
-                column?" */}
+            {/* Columns — tabular files only */}
             {dataset.schema.length > 0 && (
               <ColumnsSection
                 schema={dataset.schema}
@@ -318,47 +353,211 @@ export function FileDetail() {
               />
             )}
 
-            {/* Inline data preview — replaces the old JSON sample
-                dump for tabular files. Calls read_dataset_rows on
-                mount and renders up to MAX_PREVIEW_ROWS in a
-                virtualized table with a client-side filter. */}
-            {!isDocumentFormat(dataset.file_format) && (
-              <DataPreview
-                folderPath={folderPath}
-                relativePath={relativePath}
-              />
-            )}
+            {/* Content section — varies by file category */}
+            {(() => {
+              const cat = fileCategory(dataset.file_format);
+              const extractBtn = (label: string) => (
+                <button
+                  onClick={async () => {
+                    setExtracting(true);
+                    try {
+                      const updated = await invoke<DatasetMetadata>('reextract_file', { folderPath, relativePath });
+                      setDataset(updated);
+                    } catch (err) {
+                      toast.error(`Failed: ${err}`);
+                    } finally {
+                      setExtracting(false);
+                    }
+                  }}
+                  disabled={extracting}
+                  className="mt-4 px-4 py-2 text-sm rounded-lg bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-300 transition"
+                >
+                  {extracting ? 'Reading…' : label}
+                </button>
+              );
 
-            {/* Document markdown */}
-            {dataset.document_markdown && (
-              <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-                <header className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                  Extracted text
-                </header>
-                <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap p-4 text-sm text-slate-700 dark:text-slate-300">
-                  {dataset.document_markdown}
-                </pre>
-              </section>
-            )}
+              const rereadBtn = (label: string) => (
+                <button
+                  onClick={async () => {
+                    setExtracting(true);
+                    try {
+                      const updated = await invoke<DatasetMetadata>('reextract_file', { folderPath, relativePath });
+                      setDataset(updated);
+                    } catch (err) {
+                      toast.error(`Failed: ${err}`);
+                    } finally {
+                      setExtracting(false);
+                    }
+                  }}
+                  disabled={extracting}
+                  className="font-normal normal-case text-slate-400 hover:text-slate-700 disabled:opacity-50 dark:text-slate-500 dark:hover:text-slate-200 transition"
+                >
+                  {extracting ? 'Reading…' : label}
+                </button>
+              );
 
-            {/* Nothing extracted (Shallow tier) */}
-            {dataset.schema.length === 0 &&
-              !dataset.document_markdown && (
-                <section className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
-                    No schema or extracted text for this file.
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                    Sery indexed the filename and size; content extraction
-                    was skipped for this format.
-                  </p>
+              // ── Document / Text ──────────────────────────────────────────
+              if (cat === 'document' || cat === 'text') {
+                const sectionLabel = cat === 'text' ? 'File content' : 'Document content';
+                const actionLabel = cat === 'text' ? 'Read content' : 'Extract content';
+                return (
+                  <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                    <header className="flex items-center justify-between border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      <span>{sectionLabel}</span>
+                      {dataset.document_markdown && rereadBtn('Re-read')}
+                    </header>
+                    {dataset.document_markdown ? (
+                      <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap p-4 text-sm text-slate-700 dark:text-slate-300">
+                        {dataset.document_markdown}
+                      </pre>
+                    ) : (
+                      <div className="p-10 text-center">
+                        <p className="text-sm text-slate-600 dark:text-slate-400">Content not yet read.</p>
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          Sery can read this file locally.
+                        </p>
+                        {extractBtn(actionLabel)}
+                      </div>
+                    )}
+                  </section>
+                );
+              }
+
+              // ── Tabular: data preview ────────────────────────────────────
+              if (cat === 'tabular') {
+                return (
+                  <DataPreview folderPath={folderPath} relativePath={relativePath} />
+                );
+              }
+
+              // ── Image ────────────────────────────────────────────────────
+              if (cat === 'image') {
+                const src = convertFileSrc(absolutePath);
+                const imgMeta = richMeta?.image as Record<string, unknown> | undefined;
+                return (
+                  <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                    <header className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      Image preview
+                    </header>
+                    <div className="p-4 flex items-center justify-center bg-[repeating-conic-gradient(#e5e7eb_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] dark:bg-[repeating-conic-gradient(#374151_0%_25%,transparent_0%_50%)]">
+                      <img
+                        src={src}
+                        alt={fileBasename(relativePath)}
+                        className="max-h-[60vh] max-w-full object-contain rounded shadow"
+                      />
+                    </div>
+                    {imgMeta && (
+                      <div className="border-t border-slate-200 dark:border-slate-800">
+                        <RichMetaTable rows={buildImageRows(imgMeta)} />
+                      </div>
+                    )}
+                  </section>
+                );
+              }
+
+              // ── Archive ──────────────────────────────────────────────────
+              if (cat === 'archive') {
+                const archMeta = richMeta?.archive as Record<string, unknown> | undefined;
+                return (
+                  <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                    <header className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      Archive
+                    </header>
+                    {archMeta ? (
+                      <RichMetaTable rows={buildArchiveRows(archMeta)} />
+                    ) : richMeta ? (
+                      <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">
+                        Archive contents listing not available for this format.
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center gap-2 p-8 text-sm text-slate-500 dark:text-slate-400">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Reading archive…
+                      </div>
+                    )}
+                  </section>
+                );
+              }
+
+              // ── Other ────────────────────────────────────────────────────
+              return (
+                <section className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                  <header className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                    File info
+                  </header>
+                  {richMeta ? (
+                    <RichMetaTable rows={buildOtherRows(richMeta)} />
+                  ) : (
+                    <div className="flex items-center justify-center gap-2 p-8 text-sm text-slate-500 dark:text-slate-400">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading…
+                    </div>
+                  )}
                 </section>
-              )}
+              );
+            })()}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+// ─── Rich metadata display ─────────────────────────────────────────────
+
+function RichMetaTable({ rows }: { rows: Array<{ label: string; value: string }> }) {
+  if (rows.length === 0) return null;
+  return (
+    <table className="w-full text-sm">
+      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+        {rows.map(({ label, value }) => (
+          <tr key={label} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+            <td className="w-40 px-4 py-2 text-xs font-medium text-slate-500 dark:text-slate-400">{label}</td>
+            <td className="px-4 py-2 font-mono text-xs text-slate-900 dark:text-slate-100 break-all">{value}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function buildImageRows(m: Record<string, unknown>): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  const add = (label: string, v: unknown) => {
+    if (v !== null && v !== undefined && v !== '') rows.push({ label, value: String(v) });
+  };
+  if (m.width && m.height) add('Dimensions', `${m.width} × ${m.height} px`);
+  add('Taken', m.datetime as string);
+  if (m.gps) {
+    const g = m.gps as { lat: number; lon: number };
+    const latStr = `${Math.abs(g.lat).toFixed(6)}° ${g.lat >= 0 ? 'N' : 'S'}`;
+    const lonStr = `${Math.abs(g.lon).toFixed(6)}° ${g.lon >= 0 ? 'E' : 'W'}`;
+    rows.push({ label: 'GPS', value: `${latStr}, ${lonStr}` });
+  }
+  add('Camera', [m.camera_make, m.camera_model].filter(Boolean).join(' '));
+  add('Lens', m.lens_model as string);
+  add('ISO', m.iso as number);
+  add('Aperture', m.aperture as string);
+  add('Shutter speed', m.shutter_speed as string);
+  add('Focal length', m.focal_length as string);
+  return rows;
+}
+
+function buildArchiveRows(m: Record<string, unknown>): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (m.file_count !== undefined) rows.push({ label: 'Files', value: `${(m.file_count as number).toLocaleString()}` });
+  if (m.uncompressed_bytes !== undefined) rows.push({ label: 'Uncompressed', value: formatBytes(m.uncompressed_bytes as number) });
+  if (m.format) rows.push({ label: 'Format', value: String(m.format).toUpperCase() });
+  return rows;
+}
+
+function buildOtherRows(m: Record<string, unknown>): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  if (m.name) rows.push({ label: 'Filename', value: String(m.name) });
+  if (m.size_bytes !== undefined) rows.push({ label: 'Size', value: formatBytes(m.size_bytes as number) });
+  if (m.abs_path) rows.push({ label: 'Path', value: String(m.abs_path) });
+  if (m.modified) rows.push({ label: 'Modified', value: formatRelativeTime(String(m.modified)) });
+  return rows;
 }
 
 // ─── Columns section ──────────────────────────────────────────────────
@@ -549,9 +748,9 @@ function ConvertToParquetButton({
     if (busy) return;
     setBusy(true);
     try {
-      const result = await invoke<ConvertResult>('convert_to_parquet', {
-        folderPath,
-        relativePath,
+      const result = await agentInvoke<ConvertResult>('files.convert', {
+        folder_path: folderPath,
+        relative_path: relativePath,
       });
       const ratio =
         result.source_size_bytes > 0
@@ -620,7 +819,7 @@ function DataPreview({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<DatasetRowsPayload>('read_dataset_rows', { folderPath, relativePath })
+    agentInvoke<DatasetRowsPayload>('files.rows', { folder_path: folderPath, relative_path: relativePath })
       .then((result) => {
         if (cancelled) return;
         setData(result);
