@@ -5,6 +5,27 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] — 2026-05-18
+
+### Changed
+
+- **Clean `query_path` schema** — datasets now store a plain absolute path
+  (`/Users/foo/file.csv` or `s3://bucket/key`) in the `query_path` column.
+  The `local://agent_id/` prefix has been removed from the DB; `agent_id`
+  is already a dedicated FK column on every dataset row. The `local://`
+  routing form is constructed on-the-fly where needed (WS tunnel, AI tools,
+  SQL classifier). An Alembic migration (`040_clean_query_path`) back-fills
+  existing rows automatically on next deploy.
+
+### Fixed
+
+- **`files.extract` and `files.list` path parsing** — both commands now accept
+  clean absolute paths (`/Users/foo/file.pdf`) in addition to the legacy
+  `local://agent_id/path` form, so the dashboard works correctly after the
+  `query_path` cleanup without requiring a coordinated client upgrade.
+
+---
+
 ## [0.9.1] — 2026-05-18
 
 ### Fixed

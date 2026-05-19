@@ -6,16 +6,21 @@ use serde_json::{json, Value};
 /// (Sery Link UI style) and return `(folder_path, relative_path)`.
 fn resolve_path(args: &Value) -> Result<(String, String), String> {
     if let Some(qp) = args["query_path"].as_str() {
-        // Strip local://agent_id/ prefix. The remainder is either:
-        //   "Users/me/docs/file.pdf"          → local abs path, prepend /
-        //   "s3://bucket/path/file.parquet"   → remote URL, keep as-is
-        let inner = qp.splitn(4, '/').nth(3).unwrap_or(qp);
-        let abs = if inner.contains("://") {
-            inner.to_string()
-        } else if inner.starts_with('/') {
-            inner.to_string()
+        // query_path may be the legacy local://agent_id/path form or a clean
+        // absolute path (/Users/foo/file.csv) or a remote URL (s3://...).
+        let abs = if qp.starts_with("local://") {
+            // Legacy: strip local://agent_id/ → inner path
+            let inner = qp.splitn(4, '/').nth(3).unwrap_or(qp);
+            if inner.contains("://") {
+                inner.to_string()
+            } else if inner.starts_with('/') {
+                inner.to_string()
+            } else {
+                format!("/{inner}")
+            }
         } else {
-            format!("/{inner}")
+            // Clean path already
+            qp.to_string()
         };
         let config = crate::config::Config::load().map_err(|e| e.to_string())?;
         config
@@ -183,7 +188,7 @@ impl AgentCommand for ExtractFileCommand {
         json!({
             "type": "object",
             "properties": {
-                "query_path": { "type": "string", "description": "query_path from the dataset (local://agent_id/...)" }
+                "query_path": { "type": "string", "description": "Absolute file path (/Users/foo/file.pdf) or legacy local://agent_id/... form" }
             },
             "required": ["query_path"]
         })
@@ -192,17 +197,18 @@ impl AgentCommand for ExtractFileCommand {
     async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
         let query_path = ctx.args["query_path"].as_str().ok_or("missing query_path")?.to_string();
 
-        // Strip local://agent_id/ prefix → remainder is the absolute path minus
-        // its leading slash (e.g. "Users/hepang/Documents/file.pdf").
-        // Re-add the slash to get the real absolute path.
-        let inner_rel = query_path
-            .splitn(4, '/')
-            .nth(3)
-            .unwrap_or(&query_path);
-        let abs_path = if inner_rel.starts_with('/') {
-            inner_rel.to_string()
+        // Resolve to an absolute path.  query_path is now a clean absolute
+        // path (/Users/foo/file.pdf) from the dashboard, or the legacy
+        // local://agent_id/path form from older callers.
+        let abs_path = if query_path.starts_with("local://") {
+            let inner = query_path.splitn(4, '/').nth(3).unwrap_or(&query_path);
+            if inner.starts_with('/') {
+                inner.to_string()
+            } else {
+                format!("/{inner}")
+            }
         } else {
-            format!("/{inner_rel}")
+            query_path.clone()
         };
 
         // Find which watched folder this absolute path lives under.
