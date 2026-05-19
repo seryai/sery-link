@@ -328,6 +328,21 @@ impl WebSocketClient {
             });
         }
 
+        // Push current source list to cloud on every connect. Ensures that
+        // sources migrated from watched_folders (which never explicitly called
+        // push_sources_to_cloud) are registered in agent_sources before the
+        // dashboard tries to list their datasets.
+        {
+            let cfg = config.read().await.clone();
+            let api_url = cfg.cloud.api_url.clone();
+            let token_clone = token.to_string();
+            if let Ok(sources_val) = serde_json::to_value(&cfg.sources) {
+                tokio::spawn(async move {
+                    crate::scanner::sync_sources_to_cloud(&api_url, &token_clone, sources_val).await;
+                });
+            }
+        }
+
         // Replay the last scan_status snapshot if we reconnected
         // mid-scan. Without this, a tunnel blip leaves the cloud
         // dashboard pill blank until the next 30s keepalive tick or
