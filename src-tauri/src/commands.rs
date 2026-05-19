@@ -1728,10 +1728,7 @@ fn run_remote_summarize(
 ) -> Result<Vec<ColumnProfile>, String> {
     use duckdb::Connection;
     let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
-    // Install + load httpfs — we're on a fresh connection so the
-    // extension isn't loaded by default.
-    conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
-        .map_err(|e| format!("load httpfs: {}", e))?;
+    crate::remote::install_httpfs(&conn).map_err(|e| e.to_string())?;
     // S3 URLs need credentials in the session before we can run any
     // query against them. Credentials are keyed on the URL the
     // source was added under (the listing URL for S3 listings) —
@@ -2202,8 +2199,7 @@ fn read_rows_remote(url: &str, creds_source: &str) -> Result<DatasetRows, String
     let escaped = url.replace('\'', "''");
     use duckdb::Connection;
     let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
-    conn.execute_batch("INSTALL httpfs; LOAD httpfs;")
-        .map_err(|e| format!("load httpfs: {}", e))?;
+    crate::remote::install_httpfs(&conn).map_err(|e| e.to_string())?;
     if crate::url::is_s3_url(url) {
         crate::remote::apply_s3_credentials(&conn, creds_source)
             .map_err(|e| e.to_string())?;
