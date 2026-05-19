@@ -229,6 +229,18 @@ impl AgentCommand for ExtractFileCommand {
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
+        // If the extraction returned nothing, surface it as an error so the
+        // dashboard can show the user a useful message instead of silently
+        // rendering a blank content panel.
+        if meta.document_markdown.is_none() {
+            let fmt = &meta.file_format;
+            return Err(format!(
+                "Content extraction returned nothing for .{fmt}. \
+                 Check Sery Link app logs for details — libpdfium (PDF) or \
+                 pandoc (DOCX/PPTX) may not have loaded."
+            ));
+        }
+
         Ok(json!({
             "document_markdown": meta.document_markdown,
             "relative_path":     meta.relative_path,
