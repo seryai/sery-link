@@ -597,6 +597,11 @@ fn bundled_resource_dir() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Library path where pdfium was successfully loaded, stored so
+/// `extract_pdf_first_pages` can bind the same library without
+/// relying on system-path discovery.
+static PDFIUM_LIB_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
+
 /// Process-wide mdkit engine. In-process Rust, no subprocess fork.
 /// See `extract_document_markdown` for the dispatch surface.
 ///
@@ -641,6 +646,7 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
                 match mdkit::pdf::PdfiumExtractor::with_library_path(&dir_str) {
                     Ok(ext) => {
                         engine.register(Box::new(ext));
+                        let _ = PDFIUM_LIB_PATH.set(dir_str.to_string());
                         eprintln!(
                             "[scanner] mdkit: backend `pdf` registered from bundled \
                              libpdfium at {dir_str}"
@@ -1330,6 +1336,71 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
             samples_redacted,
             source_id: None,
         })
+    }
+}
+
+/// Extract text from the first `max_pages` pages of a PDF using
+/// pdfium-render directly, skipping the full-document mdkit pipeline.
+///
+/// Returns a markdown string with `## Page N` headers and a trailing
+/// truncation note when the file has more pages than requested.
+/// Returns `Err` when pdfium cannot be loaded or the file cannot be
+/// opened.
+pub fn extract_pdf_first_pages(file_path: &Path, max_pages: usize) -> std::result::Result<String, String> {
+    use pdfium_render::prelude::*;
+
+    // Bind to the same pdfium library mdkit loaded.  PDFIUM_LIB_PATH is
+    // set during MDKIT_ENGINE initialisation; if mdkit found pdfium via
+    // system search (not bundled) the cell stays empty and we fall back
+    // to system search here too.
+    let pdfium = if let Some(dir) = PDFIUM_LIB_PATH.get() {
+        let lib_name = Pdfium::pdfium_platform_library_name_at_path(dir);
+        Pdfium::bind_to_library(lib_name)
+            .map(Pdfium::new)
+            .map_err(|e| format!("failed to bind pdfium from {dir}: {e}"))?
+    } else {
+        Pdfium::bind_to_system_library()
+            .map(Pdfium::new)
+            .map_err(|e| format!("pdfium not found on system path: {e}"))?
+    };
+
+    let path_str = file_path.to_str().ok_or("path is not valid UTF-8")?;
+    let doc = pdfium
+        .load_pdf_from_file(path_str, None)
+        .map_err(|e| format!("pdfium could not open PDF: {e}"))?;
+
+    let total_pages = usize::try_from(doc.pages().len()).unwrap_or(0);
+    let limit = max_pages.min(total_pages);
+
+    let mut page_texts: Vec<String> = Vec::with_capacity(limit);
+    for (_i, page) in doc.pages().iter().enumerate().take(limit) {
+        let text = page
+            .text()
+            .map_err(|e| format!("page text error: {e}"))?;
+        page_texts.push(text.all());
+    }
+
+    let body = page_texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let content = t.trim();
+            if content.is_empty() {
+                format!("## Page {}\n\n*(no text — may be a scanned image)*", i + 1)
+            } else {
+                format!("## Page {}\n\n{}", i + 1, content)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if limit < total_pages {
+        Ok(format!(
+            "{body}\n\n---\n*Showing first {limit} of {total_pages} pages. \
+             Click \"Read all pages\" to extract the full document.*"
+        ))
+    } else {
+        Ok(body)
     }
 }
 

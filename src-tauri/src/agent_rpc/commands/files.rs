@@ -188,7 +188,8 @@ impl AgentCommand for ExtractFileCommand {
         json!({
             "type": "object",
             "properties": {
-                "query_path": { "type": "string", "description": "Absolute file path (/Users/foo/file.pdf) or legacy local://agent_id/... form" }
+                "query_path": { "type": "string", "description": "Absolute file path (/Users/foo/file.pdf) or legacy local://agent_id/... form" },
+                "max_pages": { "type": "integer", "description": "For PDF files: extract only the first N pages. Omit to extract the full document." }
             },
             "required": ["query_path"]
         })
@@ -196,6 +197,7 @@ impl AgentCommand for ExtractFileCommand {
 
     async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
         let query_path = ctx.args["query_path"].as_str().ok_or("missing query_path")?.to_string();
+        let max_pages = ctx.args.get("max_pages").and_then(|v| v.as_u64()).map(|n| n as usize);
 
         // Resolve to an absolute path.  query_path is now a clean absolute
         // path (/Users/foo/file.pdf) from the dashboard, or the legacy
@@ -211,7 +213,36 @@ impl AgentCommand for ExtractFileCommand {
             query_path.clone()
         };
 
-        // Find which watched folder this absolute path lives under.
+        // Fast path: PDF + max_pages → partial extraction via pdfium directly.
+        // Avoids running the full mdkit pipeline (all pages) when the caller
+        // only wants a preview of the first N pages.
+        let ext = std::path::Path::new(&abs_path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if ext == "pdf" {
+            if let Some(n) = max_pages {
+                let path = std::path::PathBuf::from(&abs_path);
+                let markdown = tokio::task::spawn_blocking(move || {
+                    crate::scanner::extract_pdf_first_pages(&path, n)
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e)?;
+
+                return Ok(json!({
+                    "document_markdown": markdown,
+                    "relative_path":     abs_path,
+                    "file_format":       "pdf",
+                    "truncated":         true,
+                }));
+            }
+        }
+
+        // Full extraction: find which watched folder this path lives under
+        // and run reextract_file (all pages, full quality).
         let config = crate::config::Config::load().map_err(|e| e.to_string())?;
         let (folder_path, relative_path) = config
             .watched_folders
@@ -235,9 +266,6 @@ impl AgentCommand for ExtractFileCommand {
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
 
-        // If the extraction returned nothing, surface it as an error so the
-        // dashboard can show the user a useful message instead of silently
-        // rendering a blank content panel.
         if meta.document_markdown.is_none() {
             let fmt = &meta.file_format;
             return Err(format!(
@@ -251,6 +279,7 @@ impl AgentCommand for ExtractFileCommand {
             "document_markdown": meta.document_markdown,
             "relative_path":     meta.relative_path,
             "file_format":       meta.file_format,
+            "truncated":         false,
         }))
     }
 }

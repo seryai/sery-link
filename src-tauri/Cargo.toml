@@ -91,6 +91,9 @@ anytomd = { version = "0.1", default-features = false }
 # `ocr-platform` enables Apple Vision (macOS) and Windows.Media.Ocr —
 # zero bundle cost, gives us scanned-PDF support for free.
 mdkit = { version = "0.7", features = ["pandoc", "ocr-platform"] }
+# Direct pdfium-render dep for page-limited PDF extraction (files.extract max_pages).
+# Must match mdkit's version + features so Cargo resolves a single copy.
+pdfium-render = { version = "0.9", features = ["thread_safe"] }
 regex = "1.10"
 rayon = "1.10"
 

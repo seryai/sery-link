@@ -26,6 +26,7 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "open",
+ "pdfium-render",
  "rand 0.8.5",
  "rayon",
  "regex",
