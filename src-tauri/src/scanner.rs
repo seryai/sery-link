@@ -573,13 +573,22 @@ fn bundled_resource_dir() -> Option<std::path::PathBuf> {
     if cfg!(target_os = "macos") {
         let resources = parent.parent()?.join("Resources");
         if resources.is_dir() {
-            return Some(resources);
+            // Tauri v2 preserves the source-relative prefix from
+            // tauri.conf.json array-glob resources: the glob
+            // `"resources/libpdfium/*"` lands at
+            // Contents/Resources/resources/libpdfium/ — one level
+            // deeper than the older convention. Check the inner dir
+            // first; fall back to the flat layout for forward-compat.
+            let inner = resources.join("resources");
+            return Some(if inner.is_dir() { inner } else { resources });
         }
     }
 
     let next_to_binary = parent.join("resources");
     if next_to_binary.is_dir() {
-        return Some(next_to_binary);
+        // Same nesting applies on Linux/Windows.
+        let inner = next_to_binary.join("resources");
+        return Some(if inner.is_dir() { inner } else { next_to_binary });
     }
 
     // Debug-only dev fallback — the path embedded by `env!` is the
