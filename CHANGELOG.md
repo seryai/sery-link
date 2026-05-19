@@ -5,6 +5,19 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] — 2026-05-19
+
+### Fixed
+
+- **PDF extraction broken in all release builds** — `bundled_resource_dir()` was
+  returning `Contents/Resources/` on macOS, but Tauri v2 bundles array-glob resources
+  one level deeper at `Contents/Resources/resources/`. The lookup for
+  `libpdfium.dylib` silently missed on every GitHub-distributed build (works in
+  `cargo tauri dev` because the debug fallback uses `CARGO_MANIFEST_DIR`). Now
+  checks `Contents/Resources/resources/` first, falls back to flat layout.
+
+---
+
 ## [0.9.3] — 2026-05-19
 
 ### Added
