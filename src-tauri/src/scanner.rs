@@ -606,11 +606,6 @@ fn bundled_resource_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Library path where pdfium was successfully loaded, stored so
-/// `extract_pdf_first_pages` can bind the same library without
-/// relying on system-path discovery.
-static PDFIUM_LIB_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
-
 /// Process-wide mdkit engine. In-process Rust, no subprocess fork.
 /// See `extract_document_markdown` for the dispatch surface.
 ///
@@ -675,7 +670,6 @@ static MDKIT_ENGINE: once_cell::sync::Lazy<mdkit::Engine> = once_cell::sync::Laz
                             ));
                         }
                         engine.register(Box::new(ext));
-                        let _ = PDFIUM_LIB_PATH.set(dir_str.to_string());
                         eprintln!(
                             "[scanner] mdkit: backend `pdf` registered from bundled \
                              libpdfium at {dir_str} (with OCR fallback)"
@@ -1368,69 +1362,90 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
     }
 }
 
-/// Extract text from the first `max_pages` pages of a PDF using
-/// pdfium-render directly, skipping the full-document mdkit pipeline.
+/// Extract text from the first `max_pages` pages of a PDF.
 ///
-/// Returns a markdown string with `## Page N` headers and a trailing
-/// truncation note when the file has more pages than requested.
-/// Returns `Err` when pdfium cannot be loaded or the file cannot be
-/// opened.
+/// Routes through the mdkit engine (same path as "Extract Content" in the
+/// Sery Link UI) rather than calling pdfium-render directly. pdfium-render
+/// 0.9 enforces a single global binding per process: mdkit already owns it,
+/// so any direct `Pdfium::bind_to_library` call in this process fails with
+/// `PdfiumLibraryBindingsAlreadyInitialized`. Routing through mdkit avoids
+/// the conflict entirely and also gives OCR for scanned (image-only) PDFs.
+///
+/// Returns a markdown string with page content and a truncation note when
+/// the full document exceeds `max_pages` pages worth of content.
+/// Returns `Err` when the file cannot be read or extraction fails.
 pub fn extract_pdf_first_pages(file_path: &Path, max_pages: usize) -> std::result::Result<String, String> {
-    use pdfium_render::prelude::*;
+    // Touch MDKIT_ENGINE to guarantee it is initialised (loads bundled
+    // libpdfium, registers OCR backend, etc.) before we call into it.
+    let _ = &*MDKIT_ENGINE;
 
-    // Bind to the same pdfium library mdkit loaded.  PDFIUM_LIB_PATH is
-    // set during MDKIT_ENGINE initialisation; if mdkit found pdfium via
-    // system search (not bundled) the cell stays empty and we fall back
-    // to system search here too.
-    let pdfium = if let Some(dir) = PDFIUM_LIB_PATH.get() {
-        let lib_name = Pdfium::pdfium_platform_library_name_at_path(dir);
-        Pdfium::bind_to_library(lib_name)
-            .map(Pdfium::new)
-            .map_err(|e| format!("failed to bind pdfium from {dir}: {e}"))?
-    } else {
-        Pdfium::bind_to_system_library()
-            .map(Pdfium::new)
-            .map_err(|e| format!("pdfium not found on system path: {e}"))?
-    };
+    match MDKIT_ENGINE.extract(file_path) {
+        Ok(doc) if !doc.markdown.trim().is_empty() => {
+            Ok(truncate_pdf_markdown(doc.markdown, max_pages))
+        }
+        Ok(_) => Err(
+            "Content extraction returned nothing — the PDF may be empty or unreadable".to_string(),
+        ),
+        Err(e) => Err(format!("PDF extraction failed: {e}")),
+    }
+}
 
-    let path_str = file_path.to_str().ok_or("path is not valid UTF-8")?;
-    let doc = pdfium
-        .load_pdf_from_file(path_str, None)
-        .map_err(|e| format!("pdfium could not open PDF: {e}"))?;
-
-    let total_pages = usize::try_from(doc.pages().len()).unwrap_or(0);
-    let limit = max_pages.min(total_pages);
-
-    let mut page_texts: Vec<String> = Vec::with_capacity(limit);
-    for (_i, page) in doc.pages().iter().enumerate().take(limit) {
-        let text = page
-            .text()
-            .map_err(|e| format!("page text error: {e}"))?;
-        page_texts.push(text.all());
+/// Truncate extracted PDF markdown to approximately `max_pages` pages.
+///
+/// Pdfium inserts form-feed characters (`\x0C`) between pages when
+/// extracting text. When present, splits on them for exact page boundaries.
+/// Falls back to a character-count heuristic (~2 500 chars/page) when the
+/// extracted text has no form feeds (e.g. pandoc-converted or OCR output).
+fn truncate_pdf_markdown(markdown: String, max_pages: usize) -> String {
+    // Exact split: form feeds mark page boundaries in pdfium text output.
+    let pages: Vec<&str> = markdown.split('\x0C').collect();
+    if pages.len() > 1 {
+        let limit = max_pages.min(pages.len());
+        let body = pages[..limit]
+            .iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let content = text.trim();
+                if content.is_empty() {
+                    format!("## Page {}\n\n*(no text — may be a scanned image)*", i + 1)
+                } else {
+                    format!("## Page {}\n\n{content}", i + 1)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if limit < pages.len() {
+            return format!(
+                "{body}\n\n---\n*Showing first {limit} of {} pages. \
+                 Click \"Read all pages\" to extract the full document.*",
+                pages.len()
+            );
+        }
+        return body;
     }
 
-    let body = page_texts
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let content = t.trim();
-            if content.is_empty() {
-                format!("## Page {}\n\n*(no text — may be a scanned image)*", i + 1)
-            } else {
-                format!("## Page {}\n\n{}", i + 1, content)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    if limit < total_pages {
-        Ok(format!(
-            "{body}\n\n---\n*Showing first {limit} of {total_pages} pages. \
-             Click \"Read all pages\" to extract the full document.*"
-        ))
-    } else {
-        Ok(body)
+    // Heuristic fallback: no form feeds — truncate by character count.
+    const CHARS_PER_PAGE: usize = 2_500;
+    let char_limit = max_pages * CHARS_PER_PAGE;
+    let total_chars = markdown.chars().count();
+    if total_chars <= char_limit {
+        return markdown;
     }
+
+    // Find the byte offset of the char_limit-th character.
+    let byte_limit = markdown
+        .char_indices()
+        .nth(char_limit)
+        .map(|(b, _)| b)
+        .unwrap_or(markdown.len());
+
+    // Walk back to a paragraph boundary for a cleaner cut.
+    let cut = markdown[..byte_limit].rfind("\n\n").unwrap_or(byte_limit);
+    format!(
+        "{}\n\n---\n*Showing first ~{max_pages} pages. \
+         Click \"Read all pages\" to extract the full document.*",
+        &markdown[..cut]
+    )
 }
 
 /// Convert a document file to markdown using the in-process `mdkit`
