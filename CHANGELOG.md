@@ -5,6 +5,28 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] — 2026-05-19
+
+### Fixed
+
+- **PDF extraction via dashboard always fails with `PdfiumLibraryBindingsAlreadyInitialized`** —
+  root cause: pdfium-render 0.9 enforces a single global binding per process. mdkit's
+  `PdfiumExtractor` claims it at engine init. The `max_pages` fast path called
+  `Pdfium::bind_to_library` directly — a second claim — which always fails.
+  The Sery Link "Extract Content" button worked because it routes through
+  `reextract_file` → `extract_document_markdown` → `MDKIT_ENGINE.extract(path)` and
+  never calls pdfium-render directly; the dashboard's `files.extract` with `max_pages`
+  was the only path that hit this conflict.
+
+  Fix: rewrite `extract_pdf_first_pages` to call `MDKIT_ENGINE.extract(path)` (same
+  path as the UI button), then truncate the result to `max_pages` pages using form-feed
+  splits (pdfium marks page boundaries with `\x0C`) or a character-count heuristic.
+  Removed the direct `pdfium-render` dep from `Cargo.toml` — it remains available as
+  a transitive dependency via mdkit. Also removed the now-unnecessary `PDFIUM_LIB_PATH`
+  static and the `__scanned_pdf__` sentinel fallback (mdkit handles OCR automatically).
+
+---
+
 ## [0.9.7] — 2026-05-19
 
 ### Fixed
