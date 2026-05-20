@@ -5,6 +5,40 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] — 2026-05-19
+
+### Fixed
+
+- **`PDFIUM_LIB_PATH` empty when dashboard calls `files.extract` before any scan** —
+  the `max_pages` fast path in `extract_pdf_first_pages` could run before anything had
+  touched `MDKIT_ENGINE` (a `Lazy` static). The desktop "Extract Content" button
+  goes through the full scan path (which initializes the engine), so it always worked;
+  the dashboard API tunnel hits the fast path directly, leaving `PDFIUM_LIB_PATH`
+  unpopulated and causing fallthrough to system-path pdfium search (fails — not
+  installed system-wide). Fixed by touching `MDKIT_ENGINE` at the top of
+  `extract_pdf_first_pages` to guarantee the init block runs before binding is attempted.
+
+---
+
+## [0.9.6] — 2026-05-19
+
+### Fixed
+
+- **Scanned PDF extraction fails with `PdfiumLibraryBindingsAlreadyInitialized`** —
+  `extract_pdf_first_pages` tried to re-bind pdfium even though the mdkit engine
+  already loaded it at startup. pdfium-render 0.9 only allows one binding per process;
+  subsequent attempts return this error. Now handles the error by constructing `Pdfium {}`
+  (the already-loaded binding), matching the pattern in pdfium-render's own test helper.
+
+- **Scanned (image-only) PDFs return empty content** — after fixing the binding error,
+  pdfium's text layer returns empty strings for every page because scanned PDFs contain
+  images, not text. `extract_pdf_first_pages` now detects all-empty output and signals
+  the caller to fall through to the full mdkit extraction path, which has Apple Vision /
+  Windows OCR wired in via `with_ocr_fallback()`. Scanned PDFs now get OCR'd content
+  instead of empty page stubs.
+
+---
+
 ## [0.9.4] — 2026-05-19
 
 ### Fixed
