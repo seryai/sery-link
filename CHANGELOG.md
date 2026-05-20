@@ -5,6 +5,17 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9] — 2026-05-19
+
+### Fixed
+
+- **v0.9.8 CI build failure** — `scanner.rs` rewrite (removing all direct `pdfium-render`
+  calls) was not included in the v0.9.8 tag; `Cargo.toml` had the dep removed but the
+  source still referenced it, causing `error[E0433]: cannot find module or crate pdfium_render`.
+  This release commits the missing source changes alongside the already-merged dep removal.
+
+---
+
 ## [0.9.8] — 2026-05-19
 
 ### Fixed
