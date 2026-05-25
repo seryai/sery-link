@@ -391,7 +391,7 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
 fn is_data_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()).unwrap_or(""),
-        "parquet" | "csv" | "xlsx" | "xls"
+        "parquet" | "csv" | "xlsx"
         | "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
     )
 }

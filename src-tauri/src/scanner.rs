@@ -100,7 +100,7 @@ pub enum ScanTier {
 /// won't waste time trying to parse it.
 fn default_tier_for(ext: &str) -> ScanTier {
     match ext {
-        "parquet" | "csv" | "xlsx" | "xls" => ScanTier::Full,
+        "parquet" | "csv" | "xlsx" => ScanTier::Full,
         "docx" | "pptx" | "pdf" => ScanTier::Content,
         "html" | "htm" | "ipynb" => ScanTier::Shallow,
         _ => ScanTier::Shallow,
@@ -1538,7 +1538,7 @@ fn extract_schema(
     // csv is transparently converted to cached Parquet for 10-100x faster queries.
     // This keeps the read_func pipeline uniform downstream (always Parquet).
     let (effective_path, effective_ext): (Cow<Path>, &str) = match ext {
-        "xlsx" | "xls" => {
+        "xlsx" => {
             eprintln!("[extract_schema] xlsx→csv {:?}", file_path);
             let csv = excel::xlsx_to_csv(file_path)?;
             eprintln!("[extract_schema] csv→parquet {:?}", csv);
@@ -1891,7 +1891,7 @@ mod tier_tests {
 
     #[test]
     fn tabular_formats_default_to_full() {
-        for ext in ["parquet", "csv", "xlsx", "xls"] {
+        for ext in ["parquet", "csv", "xlsx"] {
             assert_eq!(default_tier_for(ext), ScanTier::Full, "{ext} should be Full");
         }
     }
@@ -2089,7 +2089,7 @@ fn extract_sample_rows(
 
     // Reuse the xlsx/csv → parquet conversion cache, same as extract_schema.
     let (effective_path, effective_ext): (Cow<Path>, &str) = match ext {
-        "xlsx" | "xls" => {
+        "xlsx" => {
             let csv = excel::xlsx_to_csv(file_path)?;
             let parquet = crate::csv::csv_to_parquet(&csv)?;
             (Cow::Owned(parquet), "parquet")

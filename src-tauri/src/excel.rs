@@ -36,6 +36,15 @@ pub fn xlsx_to_csv(xlsx_path: &Path) -> Result<PathBuf> {
         }
     }
 
+    // .xls (legacy binary format) uses libxls which has a C-level assertion
+    // bug on malformed files that aborts the process. Skip it — only .xlsx
+    // (pure-Rust Zip/XML parser) is safe to open in-process.
+    if canonical.extension().and_then(|e| e.to_str()) == Some("xls") {
+        return Err(AgentError::Database(
+            "Legacy .xls files are not supported; please save as .xlsx".to_string(),
+        ));
+    }
+
     // Cache miss — convert.
     let mut workbook = open_workbook_auto(&canonical)
         .map_err(|e| AgentError::Database(format!("open xlsx: {}", e)))?;
