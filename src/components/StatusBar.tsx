@@ -17,7 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Cloud, CloudOff, FolderUp, Link as LinkIcon, Loader2, LogOut } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
-import type { AgentToken, ConnectionStatus } from '../stores/agentStore';
+import type { ConnectionStatus } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
 import { CatchUpDialog, type CatchUpFolder } from './CatchUpDialog';
 import { useToast } from './Toast';
@@ -59,12 +59,9 @@ export function StatusBar() {
     connectionDetail,
     agentInfo,
     stats,
-    setAuthenticated,
-    setAgentInfo,
   } = useAgentStore();
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
-  const [hasSavedKey, setHasSavedKey] = useState(false);
   const [savedKey, setSavedKey] = useState<string | undefined>();
   // Catch-up follow-up: when the user clicked "Not now" on the
   // post-connect prompt, the folders stay locally indexed but
