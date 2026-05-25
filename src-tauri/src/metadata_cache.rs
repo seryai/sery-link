@@ -8,44 +8,84 @@
 // - Table: datasets (id, name, path, format, size, schema_json, tags, description, last_synced)
 // - Fuzzy search using LIKE with multiple columns
 // - Full-text search capability for future enhancement
+//
+// Connection lifetime:
+// The DuckDB connection is kept open for the entire process lifetime via a
+// process-global singleton (METADATA_CONN). This prevents the ART index
+// checkpoint-on-close crash (DuckDB 1.1 assertion in TransformToDeprecated)
+// that fires every time a MetadataCache was dropped. With a singleton, Drop
+// is only called at process exit, where an abort is irrelevant.
 
 use duckdb::{Connection, params};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use std::sync::{Mutex, OnceLock};
+use once_cell::sync::OnceCell;
 use crate::error::{AgentError, Result};
 use crate::schema_diff::{self, SchemaDiff};
+
+/// Process-wide DuckDB connection for the metadata cache.
+///
+/// Initialized once on the first `MetadataCache::new()` call.
+/// Never dropped during app lifetime — this is intentional (see module doc).
+static METADATA_CONN: OnceCell<Mutex<Connection>> = OnceCell::new();
+
+/// Lazily open and initialize the singleton DB connection.
+/// Returns the static reference on success; propagates IO/SQL errors.
+fn get_or_init_conn() -> Result<&'static Mutex<Connection>> {
+    METADATA_CONN.get_or_try_init(|| {
+        let cache_dir = dirs::data_local_dir()
+            .ok_or_else(|| AgentError::Config("Could not determine local data directory".to_string()))?
+            .join("sery");
+
+        std::fs::create_dir_all(&cache_dir)
+            .map_err(|e| AgentError::Config(format!("Failed to create cache directory: {}", e)))?;
+
+        let db_path = cache_dir.join("metadata_cache.db");
+
+        let conn = Connection::open(&db_path)
+            .map_err(|e| AgentError::Database(format!("Failed to open metadata cache: {}", e)))?;
+
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS datasets (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                file_format TEXT NOT NULL,
+                size_bytes BIGINT NOT NULL,
+                schema_json TEXT,
+                tags TEXT,
+                description TEXT,
+                last_synced TIMESTAMP NOT NULL,
+                UNIQUE(workspace_id, path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_name      ON datasets(name);
+            CREATE INDEX IF NOT EXISTS idx_workspace ON datasets(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_path      ON datasets(path);
+            "#,
+        )
+        .map_err(|e| AgentError::Database(format!("Failed to create schema: {}", e)))?;
+
+        Ok(Mutex::new(conn))
+    })
+}
 
 /// Process-wide write lock for the metadata cache.
 ///
 /// Every command that writes (`upsert_dataset`, `upsert_many`, etc.)
-/// acquires this mutex before opening its own DuckDB transaction.
-/// Reads don't lock — DuckDB's MVCC handles read-write concurrency
-/// fine.
+/// acquires this mutex before starting its DuckDB transaction.
+/// Reads don't need it — DuckDB's MVCC handles read-write concurrency.
 ///
 /// Why this is needed:
 ///
-/// Each Tauri command in commands.rs creates its own
-/// `MetadataCache::new()` (its own DuckDB connection, its own
-/// transactions) — see the comment at line 3173 of commands.rs. So
-/// when two `rescan_folder` calls run concurrently (UI double-click,
-/// auto-scan + manual scan, watcher retrigger), each transaction
-/// independently does DELETE-by-key + INSERT-with-key, then commits.
-///
-/// At the second commit, DuckDB sees the first commit's row, raises
-/// "Failed to append to PRIMARY_datasets_0: duplicate key" during
-/// index validation, then crashes inside its rollback path with a
-/// FatalException — a C++ exception that crosses the FFI boundary
-/// unhandled and terminates the whole process. Watcher, tray, and
-/// window all die.
-///
-/// Serializing writes through this single mutex makes the second
-/// transaction wait until the first commits. By the time the second
-/// runs, its DELETE finds the first's row and removes it cleanly,
-/// then INSERT succeeds. No race, no FatalException.
-///
-/// Reads do NOT acquire this lock — DuckDB handles concurrent
-/// reads vs. one writer fine.
+/// Two concurrent `rescan_folder` calls each do DELETE-by-key +
+/// INSERT-with-key in separate transactions. At the second commit,
+/// DuckDB sees the first commit's row and raises a duplicate-key
+/// FatalException during index validation, crashing the process.
+/// Serialising writes through this mutex means the second transaction
+/// waits for the first to commit, then cleanly deletes + re-inserts.
 fn upsert_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -71,69 +111,16 @@ pub struct SearchResult {
     pub score: f64, // Relevance score (higher is better)
 }
 
-pub struct MetadataCache {
-    conn: Connection,
-}
+/// Handle to the metadata cache.
+///
+/// Cheap to create — just ensures the singleton connection is alive.
+/// The connection itself is never dropped while the process runs.
+pub struct MetadataCache;
 
 impl MetadataCache {
-    /// Initialize or open the metadata cache database
     pub fn new() -> Result<Self> {
-        let cache_dir = dirs::data_local_dir()
-            .ok_or_else(|| AgentError::Config("Could not determine local data directory".to_string()))?
-            .join("sery");
-
-        std::fs::create_dir_all(&cache_dir)
-            .map_err(|e| AgentError::Config(format!("Failed to create cache directory: {}", e)))?;
-
-        let db_path = cache_dir.join("metadata_cache.db");
-
-        let conn = Connection::open(&db_path)
-            .map_err(|e| AgentError::Database(format!("Failed to open metadata cache: {}", e)))?;
-
-        // DuckDB 1.1 crashes in ART::TransformToDeprecated when it tries to
-        // checkpoint (serialize the ART index) on close. Disabling that avoids
-        // the C-level abort. The WAL is replayed safely on the next open, so
-        // durability is unaffected.
-        let _ = conn.execute_batch("SET checkpoint_on_shutdown=false;");
-
-        let mut cache = Self { conn };
-        cache.init_schema()?;
-
-        Ok(cache)
-    }
-
-    /// Create the datasets table if it doesn't exist
-    fn init_schema(&mut self) -> Result<()> {
-        self.conn.execute(
-            r#"
-            CREATE TABLE IF NOT EXISTS datasets (
-                id TEXT PRIMARY KEY,
-                workspace_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                file_format TEXT NOT NULL,
-                size_bytes BIGINT NOT NULL,
-                schema_json TEXT,
-                tags TEXT,
-                description TEXT,
-                last_synced TIMESTAMP NOT NULL,
-                UNIQUE(workspace_id, path)
-            );
-            "#,
-            [],
-        ).map_err(|e| AgentError::Database(format!("Failed to create schema: {}", e)))?;
-
-        // Create indexes for fast search
-        self.conn.execute(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_name ON datasets(name);
-            CREATE INDEX IF NOT EXISTS idx_workspace ON datasets(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_path ON datasets(path);
-            "#,
-            [],
-        ).map_err(|e| AgentError::Database(format!("Failed to create indexes: {}", e)))?;
-
-        Ok(())
+        get_or_init_conn()?;
+        Ok(Self)
     }
 
     /// Upsert a single dataset into the cache.
@@ -149,32 +136,11 @@ impl MetadataCache {
     /// conflict and the UNIQUE conflict ALWAYS fire together on a
     /// re-scan.
     ///
-    /// Earlier attempts:
-    /// 1. `ON CONFLICT(workspace_id, path) DO UPDATE` — only handled
-    ///    the UNIQUE conflict; PK conflict bypassed it and threw
-    ///    a FatalException (C++ exception across FFI → process
-    ///    terminate, app dies):
-    ///      INTERNAL Error: Failed to append to PRIMARY_datasets_0:
-    ///      Constraint Error: PRIMARY KEY or UNIQUE constraint
-    ///      violation: duplicate key "<workspace_id>::<path>"
-    /// 2. `INSERT OR REPLACE` — DuckDB 1.1 rejects with
-    ///    "Conflict target has to be provided for a DO UPDATE
-    ///    operation when the table has multiple UNIQUE/PRIMARY KEY
-    ///    constraints" because the rewrite is ambiguous.
-    ///
     /// Bulletproof fix: explicit DELETE + INSERT inside a single
     /// transaction. The DELETE targets BOTH possible conflict
     /// rows (id match OR (workspace_id, path) match), so the INSERT
-    /// is guaranteed clean. Atomic so no half-written state if the
-    /// app crashes mid-call. Slower than ON CONFLICT but predictable
-    /// across DuckDB versions.
+    /// is guaranteed clean.
     pub fn upsert_dataset(&mut self, dataset: &CachedDataset) -> Result<()> {
-        // Process-wide write lock — see upsert_lock() docs at the
-        // top of this module. Without this, concurrent rescans
-        // commit overlapping inserts and DuckDB crashes with a
-        // FatalException during index validation. Lock held for
-        // the duration of the transaction; released on function
-        // exit (including error paths via RAII).
         let _guard = upsert_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -182,11 +148,13 @@ impl MetadataCache {
         let tags_json = serde_json::to_string(&dataset.tags)
             .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
 
-        let tx = self.conn.transaction()
+        let mut conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let tx = conn.transaction()
             .map_err(|e| AgentError::Database(format!("Failed to start txn: {}", e)))?;
 
-        // Clear any existing row that would conflict — match on
-        // either the PK or the composite UNIQUE.
         tx.execute(
             r#"
             DELETE FROM datasets
@@ -229,19 +197,21 @@ impl MetadataCache {
             return Ok(());
         }
 
-        // Single lock for the entire batch
         let _guard = upsert_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let tx = self.conn.transaction()
+        let mut conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let tx = conn.transaction()
             .map_err(|e| AgentError::Database(format!("Failed to start batch txn: {}", e)))?;
 
         for dataset in datasets {
             let tags_json = serde_json::to_string(&dataset.tags)
                 .map_err(|e| AgentError::Serialization(format!("Failed to serialize tags: {}", e)))?;
 
-            // Clear conflicts for this specific row
             tx.execute(
                 r#"
                 DELETE FROM datasets
@@ -279,19 +249,22 @@ impl MetadataCache {
         Ok(())
     }
 
-    /// Fuzzy search datasets by query string
-    /// Searches across name, path, description, and tags
+    /// Fuzzy search datasets by query string.
+    /// Searches across name, path, description, and tags.
     pub fn search(&self, workspace_id: &str, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let query_lower = query.to_lowercase();
         let pattern = format!("%{}%", query_lower);
 
-        let mut stmt = self.conn.prepare(
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let mut stmt = conn.prepare(
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
                 size_bytes, schema_json, tags, description,
                 strftime(last_synced, '%Y-%m-%dT%H:%M:%SZ') AS last_synced_str,
-                -- Simple scoring: exact match > prefix match > contains
                 CASE
                     WHEN LOWER(name) = ? THEN 100
                     WHEN LOWER(name) LIKE ? THEN 90
@@ -318,17 +291,17 @@ impl MetadataCache {
 
         let rows = stmt.query_map(
             params![
-                &query_lower,      // exact match
-                &prefix_pattern,   // prefix match
-                &pattern,          // contains
-                &pattern,          // path
-                &pattern,          // description
-                &pattern,          // tags
+                &query_lower,
+                &prefix_pattern,
+                &pattern,
+                &pattern,
+                &pattern,
+                &pattern,
                 workspace_id,
-                &pattern,          // name LIKE
-                &pattern,          // path LIKE
-                &pattern,          // description LIKE
-                &pattern,          // tags LIKE
+                &pattern,
+                &pattern,
+                &pattern,
+                &pattern,
                 limit as i32,
             ],
             |row| {
@@ -366,7 +339,11 @@ impl MetadataCache {
 
     /// Get all datasets for a workspace (no filtering)
     pub fn get_all(&self, workspace_id: &str) -> Result<Vec<CachedDataset>> {
-        let mut stmt = self.conn.prepare(
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let mut stmt = conn.prepare(
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
@@ -412,7 +389,11 @@ impl MetadataCache {
 
     /// Get a single dataset by ID
     pub fn get_by_id(&self, id: &str) -> Result<Option<CachedDataset>> {
-        let mut stmt = self.conn.prepare(
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let mut stmt = conn.prepare(
             r#"
             SELECT
                 id, workspace_id, name, path, file_format,
@@ -457,23 +438,17 @@ impl MetadataCache {
     /// Compute the schema diff between what's cached for this (workspace, path)
     /// and a newly-scanned schema. Returns an empty diff if the path isn't yet
     /// cached (first-sync is not a schema change).
-    ///
-    /// Intended to be called by the scanner right before `upsert_dataset`:
-    /// the caller captures the returned diff (if non-empty) and persists it
-    /// as a user-visible notification.
-    ///
-    /// Errors only on DB failures. Unparseable schema_json silently treats
-    /// the old side as empty — if we can't parse what's cached, fabricating
-    /// a misleading diff would be worse than surfacing every column as "new."
-    /// In the latter case the caller will simply see added == new.len().
     pub fn compute_schema_diff(
         &self,
         workspace_id: &str,
         path: &str,
         new_schema_json: Option<&str>,
     ) -> Result<SchemaDiff> {
-        let mut stmt = self
-            .conn
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let mut stmt = conn
             .prepare("SELECT schema_json FROM datasets WHERE workspace_id = ? AND path = ?")
             .map_err(|e| AgentError::Database(format!("prepare schema lookup: {}", e)))?;
         let mut rows = stmt
@@ -495,7 +470,11 @@ impl MetadataCache {
 
     /// Clear all cached datasets for a workspace
     pub fn clear_workspace(&mut self, workspace_id: &str) -> Result<()> {
-        self.conn.execute(
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        conn.execute(
             "DELETE FROM datasets WHERE workspace_id = ?",
             params![workspace_id],
         ).map_err(|e| AgentError::Database(format!("Failed to clear workspace cache: {}", e)))?;
@@ -505,7 +484,11 @@ impl MetadataCache {
 
     /// Get cache statistics
     pub fn get_stats(&self) -> Result<CacheStats> {
-        let mut stmt = self.conn.prepare(
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let mut stmt = conn.prepare(
             "SELECT COUNT(*), SUM(size_bytes) FROM datasets"
         ).map_err(|e| AgentError::Database(format!("Failed to prepare stats query: {}", e)))?;
 
@@ -550,37 +533,26 @@ mod tests {
     fn test_cache_lifecycle() {
         let mut cache = MetadataCache::new().unwrap();
 
-        // Insert datasets
         let ds1 = test_dataset("1", "customers");
         let ds2 = test_dataset("2", "orders");
         cache.upsert_dataset(&ds1).unwrap();
         cache.upsert_dataset(&ds2).unwrap();
 
-        // Search
         let results = cache.search("test-workspace", "cust", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].dataset.name, "customers");
 
-        // Get all
         let all = cache.get_all("test-workspace").unwrap();
         assert_eq!(all.len(), 2);
 
-        // Clear
         cache.clear_workspace("test-workspace").unwrap();
         let empty = cache.get_all("test-workspace").unwrap();
         assert_eq!(empty.len(), 0);
     }
 
-    // Tests below use unique workspace_id per test so they don't interfere
-    // with each other or with test_cache_lifecycle. The existing test writes
-    // to the user's real data dir — not ideal, but matches the pattern;
-    // refactoring MetadataCache to take an explicit path is out of scope.
-
     #[test]
     fn compute_schema_diff_returns_empty_for_unknown_path() {
         let cache = MetadataCache::new().unwrap();
-        // Nothing cached under this workspace — a brand-new dataset scan
-        // should produce no "change" notification (it's first sync).
         let diff = cache
             .compute_schema_diff(
                 "never-seen-workspace",
