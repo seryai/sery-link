@@ -102,10 +102,9 @@ export function StatusBar() {
     if (!authenticated) {
       invoke<boolean>('has_workspace_key')
         .then((has) => {
-          setHasSavedKey(has);
           if (has) invoke<string | null>('get_saved_workspace_key').then((k) => setSavedKey(k ?? undefined)).catch(() => {});
         })
-        .catch(() => setHasSavedKey(false));
+        .catch(() => {});
     }
   }, [authenticated]);
   useEffect(() => {
