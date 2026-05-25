@@ -90,6 +90,12 @@ impl MetadataCache {
         let conn = Connection::open(&db_path)
             .map_err(|e| AgentError::Database(format!("Failed to open metadata cache: {}", e)))?;
 
+        // DuckDB 1.1 crashes in ART::TransformToDeprecated when it tries to
+        // checkpoint (serialize the ART index) on close. Disabling that avoids
+        // the C-level abort. The WAL is replayed safely on the next open, so
+        // durability is unaffected.
+        let _ = conn.execute_batch("SET checkpoint_on_shutdown=false;");
+
         let mut cache = Self { conn };
         cache.init_schema()?;
 
