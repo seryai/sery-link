@@ -468,6 +468,23 @@ impl MetadataCache {
         Ok(schema_diff::diff_schemas(&old, &new))
     }
 
+    /// Delete all cached datasets whose path starts with `path_prefix`
+    /// for a given workspace. Called when a source is removed so the local
+    /// cache doesn't retain stale entries that are no longer being watched.
+    pub fn delete_by_path_prefix(&mut self, workspace_id: &str, path_prefix: &str) -> Result<usize> {
+        let conn = get_or_init_conn()?
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        let prefix_like = format!("{}%", path_prefix);
+        let n = conn.execute(
+            "DELETE FROM datasets WHERE workspace_id = ? AND (path = ? OR path LIKE ?)",
+            params![workspace_id, path_prefix, &prefix_like],
+        ).map_err(|e| AgentError::Database(format!("Failed to delete by path prefix: {}", e)))?;
+
+        Ok(n)
+    }
+
     /// Clear all cached datasets for a workspace
     pub fn clear_workspace(&mut self, workspace_id: &str) -> Result<()> {
         let conn = get_or_init_conn()?

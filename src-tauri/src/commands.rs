@@ -1039,6 +1039,13 @@ pub async fn remove_watched_folder(path: String) -> Result<(), String> {
         scanner::delete_source_datasets(&api_url, &token, &prefix).await;
     }
 
+    // Remove from local metadata cache so search doesn't surface stale results.
+    if let Ok(mut cache) = crate::metadata_cache::MetadataCache::new() {
+        if let Some(wid) = Config::load().ok().and_then(|c| c.agent.workspace_id) {
+            let _ = cache.delete_by_path_prefix(&wid, &path);
+        }
+    }
+
     Ok(())
 }
 
@@ -3844,13 +3851,19 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     let _ = restart_file_watcher().await;
 
-    // Purge cloud datasets for this source.
+    // Purge cloud datasets for this source and clear local cache.
     if let Some(path) = cloud_purge_path {
         let cfg = Config::load().ok();
         if let (Some(c), Ok(token)) = (cfg, keyring_store::get_token()) {
             if let Some(aid) = &c.agent.agent_id {
                 let prefix = build_source_prefix(aid, &path);
                 scanner::delete_source_datasets(&c.cloud.api_url, &token, &prefix).await;
+            }
+            // Remove from local metadata cache so search doesn't surface stale results.
+            if let Ok(mut cache) = crate::metadata_cache::MetadataCache::new() {
+                if let Some(wid) = c.agent.workspace_id {
+                    let _ = cache.delete_by_path_prefix(&wid, &path);
+                }
             }
         }
     }
