@@ -297,6 +297,7 @@ pub fn run() {
             commands::has_token,
             commands::get_agent_info,
             commands::has_workspace_key,
+            commands::get_saved_workspace_key,
             commands::get_saved_agent_info,
             commands::get_oauth_providers_status,
             commands::logout,

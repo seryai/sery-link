@@ -65,6 +65,7 @@ export function StatusBar() {
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
   const [hasSavedKey, setHasSavedKey] = useState(false);
+  const [savedKey, setSavedKey] = useState<string | undefined>();
   // Catch-up follow-up: when the user clicked "Not now" on the
   // post-connect prompt, the folders stay locally indexed but
   // never make it to the workspace. Poll list_catch_up_folders
@@ -103,7 +104,10 @@ export function StatusBar() {
   useEffect(() => {
     if (!authenticated) {
       invoke<boolean>('has_workspace_key')
-        .then(setHasSavedKey)
+        .then((has) => {
+          setHasSavedKey(has);
+          if (has) invoke<string | null>('get_saved_workspace_key').then((k) => setSavedKey(k ?? undefined)).catch(() => {});
+        })
         .catch(() => setHasSavedKey(false));
     }
   }, [authenticated]);
@@ -193,34 +197,8 @@ export function StatusBar() {
                 {stats.queries_today} {stats.queries_today === 1 ? 'query' : 'queries'} today
               </span>
             )}
-            {hasSavedKey && (
-              <button
-                onClick={() => setShowConnect(true)}
-                className="text-xs text-slate-500 underline-offset-2 hover:text-slate-700 hover:underline dark:text-slate-400 dark:hover:text-slate-200"
-                title="Connect to a different workspace"
-              >
-                Switch workspace
-              </button>
-            )}
             <button
-              onClick={async () => {
-                try {
-                  const hasKey = await invoke<boolean>('has_workspace_key');
-                  if (hasKey) {
-                    await invoke('set_local_only_mode', { enabled: false });
-                    const saved = await invoke<AgentToken | null>('get_saved_agent_info');
-                    if (saved) {
-                      setAgentInfo(saved);
-                      setAuthenticated(true);
-                      toast.success('Reconnected.');
-                      return;
-                    }
-                  }
-                } catch {
-                  // fall through to modal
-                }
-                setShowConnect(true);
-              }}
+              onClick={() => setShowConnect(true)}
               className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-purple-700"
             >
               <LinkIcon className="h-3 w-3" />
@@ -232,7 +210,7 @@ export function StatusBar() {
         {showConnect && (
           <ConnectModal
             onClose={closeConnect}
-            defaultKey={deepLinkKey ?? undefined}
+            defaultKey={deepLinkKey ?? savedKey}
           />
         )}
       </>

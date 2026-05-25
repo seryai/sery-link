@@ -2922,6 +2922,12 @@ pub fn has_workspace_key() -> bool {
     keyring_store::get_workspace_key().is_ok()
 }
 
+/// Return the saved workspace key so the ConnectModal can pre-fill it.
+#[tauri::command]
+pub fn get_saved_workspace_key() -> Option<String> {
+    keyring_store::get_workspace_key().ok()
+}
+
 /// Read the saved agent token + config ids without a network call.
 /// Used by the reconnect flow to restore agentInfo in the store after
 /// set_local_only_mode(false), before the WebSocket re-establishes.
