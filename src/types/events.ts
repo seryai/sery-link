@@ -375,6 +375,7 @@ export interface AgentConfig {
      *  false on the Rust side; older configs deserialize without this
      *  field, so it's typed as optional for backwards compat. */
     include_document_text?: boolean;
+    auto_scan_interval_minutes?: number | null;
   };
   app: {
     theme: 'light' | 'dark' | 'system';

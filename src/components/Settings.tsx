@@ -429,6 +429,33 @@ function SyncPanel({
       />
 
       <Field
+        label="Auto-scan interval"
+        hint="How often to automatically rescan all sources. Local sources only scan when files have changed. Set to 0 to disable."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            step={10}
+            value={draft.sync.auto_scan_interval_minutes ?? 60}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                sync: {
+                  ...draft.sync,
+                  auto_scan_interval_minutes: Math.max(0, parseInt(e.target.value) || 0) || null,
+                },
+              })
+            }
+            className="w-32 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          />
+          <span className="text-sm text-slate-500 dark:text-slate-400">
+            minutes
+          </span>
+        </div>
+      </Field>
+
+      <Field
         label="Fallback scan interval"
         hint="How often to rescan watched folders as a safety net. Minimum 60s."
       >
