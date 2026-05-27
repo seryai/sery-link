@@ -502,6 +502,7 @@ pub async fn add_remote_source(
     config.save().map_err(|e| e.to_string())?;
     // No file watcher restart — URLs aren't on the filesystem.
     push_sources_to_cloud().await;
+    crate::websocket::send_sources_updated().await;
 
     // Trigger an immediate background scan so the status dot turns green
     // without waiting for the first auto-scan tick.
@@ -3883,6 +3884,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
 
     push_sources_to_cloud().await;
+    crate::websocket::send_sources_updated().await;
     Ok(())
 }
 
@@ -5104,6 +5106,7 @@ pub async fn add_local_source(
 
     let _ = restart_file_watcher().await;
     push_sources_to_cloud().await;
+    crate::websocket::send_sources_updated().await;
 
     // Trigger an immediate background scan so the status dot turns green
     // without waiting for the first auto-scan tick.

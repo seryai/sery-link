@@ -83,6 +83,21 @@ pub async fn send_outbound_json(value: &Value) -> bool {
     w.send(Message::Text(value.to_string())).await.is_ok()
 }
 
+/// Push the current source list over the live WS tunnel.
+/// Called after any add / remove / update so the dashboard sees the change
+/// immediately without waiting for the next HTTP poll cycle.
+pub async fn send_sources_updated() {
+    if let Ok(config) = crate::config::Config::load() {
+        if let Ok(sources_val) = serde_json::to_value(&config.sources) {
+            let msg = serde_json::json!({
+                "type": "sources_updated",
+                "sources": sources_val,
+            });
+            send_outbound_json(&msg).await;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -330,15 +345,19 @@ impl WebSocketClient {
             });
         }
 
-        // Push current source list to cloud on every connect. Ensures that
-        // sources migrated from watched_folders (which never explicitly called
-        // push_sources_to_cloud) are registered in agent_sources before the
-        // dashboard tries to list their datasets.
+        // Push current source list on every connect — both via WS (fast, inline)
+        // and HTTP fallback (catches cases where the WS message is dropped).
         {
             let cfg = config.read().await.clone();
-            let api_url = cfg.cloud.api_url.clone();
-            let token_clone = token.to_string();
             if let Ok(sources_val) = serde_json::to_value(&cfg.sources) {
+                let msg = serde_json::json!({
+                    "type": "sources_updated",
+                    "sources": sources_val,
+                });
+                send_outbound_json(&msg).await;
+                // HTTP fallback — belt-and-suspenders for the reconnect case.
+                let api_url = cfg.cloud.api_url.clone();
+                let token_clone = token.to_string();
                 tokio::spawn(async move {
                     crate::scanner::sync_sources_to_cloud(&api_url, &token_clone, sources_val).await;
                 });
