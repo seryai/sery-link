@@ -104,6 +104,10 @@ fn mark_cloud_offline() {
     CLOUD_OFFLINE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+pub(crate) fn clear_cloud_offline() {
+    CLOUD_OFFLINE.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Returns true only when the user has explicitly set up a workspace
 /// connection AND a token is present in the keyring AND we haven't
 /// already seen the cloud misbehave this session. LocalOnly users

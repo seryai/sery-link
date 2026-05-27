@@ -279,6 +279,8 @@ impl WebSocketClient {
         eprintln!("WebSocket connected");
         *status.write().await = ConnectionStatus::Online;
         emit_status(&app, "online", None);
+        // Connection is up — allow cloud sync attempts again.
+        crate::commands::clear_cloud_offline();
 
         let (write, mut read) = ws_stream.split();
         let write = Arc::new(tokio::sync::Mutex::new(write));
