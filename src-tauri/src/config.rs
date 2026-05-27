@@ -391,7 +391,7 @@ impl Default for Config {
                 fallback_scan_interval_seconds: default_fallback_scan(),
                 scan_tier_overrides: std::collections::HashMap::new(),
                 include_document_text: false,
-                auto_scan_interval_minutes: None,
+                auto_scan_interval_minutes: Some(60),
             },
             app: AppConfig::default(),
         }

@@ -431,6 +431,7 @@ pub async fn catch_up_sync<R: Runtime>(
 /// handles local folders.
 #[tauri::command]
 pub async fn add_remote_source(
+    app: tauri::AppHandle,
     url: String,
     credentials: Option<crate::remote_creds::S3Credentials>,
 ) -> Result<String, String> {
@@ -491,12 +492,21 @@ pub async fn add_remote_source(
         sort_order: config.sources.iter().map(|s| s.sort_order).max().map(|m| m + 1).unwrap_or(0),
         group: None,
     };
-    config.add_source(source);
+    let new_id = config.add_source(source);
     // Mirror to watched_folders so the path-keyed scanner keeps working.
     config.add_watched_folder(normalised.clone(), false);
     config.save().map_err(|e| e.to_string())?;
     // No file watcher restart — URLs aren't on the filesystem.
     push_sources_to_cloud().await;
+
+    // Trigger an immediate background scan so the status dot turns green
+    // without waiting for the first auto-scan tick.
+    let app_clone = app.clone();
+    let id_clone = new_id.clone();
+    tokio::spawn(async move {
+        let _ = rescan_source_by_id(app_clone, id_clone).await;
+    });
+
     Ok(normalised)
 }
 
@@ -5064,6 +5074,7 @@ pub async fn test_sftp_credentials(
 /// source id without creating a duplicate.
 #[tauri::command]
 pub async fn add_local_source(
+    app: tauri::AppHandle,
     path: String,
     recursive: Option<bool>,
 ) -> Result<String, String> {
@@ -5089,6 +5100,15 @@ pub async fn add_local_source(
 
     let _ = restart_file_watcher().await;
     push_sources_to_cloud().await;
+
+    // Trigger an immediate background scan so the status dot turns green
+    // without waiting for the first auto-scan tick.
+    let app_clone = app.clone();
+    let id_clone = new_id.clone();
+    tokio::spawn(async move {
+        let _ = rescan_source_by_id(app_clone, id_clone).await;
+    });
+
     Ok(new_id)
 }
 
