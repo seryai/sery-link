@@ -5,6 +5,27 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] — 2026-05-27
+
+### Added
+
+- **Auto-scan interval setting** — users can now configure the auto-scan interval
+  (in minutes) from the Settings panel. Set to 0 to disable. Defaults to 60 minutes.
+
+### Fixed
+
+- **Auto-scan disabled by default** — `auto_scan_interval_minutes` defaulted to `None`
+  (disabled); now defaults to 60 minutes so sources scan automatically without any
+  manual configuration.
+- **No scan on source add** — adding a local or remote source now triggers an immediate
+  background scan so the status dot turns green right away instead of waiting up to
+  60 minutes for the first auto-scan tick.
+- **`CLOUD_OFFLINE` never reset** — after a failed cloud sync the flag blocked all
+  subsequent sync attempts for the entire session, even after connectivity recovered.
+  Now clears on every successful WebSocket reconnect.
+
+---
+
 ## [0.9.9] — 2026-05-19
 
 ### Fixed
