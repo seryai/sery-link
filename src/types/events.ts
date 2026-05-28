@@ -312,6 +312,23 @@ export type SourceKind =
       // access + refresh tokens in the keychain via onedrive_creds.
       kind: 'one_drive';
       base_path: string;
+    }
+  | {
+      // F52: MySQL database. Password in the OS keychain via db_creds;
+      // only connection metadata here (no credentials).
+      kind: 'mysql';
+      host: string;
+      port: number;
+      username: string;
+      database: string;
+    }
+  | {
+      // F52: PostgreSQL database. Same pattern as MySQL above.
+      kind: 'postgresql';
+      host: string;
+      port: number;
+      username: string;
+      database: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */

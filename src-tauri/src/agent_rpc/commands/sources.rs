@@ -13,7 +13,9 @@ fn kind_str(kind: &SourceKind) -> &'static str {
         SourceKind::WebDav { .. }     => "web_dav",
         SourceKind::Dropbox { .. }    => "dropbox",
         SourceKind::AzureBlob { .. }  => "azure_blob",
-        SourceKind::OneDrive { .. }   => "one_drive",
+        SourceKind::OneDrive { .. }    => "one_drive",
+        SourceKind::Mysql { .. }       => "mysql",
+        SourceKind::Postgresql { .. }  => "postgresql",
     }
 }
 

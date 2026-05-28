@@ -70,7 +70,9 @@ type ImplementedKind =
   | 'webdav'
   | 'dropbox'
   | 'azure'
-  | 'onedrive';
+  | 'onedrive'
+  | 'mysql'
+  | 'postgresql';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
 // All "coming soon" tiles have shipped — leaving this as a never
 // type would prevent the COMING_SOON array from being typed; use
@@ -94,6 +96,8 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'dropbox', label: 'Dropbox', description: 'Sign in or access token' },
   { kind: 'azure', label: 'Azure Blob', description: 'SAS token' },
   { kind: 'onedrive', label: 'OneDrive', description: 'Microsoft device code' },
+  { kind: 'mysql', label: 'MySQL', description: 'Host · port · credentials' },
+  { kind: 'postgresql', label: 'PostgreSQL', description: 'Host · port · credentials' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -159,7 +163,9 @@ type Stage =
   | { kind: 'webdav' }
   | { kind: 'dropbox' }
   | { kind: 'azure' }
-  | { kind: 'onedrive' };
+  | { kind: 'onedrive' }
+  | { kind: 'mysql' }
+  | { kind: 'postgresql' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -173,6 +179,9 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
     setStage({ kind: 'picker' });
     onClose();
   };
+
+  const onPickMysql = () => setStage({ kind: 'mysql' });
+  const onPickPostgresql = () => setStage({ kind: 'postgresql' });
 
   const onPickLocal = async () => {
     setBusy(true);
@@ -231,6 +240,8 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           stage={stage}
           onBack={() => setStage({ kind: 'picker' })}
           onClose={closeAll}
+          onPickMysql={onPickMysql}
+          onPickPostgresql={onPickPostgresql}
         />
         <div className="flex-1 overflow-y-auto p-5">
           {stage.kind === 'picker' && (
@@ -244,6 +255,8 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickDropbox={() => setStage({ kind: 'dropbox' })}
               onPickAzure={() => setStage({ kind: 'azure' })}
               onPickOneDrive={() => setStage({ kind: 'onedrive' })}
+              onPickMysql={onPickMysql}
+              onPickPostgresql={onPickPostgresql}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -307,6 +320,16 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onCancel={() => setStage({ kind: 'picker' })}
             />
           )}
+          {(stage.kind === 'mysql' || stage.kind === 'postgresql') && (
+            <DatabaseStage
+              dbKind={stage.kind}
+              onAdded={() => {
+                onAdded();
+                closeAll();
+              }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -319,10 +342,14 @@ function ModalHeader({
   stage,
   onBack,
   onClose,
+  onPickMysql: _onPickMysql,
+  onPickPostgresql: _onPickPostgresql,
 }: {
   stage: Stage;
   onBack: () => void;
   onClose: () => void;
+  onPickMysql?: () => void;
+  onPickPostgresql?: () => void;
 }) {
   const providerLabel =
     stage.kind === 'url' ? stage.initial?.providerLabel : undefined;
@@ -343,7 +370,11 @@ function ModalHeader({
                 ? 'Add an Azure Blob source'
                 : stage.kind === 'onedrive'
                   ? 'Add a OneDrive source'
-                  : 'Connect Google Drive';
+                  : stage.kind === 'mysql'
+                    ? 'Add a MySQL source'
+                    : stage.kind === 'postgresql'
+                      ? 'Add a PostgreSQL source'
+                      : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -361,7 +392,9 @@ function ModalHeader({
                 ? 'Generate a SAS token in the Azure portal scoped to your container with read-only permissions. Stored in your OS keychain.'
                 : stage.kind === 'onedrive'
                   ? 'Sign in via the device code flow — Sery shows a code, you enter it on microsoft.com/devicelogin. Tokens stored in your OS keychain.'
-                  : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+                  : stage.kind === 'mysql' || stage.kind === 'postgresql'
+                    ? 'Connection tested before save. Password stored in your OS keychain — never on Sery servers. Queries run locally; raw data never leaves your machine.'
+                    : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -406,6 +439,8 @@ function PickerStage({
   onPickDropbox,
   onPickAzure,
   onPickOneDrive,
+  onPickMysql,
+  onPickPostgresql,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -417,6 +452,8 @@ function PickerStage({
   onPickDropbox: () => void;
   onPickAzure: () => void;
   onPickOneDrive: () => void;
+  onPickMysql: () => void;
+  onPickPostgresql: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -453,6 +490,12 @@ function PickerStage({
                   break;
                 case 'onedrive':
                   onPickOneDrive();
+                  break;
+                case 'mysql':
+                  onPickMysql();
+                  break;
+                case 'postgresql':
+                  onPickPostgresql();
                   break;
               }
             }}
@@ -2146,6 +2189,9 @@ function legacyIconKindForTile(
   | 'onedrive'
   | null {
   switch (kind) {
+    case 'mysql':
+    case 'postgresql':
+      return null; // uses PlaceholderIcon until DB-specific icons ship
     case 'local':
       return 'local';
     case 'https':
@@ -2174,6 +2220,187 @@ function legacyIconKindForTile(
     default:
       return null;
   }
+}
+
+// ─── Stage B — MySQL / PostgreSQL database form ────────────────────
+
+function DatabaseStage({
+  dbKind,
+  onAdded,
+  onCancel,
+}: {
+  dbKind: 'mysql' | 'postgresql';
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const defaultPort = dbKind === 'mysql' ? '3306' : '5432';
+  const label = dbKind === 'mysql' ? 'MySQL' : 'PostgreSQL';
+
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState(defaultPort);
+  const [username, setUsername] = useState('');
+  const [database, setDatabase] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const portNumber = parseInt(port, 10);
+  const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const canSubmit =
+    !busy &&
+    host.trim() !== '' &&
+    username.trim() !== '' &&
+    database.trim() !== '' &&
+    password !== '' &&
+    portValid;
+
+  const resetTest = () => setTestStatus(null);
+
+  const test = async () => {
+    setError(null);
+    setTestStatus(null);
+    setBusy(true);
+    try {
+      await invoke<void>('test_db_connection', {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        database: database.trim(),
+        password,
+        kind: dbKind,
+      });
+      setTestStatus('ok');
+      toast.success('Connection OK');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const cmd = dbKind === 'mysql' ? 'add_mysql_source' : 'add_postgresql_source';
+      await invoke<string>(cmd, {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        database: database.trim(),
+        password,
+      });
+      toast.success(`${label} source added`);
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <CredField
+            label="Host"
+            value={host}
+            onChange={(v) => { setHost(v); resetTest(); }}
+            placeholder={dbKind === 'mysql' ? 'mysql.example.com' : 'pg.example.com'}
+          />
+        </div>
+        <CredField
+          label="Port"
+          value={port}
+          onChange={(v) => { setPort(v); resetTest(); }}
+          placeholder={defaultPort}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <CredField
+          label="Database"
+          value={database}
+          onChange={(v) => { setDatabase(v); resetTest(); }}
+          placeholder="mydb"
+        />
+        <CredField
+          label="Username"
+          value={username}
+          onChange={(v) => { setUsername(v); resetTest(); }}
+          placeholder={dbKind === 'mysql' ? 'root' : 'postgres'}
+        />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Password
+        </div>
+        <CredField
+          label="Password"
+          value={password}
+          onChange={(v) => { setPassword(v); resetTest(); }}
+          type="password"
+          placeholder="••••••••"
+        />
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. Never sent to Sery servers — queries
+          execute locally on this machine via DuckDB.
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Sery connects read-only. Schema syncs to your catalog so AI chat
+        can reference table names. Raw data stays on this machine.
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {testStatus === 'ok' && !error && (
+        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Connection OK — ready to save.
+        </div>
+      )}
+
+      <div className="mt-6 flex items-center justify-between gap-2">
+        <button
+          onClick={test}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          {busy && testStatus !== 'ok' && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          Test connection
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Add {label} source
+          </button>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function PlaceholderIcon() {

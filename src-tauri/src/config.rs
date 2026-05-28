@@ -537,6 +537,8 @@ impl Config {
                 SourceKind::Dropbox { .. } => None,
                 SourceKind::AzureBlob { .. } => None,
                 SourceKind::OneDrive { .. } => None,
+                SourceKind::Mysql { .. } => None,
+                SourceKind::Postgresql { .. } => None,
             })
             .collect();
 
@@ -786,6 +788,12 @@ impl Config {
             SourceKind::OneDrive { base_path } => {
                 Some(format!("onedrive::{}", base_path))
             }
+            SourceKind::Mysql {
+                host, port, database, ..
+            } => Some(format!("mysql://{}:{}/{}", host, port, database)),
+            SourceKind::Postgresql {
+                host, port, database, ..
+            } => Some(format!("postgresql://{}:{}/{}", host, port, database)),
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -811,6 +819,12 @@ impl Config {
                 SourceKind::OneDrive { base_path } => {
                     format!("onedrive::{}", base_path) == *p
                 }
+                SourceKind::Mysql {
+                    host, port, database, ..
+                } => format!("mysql://{}:{}/{}", host, port, database) == *p,
+                SourceKind::Postgresql {
+                    host, port, database, ..
+                } => format!("postgresql://{}:{}/{}", host, port, database) == *p,
             }) {
                 return existing.id.clone();
             }
@@ -900,6 +914,8 @@ impl Config {
             SourceKind::Dropbox { .. } => None,
             SourceKind::AzureBlob { .. } => None,
             SourceKind::OneDrive { .. } => None,
+            SourceKind::Mysql { .. } => None,
+            SourceKind::Postgresql { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);

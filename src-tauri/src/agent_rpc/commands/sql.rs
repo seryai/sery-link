@@ -8,15 +8,18 @@ pub struct ExecSqlCommand;
 impl AgentCommand for ExecSqlCommand {
     fn name(&self) -> &'static str { "sql.exec" }
     fn description(&self) -> &'static str {
-        "Execute a SQL query against a local file via DuckDB. \
-         Returns rows as JSON. Capped at 10 000 rows."
+        "Execute a SQL query. For file sources pass `path` (file path or query_path). \
+         For database sources pass `path` as `db://<source_id>`."
     }
     fn schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
                 "sql":   { "type": "string", "description": "SQL query to execute" },
-                "path":  { "type": "string", "description": "File path or query_path context" },
+                "path":  {
+                    "type": "string",
+                    "description": "File path / query_path for file sources, or db://<source_id> for database sources"
+                },
                 "limit": { "type": "integer", "description": "Row cap override (max 10 000)" }
             },
             "required": ["sql", "path"]
@@ -32,6 +35,23 @@ impl AgentCommand for ExecSqlCommand {
             data: json!({ "phase": "executing" }),
         }).await;
 
+        // ── Database source fast-path ─────────────────────────────────────
+        // path = "db://<source_id>" → route to DuckDB mysql/postgres engine.
+        if let Some(source_id) = path.strip_prefix("db://") {
+            let config = crate::config::Config::load().map_err(|e| e.to_string())?;
+            let result = crate::db_engine::execute_db_query(&sql, source_id, &config)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(json!({
+                "rows":        result.rows,
+                "columns":     result.columns,
+                "row_count":   result.row_count,
+                "duration_ms": result.duration_ms,
+                "truncated":   result.truncated,
+            }));
+        }
+
+        // ── File source path (existing behaviour) ─────────────────────────
         let config = crate::config::Config::load().map_err(|e| e.to_string())?;
 
         let capped_sql = if sql.to_lowercase().contains("limit") {

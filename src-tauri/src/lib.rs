@@ -1,5 +1,7 @@
 mod agent_rpc;
 mod analytics;
+mod db_creds;
+mod db_engine;
 
 mod audit;
 mod auth;
@@ -281,6 +283,10 @@ pub fn run() {
             commands::update_webdav_credentials,
             commands::update_dropbox_credentials,
             commands::update_azure_blob_credentials,
+            commands::add_mysql_source,
+            commands::add_postgresql_source,
+            commands::test_db_connection,
+            commands::introspect_db_schema,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

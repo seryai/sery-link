@@ -2398,6 +2398,12 @@ pub async fn rescan_source_by_id<R: Runtime>(
             }
             last
         }
+        SourceKind::Mysql { .. } | SourceKind::Postgresql { .. } => {
+            Ok(serde_json::json!({
+                "skipped": true,
+                "reason": "database source — schema is introspected on connect, not file-scanned"
+            }))
+        }
     }
 }
 
@@ -3803,6 +3809,8 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::Dropbox { .. } => None,
             crate::sources::SourceKind::AzureBlob { .. } => None,
             crate::sources::SourceKind::OneDrive { .. } => None,
+            crate::sources::SourceKind::Mysql { .. } => None,
+            crate::sources::SourceKind::Postgresql { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3832,6 +3840,11 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     let is_onedrive = matches!(
         &removed_kind,
         Some(crate::sources::SourceKind::OneDrive { .. })
+    );
+    let is_db = matches!(
+        &removed_kind,
+        Some(crate::sources::SourceKind::Mysql { .. })
+        | Some(crate::sources::SourceKind::Postgresql { .. })
     );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
@@ -3863,6 +3876,9 @@ pub async fn remove_source(id: String) -> Result<(), String> {
     }
     if is_onedrive {
         let _ = crate::onedrive_creds::delete(&id);
+    }
+    if is_db {
+        let _ = crate::db_creds::delete(&id);
     }
     let _ = restart_file_watcher().await;
 
@@ -5129,6 +5145,142 @@ pub async fn agent_invoke(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     crate::agent_rpc::dispatcher::dispatch_local(&command, args, Some(app)).await
+}
+
+// ─── F52: Database sources ─────────────────────────────────────────────────
+
+/// Add a MySQL database source. Runs a connection test before persisting;
+/// bad credentials return an error and nothing is saved.
+#[tauri::command]
+pub async fn add_mysql_source(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    database: String,
+    password: String,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Mysql {
+            host: host.trim().to_string(),
+            port: port.unwrap_or(3306),
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+        },
+        &password,
+    )
+    .await
+}
+
+/// Add a PostgreSQL database source. Same flow as add_mysql_source.
+#[tauri::command]
+pub async fn add_postgresql_source(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    database: String,
+    password: String,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Postgresql {
+            host: host.trim().to_string(),
+            port: port.unwrap_or(5432),
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+        },
+        &password,
+    )
+    .await
+}
+
+async fn add_db_source_inner(
+    kind: crate::sources::SourceKind,
+    password: &str,
+) -> Result<String, String> {
+    // Pre-flight connection test
+    let kind_for_test = kind.clone();
+    let pw = password.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::db_engine::test_connection_blocking(&kind_for_test, &pw)
+    })
+    .await
+    .map_err(|e| format!("DB test task failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Persist source + credentials
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+    let name = match &kind {
+        crate::sources::SourceKind::Mysql { host, port, database, .. } => {
+            format!("{host}:{port}/{database}")
+        }
+        crate::sources::SourceKind::Postgresql { host, port, database, .. } => {
+            format!("{host}:{port}/{database}")
+        }
+        _ => unreachable!(),
+    };
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name,
+        kind,
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+    config.save().map_err(|e| e.to_string())?;
+
+    if returned_id == source_id {
+        crate::db_creds::save(&source_id, password).map_err(|e| e.to_string())?;
+    }
+
+    Ok(returned_id)
+}
+
+/// Test a DB connection without persisting anything. Returns Ok(()) on success.
+#[tauri::command]
+pub async fn test_db_connection(
+    host: String,
+    port: u16,
+    username: String,
+    database: String,
+    password: String,
+    kind: String,
+) -> Result<(), String> {
+    let source_kind = match kind.as_str() {
+        "mysql" => crate::sources::SourceKind::Mysql {
+            host: host.trim().to_string(),
+            port,
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+        },
+        "postgresql" => crate::sources::SourceKind::Postgresql {
+            host: host.trim().to_string(),
+            port,
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+        },
+        other => return Err(format!("Unknown DB kind: {other}")),
+    };
+    tokio::task::spawn_blocking(move || {
+        crate::db_engine::test_connection_blocking(&source_kind, &password)
+    })
+    .await
+    .map_err(|e| format!("task: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// Introspect the schema of an already-registered DB source.
+/// Returns a list of tables with their column names and types.
+#[tauri::command]
+pub async fn introspect_db_schema(
+    source_id: String,
+) -> Result<Vec<crate::db_engine::TableSchema>, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    crate::db_engine::introspect_schema(&source_id, &config)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -116,10 +116,40 @@ pub enum SourceKind {
         /// Use empty string for the root.
         base_path: String,
     },
+
+    /// F52: MySQL database. Connection metadata here; password in the
+    /// keychain via `db_creds`, keyed on source_id. Schema introspected
+    /// via INFORMATION_SCHEMA on first connect. Queries execute via
+    /// DuckDB mysql_scanner extension (READ_ONLY ATTACH).
+    Mysql {
+        host: String,
+        #[serde(default = "default_mysql_port")]
+        port: u16,
+        username: String,
+        database: String,
+    },
+
+    /// F52: PostgreSQL database. Same pattern as Mysql above but using
+    /// DuckDB postgres_scanner extension.
+    Postgresql {
+        host: String,
+        #[serde(default = "default_postgresql_port")]
+        port: u16,
+        username: String,
+        database: String,
+    },
 }
 
 fn default_sftp_port() -> u16 {
     22
+}
+
+fn default_mysql_port() -> u16 {
+    3306
+}
+
+fn default_postgresql_port() -> u16 {
+    5432
 }
 
 impl SourceKind {
@@ -132,6 +162,11 @@ impl SourceKind {
             SourceKind::Https { url } => Some(url.clone()),
             _ => None,
         }
+    }
+
+    /// Returns true if this source is a live database (not a file store).
+    pub fn is_database(&self) -> bool {
+        matches!(self, SourceKind::Mysql { .. } | SourceKind::Postgresql { .. })
     }
 }
 
@@ -295,6 +330,18 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 format!("OneDrive · {}", base_path)
             }
         }
+        SourceKind::Mysql {
+            host,
+            port,
+            database,
+            ..
+        } => format!("{host}:{port}/{database}"),
+        SourceKind::Postgresql {
+            host,
+            port,
+            database,
+            ..
+        } => format!("{host}:{port}/{database}"),
         SourceKind::AzureBlob {
             account_url,
             prefix,
