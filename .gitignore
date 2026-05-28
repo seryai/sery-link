@@ -35,3 +35,4 @@ dist-builds
 # after cloning; CI runs it as a release-workflow step.
 src-tauri/resources/pandoc/pandoc
 src-tauri/resources/pandoc/pandoc.exe
+CLAUDE.md
