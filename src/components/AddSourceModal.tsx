@@ -72,7 +72,12 @@ type ImplementedKind =
   | 'azure'
   | 'onedrive'
   | 'mysql'
-  | 'postgresql';
+  | 'postgresql'
+  | 'snowflake'
+  | 'clickhouse'
+  | 'mongodb'
+  | 'redis'
+  | 'sqlite';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
 // All "coming soon" tiles have shipped — leaving this as a never
 // type would prevent the COMING_SOON array from being typed; use
@@ -98,6 +103,11 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'onedrive', label: 'OneDrive', description: 'Microsoft device code' },
   { kind: 'mysql', label: 'MySQL', description: 'Host · port · credentials' },
   { kind: 'postgresql', label: 'PostgreSQL', description: 'Host · port · credentials' },
+  { kind: 'snowflake', label: 'Snowflake', description: 'Account · warehouse · database' },
+  { kind: 'clickhouse', label: 'ClickHouse', description: 'HTTP interface · credentials' },
+  { kind: 'mongodb', label: 'MongoDB', description: 'Host · port · credentials' },
+  { kind: 'redis', label: 'Redis', description: 'Host · port · optional password' },
+  { kind: 'sqlite', label: 'SQLite', description: 'Local .db or .sqlite file' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -155,8 +165,6 @@ const PRESETS: Record<S3CompatibleKind, UrlStageInitial> = {
 
 type Stage =
   | { kind: 'picker' }
-  // 'url' covers HTTPS, S3, and S3-compatible providers (the form
-  // auto-detects S3 by URL scheme; presets fill endpoint/region).
   | { kind: 'url'; initial?: UrlStageInitial }
   | { kind: 'gdrive' }
   | { kind: 'sftp' }
@@ -165,7 +173,12 @@ type Stage =
   | { kind: 'azure' }
   | { kind: 'onedrive' }
   | { kind: 'mysql' }
-  | { kind: 'postgresql' };
+  | { kind: 'postgresql' }
+  | { kind: 'snowflake' }
+  | { kind: 'clickhouse' }
+  | { kind: 'mongodb' }
+  | { kind: 'redis' }
+  | { kind: 'sqlite' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -182,6 +195,29 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
 
   const onPickMysql = () => setStage({ kind: 'mysql' });
   const onPickPostgresql = () => setStage({ kind: 'postgresql' });
+  const onPickSnowflake = () => setStage({ kind: 'snowflake' });
+  const onPickClickhouse = () => setStage({ kind: 'clickhouse' });
+  const onPickMongodb = () => setStage({ kind: 'mongodb' });
+  const onPickRedis = () => setStage({ kind: 'redis' });
+  const onPickSqlite = async () => {
+    setBusy(true);
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [{ name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3'] }],
+      });
+      if (typeof selected !== 'string') { setBusy(false); return; }
+      await invoke<string>('add_sqlite_source', { path: selected });
+      toast.success('SQLite source added');
+      onAdded();
+      closeAll();
+    } catch (err) {
+      toast.error(`Couldn't add SQLite source: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const onPickLocal = async () => {
     setBusy(true);
@@ -240,8 +276,6 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           stage={stage}
           onBack={() => setStage({ kind: 'picker' })}
           onClose={closeAll}
-          onPickMysql={onPickMysql}
-          onPickPostgresql={onPickPostgresql}
         />
         <div className="flex-1 overflow-y-auto p-5">
           {stage.kind === 'picker' && (
@@ -257,6 +291,11 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickOneDrive={() => setStage({ kind: 'onedrive' })}
               onPickMysql={onPickMysql}
               onPickPostgresql={onPickPostgresql}
+              onPickSnowflake={onPickSnowflake}
+              onPickClickhouse={onPickClickhouse}
+              onPickMongodb={onPickMongodb}
+              onPickRedis={onPickRedis}
+              onPickSqlite={onPickSqlite}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -323,10 +362,31 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           {(stage.kind === 'mysql' || stage.kind === 'postgresql') && (
             <DatabaseStage
               dbKind={stage.kind}
-              onAdded={() => {
-                onAdded();
-                closeAll();
-              }}
+              onAdded={() => { onAdded(); closeAll(); }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'snowflake' && (
+            <SnowflakeStage
+              onAdded={() => { onAdded(); closeAll(); }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'clickhouse' && (
+            <ClickhouseStage
+              onAdded={() => { onAdded(); closeAll(); }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'mongodb' && (
+            <MongodbStage
+              onAdded={() => { onAdded(); closeAll(); }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
+          {stage.kind === 'redis' && (
+            <RedisStage
+              onAdded={() => { onAdded(); closeAll(); }}
               onCancel={() => setStage({ kind: 'picker' })}
             />
           )}
@@ -342,14 +402,10 @@ function ModalHeader({
   stage,
   onBack,
   onClose,
-  onPickMysql: _onPickMysql,
-  onPickPostgresql: _onPickPostgresql,
 }: {
   stage: Stage;
   onBack: () => void;
   onClose: () => void;
-  onPickMysql?: () => void;
-  onPickPostgresql?: () => void;
 }) {
   const providerLabel =
     stage.kind === 'url' ? stage.initial?.providerLabel : undefined;
@@ -374,7 +430,15 @@ function ModalHeader({
                     ? 'Add a MySQL source'
                     : stage.kind === 'postgresql'
                       ? 'Add a PostgreSQL source'
-                      : 'Connect Google Drive';
+                      : stage.kind === 'snowflake'
+                        ? 'Add a Snowflake source'
+                        : stage.kind === 'clickhouse'
+                          ? 'Add a ClickHouse source'
+                          : stage.kind === 'mongodb'
+                            ? 'Add a MongoDB source'
+                            : stage.kind === 'redis'
+                              ? 'Add a Redis source'
+                              : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -394,7 +458,15 @@ function ModalHeader({
                   ? 'Sign in via the device code flow — Sery shows a code, you enter it on microsoft.com/devicelogin. Tokens stored in your OS keychain.'
                   : stage.kind === 'mysql' || stage.kind === 'postgresql'
                     ? 'Connection tested before save. Password stored in your OS keychain — never on Sery servers. Queries run locally; raw data never leaves your machine.'
-                    : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+                    : stage.kind === 'snowflake'
+                      ? 'Connects read-only via DuckDB Snowflake extension. Account password stored in your OS keychain — never on Sery servers.'
+                      : stage.kind === 'clickhouse'
+                        ? 'Connects via ClickHouse HTTP interface. Password stored in your OS keychain. Queries execute locally via the HTTP API.'
+                        : stage.kind === 'mongodb'
+                          ? 'Documents are fetched per-collection and queried via DuckDB in-memory tables. Password stored in your OS keychain.'
+                          : stage.kind === 'redis'
+                            ? 'Keys are scanned and exposed as a SQL table. Optional password stored in your OS keychain.'
+                            : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
       <div className="flex items-start gap-3">
@@ -441,6 +513,11 @@ function PickerStage({
   onPickOneDrive,
   onPickMysql,
   onPickPostgresql,
+  onPickSnowflake,
+  onPickClickhouse,
+  onPickMongodb,
+  onPickRedis,
+  onPickSqlite,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -454,6 +531,11 @@ function PickerStage({
   onPickOneDrive: () => void;
   onPickMysql: () => void;
   onPickPostgresql: () => void;
+  onPickSnowflake: () => void;
+  onPickClickhouse: () => void;
+  onPickMongodb: () => void;
+  onPickRedis: () => void;
+  onPickSqlite: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
@@ -496,6 +578,21 @@ function PickerStage({
                   break;
                 case 'postgresql':
                   onPickPostgresql();
+                  break;
+                case 'snowflake':
+                  onPickSnowflake();
+                  break;
+                case 'clickhouse':
+                  onPickClickhouse();
+                  break;
+                case 'mongodb':
+                  onPickMongodb();
+                  break;
+                case 'redis':
+                  onPickRedis();
+                  break;
+                case 'sqlite':
+                  onPickSqlite();
                   break;
               }
             }}
@@ -2191,6 +2288,11 @@ function legacyIconKindForTile(
   switch (kind) {
     case 'mysql':
     case 'postgresql':
+    case 'snowflake':
+    case 'clickhouse':
+    case 'mongodb':
+    case 'redis':
+    case 'sqlite':
       return null; // uses PlaceholderIcon until DB-specific icons ship
     case 'local':
       return 'local';
@@ -2398,6 +2500,341 @@ function DatabaseStage({
             Add {label} source
           </button>
         </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Stage B — Snowflake form ──────────────────────────────────────
+
+function SnowflakeStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const toast = useToast();
+  const [account, setAccount] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [warehouse, setWarehouse] = useState('');
+  const [database, setDatabase] = useState('');
+  const [schema, setSchema] = useState('PUBLIC');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit =
+    !busy &&
+    account.trim() !== '' &&
+    username.trim() !== '' &&
+    password !== '' &&
+    warehouse.trim() !== '' &&
+    database.trim() !== '';
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_snowflake_source', {
+        account: account.trim(),
+        username: username.trim(),
+        password,
+        warehouse: warehouse.trim(),
+        database: database.trim(),
+        schema: schema.trim() || 'PUBLIC',
+      });
+      toast.success('Snowflake source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <CredField
+          label="Account identifier"
+          value={account}
+          onChange={setAccount}
+          placeholder="myorg-myaccount"
+        />
+        <CredField
+          label="Warehouse"
+          value={warehouse}
+          onChange={setWarehouse}
+          placeholder="COMPUTE_WH"
+        />
+      </div>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Account format: <span className="font-mono">orgname-accountname</span> — find it in Snowsight under Admin → Accounts.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <CredField
+          label="Database"
+          value={database}
+          onChange={setDatabase}
+          placeholder="MY_DATABASE"
+        />
+        <CredField
+          label="Schema (optional)"
+          value={schema}
+          onChange={setSchema}
+          placeholder="PUBLIC"
+        />
+      </div>
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Credentials
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <CredField label="Username" value={username} onChange={setUsername} placeholder="SERY_USER" />
+          <CredField label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+        </div>
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. Connects read-only via DuckDB Snowflake extension. Connection tested on Add.
+        </p>
+      </div>
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{error}</div>
+      )}
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
+        <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Add Snowflake source
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── Stage B — ClickHouse form ─────────────────────────────────────
+
+function ClickhouseStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const toast = useToast();
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('8123');
+  const [username, setUsername] = useState('default');
+  const [password, setPassword] = useState('');
+  const [database, setDatabase] = useState('default');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const portNumber = parseInt(port, 10);
+  const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const canSubmit = !busy && host.trim() !== '' && username.trim() !== '' && database.trim() !== '' && portValid;
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_clickhouse_source', {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        password,
+        database: database.trim(),
+      });
+      toast.success('ClickHouse source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <CredField label="Host" value={host} onChange={setHost} placeholder="clickhouse.example.com" />
+        </div>
+        <CredField label="Port" value={port} onChange={setPort} placeholder="8123" />
+      </div>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Default HTTP port is <span className="font-mono">8123</span>. Use <span className="font-mono">8443</span> for HTTPS.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <CredField label="Database" value={database} onChange={setDatabase} placeholder="default" />
+        <CredField label="Username" value={username} onChange={setUsername} placeholder="default" />
+      </div>
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Password
+        </div>
+        <CredField label="Password" value={password} onChange={setPassword} type="password" placeholder="leave empty if no auth" />
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. Queries use ClickHouse HTTP interface — raw data never leaves this machine.
+        </p>
+      </div>
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{error}</div>
+      )}
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
+        <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Add ClickHouse source
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── Stage B — MongoDB form ────────────────────────────────────────
+
+function MongodbStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const toast = useToast();
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('27017');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [database, setDatabase] = useState('');
+  const [authDb, setAuthDb] = useState('admin');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const portNumber = parseInt(port, 10);
+  const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const canSubmit = !busy && host.trim() !== '' && username.trim() !== '' && database.trim() !== '' && portValid;
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_mongodb_source', {
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        password,
+        database: database.trim(),
+        authDb: authDb.trim() || 'admin',
+      });
+      toast.success('MongoDB source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <CredField label="Host" value={host} onChange={setHost} placeholder="mongo.example.com" />
+        </div>
+        <CredField label="Port" value={port} onChange={setPort} placeholder="27017" />
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <CredField label="Database" value={database} onChange={setDatabase} placeholder="mydb" />
+        <CredField label="Auth database" value={authDb} onChange={setAuthDb} placeholder="admin" />
+      </div>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Auth database is where the user credentials are stored — typically <span className="font-mono">admin</span>.
+      </p>
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Credentials
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <CredField label="Username" value={username} onChange={setUsername} placeholder="sery_user" />
+          <CredField label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+        </div>
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. Collections load into DuckDB in-memory tables for SQL queries — raw data never leaves this machine.
+        </p>
+      </div>
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{error}</div>
+      )}
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        Query collections with plain SQL: <span className="font-mono">SELECT * FROM orders WHERE status = 'pending'</span>. Collection name = table name.
+      </div>
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
+        <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Add MongoDB source
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── Stage B — Redis form ──────────────────────────────────────────
+
+function RedisStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const toast = useToast();
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('6379');
+  const [db, setDb] = useState('0');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const portNumber = parseInt(port, 10);
+  const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const dbNumber = parseInt(db, 10);
+  const dbValid = !isNaN(dbNumber) && dbNumber >= 0 && dbNumber <= 15;
+  const canSubmit = !busy && host.trim() !== '' && portValid && dbValid;
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      await invoke<string>('add_redis_source', {
+        host: host.trim(),
+        port: portNumber,
+        db: dbNumber,
+        password,
+      });
+      toast.success('Redis source added');
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="sm:col-span-2">
+          <CredField label="Host" value={host} onChange={setHost} placeholder="redis.example.com" />
+        </div>
+        <CredField label="Port" value={port} onChange={setPort} placeholder="6379" />
+        <CredField label="DB index" value={db} onChange={setDb} placeholder="0" />
+      </div>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        DB index 0–15. Default is <span className="font-mono">0</span>.
+      </p>
+      <div className="mt-4 rounded-lg border border-purple-200 bg-purple-50/60 p-3 dark:border-purple-900/60 dark:bg-purple-950/20">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700 dark:text-purple-200">
+          <KeyRound className="h-3.5 w-3.5" />
+          Password (optional)
+        </div>
+        <CredField label="Password" value={password} onChange={setPassword} type="password" placeholder="leave empty if no auth" />
+        <p className="mt-2 text-xs text-purple-800/80 dark:text-purple-200/80">
+          Stored in your OS keychain. Leave empty for Redis instances without auth.
+        </p>
+      </div>
+      {error && (
+        <div className="mt-3 rounded-md border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{error}</div>
+      )}
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        All keys are scanned and exposed as a <span className="font-mono">keys</span> table with columns <span className="font-mono">(key, value, value_type, ttl)</span>. Query with: <span className="font-mono">SELECT * FROM keys WHERE key LIKE 'user:*'</span>
+      </div>
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
+        <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Add Redis source
+        </button>
       </div>
     </>
   );

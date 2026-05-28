@@ -329,6 +329,44 @@ export type SourceKind =
       port: number;
       username: string;
       database: string;
+    }
+  | {
+      // F53: Snowflake data warehouse. Password in OS keychain.
+      kind: 'snowflake';
+      account: string;
+      username: string;
+      warehouse: string;
+      database: string;
+      schema: string;
+    }
+  | {
+      // F53: ClickHouse analytics database. Queried via HTTP interface.
+      kind: 'clickhouse';
+      host: string;
+      port: number;
+      username: string;
+      database: string;
+    }
+  | {
+      // F53: MongoDB document store. Collections exposed as SQL tables.
+      kind: 'mongodb';
+      host: string;
+      port: number;
+      username: string;
+      database: string;
+      auth_db: string;
+    }
+  | {
+      // F53: Redis key-value store. Exposed as virtual `keys` table.
+      kind: 'redis';
+      host: string;
+      port: number;
+      db: number;
+    }
+  | {
+      // F53: Local SQLite database file.
+      kind: 'sqlite';
+      path: string;
     };
 
 /** One bookmarked source in the Sources sidebar. */

@@ -150,6 +150,20 @@ export function sourceKindLabel(source: DataSource): string {
       return 'Azure Blob';
     case 'one_drive':
       return 'OneDrive';
+    case 'mysql':
+      return 'MySQL';
+    case 'postgresql':
+      return 'PostgreSQL';
+    case 'snowflake':
+      return 'Snowflake';
+    case 'clickhouse':
+      return 'ClickHouse';
+    case 'mongodb':
+      return 'MongoDB';
+    case 'redis':
+      return 'Redis';
+    case 'sqlite':
+      return 'SQLite';
   }
 }
 
@@ -251,6 +265,13 @@ export function scanKeyOf(source: DataSource): string | null {
     case 'dropbox':
     case 'azure_blob':
     case 'one_drive':
+    case 'mysql':
+    case 'postgresql':
+    case 'snowflake':
+    case 'clickhouse':
+    case 'mongodb':
+    case 'redis':
+    case 'sqlite':
       return null;
   }
 }

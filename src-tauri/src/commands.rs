@@ -2398,7 +2398,13 @@ pub async fn rescan_source_by_id<R: Runtime>(
             }
             last
         }
-        SourceKind::Mysql { .. } | SourceKind::Postgresql { .. } => {
+        SourceKind::Mysql { .. }
+        | SourceKind::Postgresql { .. }
+        | SourceKind::Snowflake { .. }
+        | SourceKind::Clickhouse { .. }
+        | SourceKind::Mongodb { .. }
+        | SourceKind::Redis { .. }
+        | SourceKind::Sqlite { .. } => {
             Ok(serde_json::json!({
                 "skipped": true,
                 "reason": "database source — schema is introspected on connect, not file-scanned"
@@ -3811,6 +3817,11 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::OneDrive { .. } => None,
             crate::sources::SourceKind::Mysql { .. } => None,
             crate::sources::SourceKind::Postgresql { .. } => None,
+            crate::sources::SourceKind::Snowflake { .. } => None,
+            crate::sources::SourceKind::Clickhouse { .. } => None,
+            crate::sources::SourceKind::Mongodb { .. } => None,
+            crate::sources::SourceKind::Redis { .. } => None,
+            crate::sources::SourceKind::Sqlite { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3845,6 +3856,11 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         &removed_kind,
         Some(crate::sources::SourceKind::Mysql { .. })
         | Some(crate::sources::SourceKind::Postgresql { .. })
+        | Some(crate::sources::SourceKind::Snowflake { .. })
+        | Some(crate::sources::SourceKind::Clickhouse { .. })
+        | Some(crate::sources::SourceKind::Mongodb { .. })
+        | Some(crate::sources::SourceKind::Redis { .. })
+        | Some(crate::sources::SourceKind::Sqlite { .. })
     );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
@@ -5192,6 +5208,106 @@ pub async fn add_postgresql_source(
     .await
 }
 
+/// Add a Snowflake source via DuckDB community snowflake extension.
+#[tauri::command]
+pub async fn add_snowflake_source(
+    account: String,
+    username: String,
+    password: String,
+    warehouse: String,
+    database: String,
+    schema: Option<String>,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Snowflake {
+            account: account.trim().to_string(),
+            username: username.trim().to_string(),
+            warehouse: warehouse.trim().to_string(),
+            database: database.trim().to_string(),
+            schema: schema.unwrap_or_else(|| "PUBLIC".to_string()),
+        },
+        &password,
+    )
+    .await
+}
+
+/// Add a ClickHouse source via HTTP interface.
+#[tauri::command]
+pub async fn add_clickhouse_source(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    password: String,
+    database: String,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Clickhouse {
+            host: host.trim().to_string(),
+            port: port.unwrap_or(8123),
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+        },
+        &password,
+    )
+    .await
+}
+
+/// Add a MongoDB source. SQL queries are bridged via DuckDB in-memory tables.
+#[tauri::command]
+pub async fn add_mongodb_source(
+    host: String,
+    port: Option<u16>,
+    username: String,
+    password: String,
+    database: String,
+    auth_db: Option<String>,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Mongodb {
+            host: host.trim().to_string(),
+            port: port.unwrap_or(27017),
+            username: username.trim().to_string(),
+            database: database.trim().to_string(),
+            auth_db: auth_db.unwrap_or_else(|| "admin".to_string()),
+        },
+        &password,
+    )
+    .await
+}
+
+/// Add a Redis source. Password is optional (empty string = no auth).
+#[tauri::command]
+pub async fn add_redis_source(
+    host: String,
+    port: Option<u16>,
+    db: Option<u8>,
+    password: String,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Redis {
+            host: host.trim().to_string(),
+            port: port.unwrap_or(6379),
+            db: db.unwrap_or(0),
+        },
+        &password,
+    )
+    .await
+}
+
+/// Add a SQLite file source via DuckDB sqlite extension.
+#[tauri::command]
+pub async fn add_sqlite_source(
+    path: String,
+) -> Result<String, String> {
+    add_db_source_inner(
+        crate::sources::SourceKind::Sqlite {
+            path: std::path::PathBuf::from(path.trim()),
+        },
+        "", // no password for SQLite
+    )
+    .await
+}
+
 async fn add_db_source_inner(
     kind: crate::sources::SourceKind,
     password: &str,
@@ -5215,6 +5331,24 @@ async fn add_db_source_inner(
         }
         crate::sources::SourceKind::Postgresql { host, port, database, .. } => {
             format!("{host}:{port}/{database}")
+        }
+        crate::sources::SourceKind::Snowflake { account, database, .. } => {
+            format!("{account}/{database}")
+        }
+        crate::sources::SourceKind::Clickhouse { host, port, database, .. } => {
+            format!("{host}:{port}/{database}")
+        }
+        crate::sources::SourceKind::Mongodb { host, port, database, .. } => {
+            format!("{host}:{port}/{database}")
+        }
+        crate::sources::SourceKind::Redis { host, port, db, .. } => {
+            format!("redis {host}:{port}/db{db}")
+        }
+        crate::sources::SourceKind::Sqlite { path } => {
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .to_string()
         }
         _ => unreachable!(),
     };

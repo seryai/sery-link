@@ -16,6 +16,11 @@ fn kind_str(kind: &SourceKind) -> &'static str {
         SourceKind::OneDrive { .. }    => "one_drive",
         SourceKind::Mysql { .. }       => "mysql",
         SourceKind::Postgresql { .. }  => "postgresql",
+        SourceKind::Snowflake { .. }   => "snowflake",
+        SourceKind::Clickhouse { .. }  => "clickhouse",
+        SourceKind::Mongodb { .. }     => "mongodb",
+        SourceKind::Redis { .. }       => "redis",
+        SourceKind::Sqlite { .. }      => "sqlite",
     }
 }
 

@@ -138,6 +138,53 @@ pub enum SourceKind {
         username: String,
         database: String,
     },
+
+    /// F53: Snowflake data warehouse via DuckDB community snowflake extension.
+    /// Password lives in the keychain via db_creds, keyed on source_id.
+    Snowflake {
+        account: String,
+        username: String,
+        warehouse: String,
+        database: String,
+        #[serde(default = "default_snowflake_schema")]
+        schema: String,
+    },
+
+    /// F53: ClickHouse via HTTP interface (port 8123). Password in keychain.
+    Clickhouse {
+        host: String,
+        #[serde(default = "default_clickhouse_http_port")]
+        port: u16,
+        username: String,
+        database: String,
+    },
+
+    /// F53: MongoDB. Password in keychain. SQL is executed via DuckDB in-memory
+    /// bridge (collections loaded as temp tables via read_json_auto).
+    Mongodb {
+        host: String,
+        #[serde(default = "default_mongodb_port")]
+        port: u16,
+        username: String,
+        database: String,
+        #[serde(default = "default_mongodb_auth_db")]
+        auth_db: String,
+    },
+
+    /// F53: Redis. Password (optional) in keychain. Exposes all keys as a
+    /// virtual `keys` table with columns (key, value, value_type, ttl).
+    Redis {
+        host: String,
+        #[serde(default = "default_redis_port")]
+        port: u16,
+        #[serde(default)]
+        db: u8,
+    },
+
+    /// F53: SQLite file via DuckDB built-in sqlite extension. No password needed.
+    Sqlite {
+        path: PathBuf,
+    },
 }
 
 fn default_sftp_port() -> u16 {
@@ -150,6 +197,26 @@ fn default_mysql_port() -> u16 {
 
 fn default_postgresql_port() -> u16 {
     5432
+}
+
+fn default_snowflake_schema() -> String {
+    "PUBLIC".to_string()
+}
+
+fn default_clickhouse_http_port() -> u16 {
+    8123
+}
+
+fn default_mongodb_port() -> u16 {
+    27017
+}
+
+fn default_mongodb_auth_db() -> String {
+    "admin".to_string()
+}
+
+fn default_redis_port() -> u16 {
+    6379
 }
 
 impl SourceKind {
@@ -165,8 +232,18 @@ impl SourceKind {
     }
 
     /// Returns true if this source is a live database (not a file store).
+    #[allow(dead_code)]
     pub fn is_database(&self) -> bool {
-        matches!(self, SourceKind::Mysql { .. } | SourceKind::Postgresql { .. })
+        matches!(
+            self,
+            SourceKind::Mysql { .. }
+                | SourceKind::Postgresql { .. }
+                | SourceKind::Snowflake { .. }
+                | SourceKind::Clickhouse { .. }
+                | SourceKind::Mongodb { .. }
+                | SourceKind::Redis { .. }
+                | SourceKind::Sqlite { .. }
+        )
     }
 }
 
@@ -342,6 +419,23 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
             database,
             ..
         } => format!("{host}:{port}/{database}"),
+        SourceKind::Snowflake {
+            account, database, ..
+        } => format!("{account}/{database}"),
+        SourceKind::Clickhouse {
+            host, port, database, ..
+        } => format!("{host}:{port}/{database}"),
+        SourceKind::Mongodb {
+            host, port, database, ..
+        } => format!("{host}:{port}/{database}"),
+        SourceKind::Redis { host, port, db, .. } => {
+            format!("redis {host}:{port}/db{db}")
+        }
+        SourceKind::Sqlite { path } => path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy()
+            .to_string(),
         SourceKind::AzureBlob {
             account_url,
             prefix,

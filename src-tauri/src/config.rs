@@ -539,6 +539,11 @@ impl Config {
                 SourceKind::OneDrive { .. } => None,
                 SourceKind::Mysql { .. } => None,
                 SourceKind::Postgresql { .. } => None,
+                SourceKind::Snowflake { .. } => None,
+                SourceKind::Clickhouse { .. } => None,
+                SourceKind::Mongodb { .. } => None,
+                SourceKind::Redis { .. } => None,
+                SourceKind::Sqlite { .. } => None,
             })
             .collect();
 
@@ -794,6 +799,21 @@ impl Config {
             SourceKind::Postgresql {
                 host, port, database, ..
             } => Some(format!("postgresql://{}:{}/{}", host, port, database)),
+            SourceKind::Snowflake {
+                account, username, database, ..
+            } => Some(format!("snowflake://{}@{}/{}", username, account, database)),
+            SourceKind::Clickhouse {
+                host, port, database, ..
+            } => Some(format!("clickhouse://{}:{}/{}", host, port, database)),
+            SourceKind::Mongodb {
+                host, port, database, ..
+            } => Some(format!("mongodb://{}:{}/{}", host, port, database)),
+            SourceKind::Redis {
+                host, port, db, ..
+            } => Some(format!("redis://{}:{}/{}", host, port, db)),
+            SourceKind::Sqlite { path } => {
+                Some(path.to_string_lossy().to_string())
+            }
         };
         if let Some(p) = &needle {
             if let Some(existing) = self.sources.iter().find(|s| match &s.kind {
@@ -825,6 +845,21 @@ impl Config {
                 SourceKind::Postgresql {
                     host, port, database, ..
                 } => format!("postgresql://{}:{}/{}", host, port, database) == *p,
+                SourceKind::Snowflake {
+                    account, username, database, ..
+                } => format!("snowflake://{}@{}/{}", username, account, database) == *p,
+                SourceKind::Clickhouse {
+                    host, port, database, ..
+                } => format!("clickhouse://{}:{}/{}", host, port, database) == *p,
+                SourceKind::Mongodb {
+                    host, port, database, ..
+                } => format!("mongodb://{}:{}/{}", host, port, database) == *p,
+                SourceKind::Redis {
+                    host, port, db, ..
+                } => format!("redis://{}:{}/{}", host, port, db) == *p,
+                SourceKind::Sqlite { path } => {
+                    path.to_string_lossy().as_ref() == p.as_str()
+                }
             }) {
                 return existing.id.clone();
             }
@@ -916,6 +951,11 @@ impl Config {
             SourceKind::OneDrive { .. } => None,
             SourceKind::Mysql { .. } => None,
             SourceKind::Postgresql { .. } => None,
+            SourceKind::Snowflake { .. } => None,
+            SourceKind::Clickhouse { .. } => None,
+            SourceKind::Mongodb { .. } => None,
+            SourceKind::Redis { .. } => None,
+            SourceKind::Sqlite { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);
