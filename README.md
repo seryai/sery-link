@@ -1,6 +1,6 @@
 # Sery Link
 
-**Universal cloud storage browser, AI-era. Free + open source (AGPL-3.0).**
+**The universal data gateway — every cloud, every machine, one search. Free + open source (AGPL-3.0).**
 
 Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
 
