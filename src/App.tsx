@@ -240,7 +240,7 @@ function AppInner() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="flex w-56 flex-col border-r border-white/20 dark:border-white/10 bg-transparent">
+        <aside className="flex w-56 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-black/[0.03] dark:bg-white/[0.04]">
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
             <NavLink
