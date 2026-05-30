@@ -285,12 +285,26 @@ export function SourcesSidebar() {
       }
       return;
     }
+    // Database sources introspect schema on connect — no file scan needed.
+    if (
+      source.kind.kind === 'mysql' ||
+      source.kind.kind === 'postgresql' ||
+      source.kind.kind === 'snowflake' ||
+      source.kind.kind === 'clickhouse' ||
+      source.kind.kind === 'mongodb' ||
+      source.kind.kind === 'redis' ||
+      source.kind.kind === 'sqlite'
+    ) {
+      toast.success(`"${source.name}" schema is refreshed automatically on connect.`);
+      return;
+    }
+    if (source.kind.kind === 'google_drive') {
+      toast.error('Rescan Google Drive sources from the source detail view.');
+      return;
+    }
     const key = scanKeyOf(source);
     if (!key) {
-      // Drive sources scan via gdrive_walker, not the path-keyed
-      // scanner. Until the Drive adapter rewires through DataSource,
-      // we surface a clean message instead of silently failing.
-      toast.error('Rescan for Google Drive sources is not yet supported here.');
+      toast.error('Rescan is not supported for this source type.');
       return;
     }
     setBusy(true);
