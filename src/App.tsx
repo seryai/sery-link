@@ -28,6 +28,7 @@ import { useTheme } from './hooks/useTheme';
 import { ToastProvider, useToast } from './components/Toast';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { StatusBar } from './components/StatusBar';
+import { DatabaseDetail } from './components/DatabaseDetail';
 import { FolderDetail } from './components/FolderDetail';
 import { SourcesSidebar } from './components/SourcesSidebar';
 import { FileDetail } from './components/FileDetail';
@@ -392,6 +393,7 @@ function AppInner() {
             <Route path="/" element={<Navigate to="/search" replace />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/folders" element={<Navigate to="/sources" replace />} />
+            <Route path="/db/:sourceId" element={<DatabaseDetail />} />
             <Route path="/folders/:folderId" element={<FolderDetail />} />
             <Route path="/sources" element={<SourcesSidebar />} />
             <Route

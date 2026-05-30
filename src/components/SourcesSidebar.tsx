@@ -492,10 +492,13 @@ export function SourcesSidebar() {
     // source_id → cache_dir so FolderDetail can render their files).
     // Until that ships, those rows render with a tooltip and no
     // navigation.
+    const DB_KINDS = ['mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis', 'sqlite'];
     const scanKey = scanKeyOf(source);
-    const onOpen = scanKey
-      ? () => navigate(`/folders/${encodeURIComponent(scanKey)}`)
-      : undefined;
+    const onOpen = DB_KINDS.includes(source.kind.kind)
+      ? () => navigate(`/db/${encodeURIComponent(source.id)}`)
+      : scanKey
+        ? () => navigate(`/folders/${encodeURIComponent(scanKey)}`)
+        : undefined;
     const props: SourceRowProps = {
       source,
       status: statusOf(source, scansInFlight),
