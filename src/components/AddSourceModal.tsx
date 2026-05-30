@@ -120,9 +120,30 @@ const S3_COMPATIBLE: ProtocolTile[] = [
   { kind: 'gcs', label: 'Google Cloud Storage', description: 'S3 interop' },
 ];
 
-// All "coming soon" tiles have shipped to Implemented. Section
-// stays so future protocol additions slot in cleanly.
-const COMING_SOON: ProtocolTile[] = [];
+type AnyKind = ImplementedKind | S3CompatibleKind;
+
+const ALL_TILES: Record<AnyKind, ProtocolTile> = Object.fromEntries(
+  [...IMPLEMENTED, ...S3_COMPATIBLE].map(t => [t.kind, t])
+) as Record<AnyKind, ProtocolTile>;
+
+const CATEGORIES: { label: string; kinds: AnyKind[] }[] = [
+  {
+    label: 'This Mac',
+    kinds: ['local', 'sqlite'],
+  },
+  {
+    label: 'Cloud Storage',
+    kinds: ['s3', 'gdrive', 'dropbox', 'onedrive', 'azure', 'b2', 'wasabi', 'r2', 'gcs'],
+  },
+  {
+    label: 'File Servers',
+    kinds: ['sftp', 'webdav', 'https'],
+  },
+  {
+    label: 'Databases',
+    kinds: ['mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis'],
+  },
+];
 
 /** Per-S3-compatible-provider presets for the UrlStage form. The
  *  endpoint is the host DuckDB needs (no scheme); the placeholder
@@ -264,12 +285,12 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/20 p-4"
       onClick={closeAll}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-2xl flex-col rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+        className="flex w-full max-w-2xl flex-col rounded-xl bg-[#f5f5f5] shadow-2xl dark:bg-[#2c2c2e]"
         style={{ maxHeight: 'calc(100vh - 2rem)' }}
       >
         <ModalHeader
@@ -277,7 +298,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           onBack={() => setStage({ kind: 'picker' })}
           onClose={closeAll}
         />
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto p-4">
           {stage.kind === 'picker' && (
             <PickerStage
               busy={busy}
@@ -468,7 +489,7 @@ function ModalHeader({
                             ? 'Keys are scanned and exposed as a SQL table. Optional password stored in your OS keychain.'
                             : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
-    <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+    <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4 dark:border-white/[0.08]">
       <div className="flex items-start gap-3">
         {stage.kind !== 'picker' && (
           <button
@@ -539,100 +560,53 @@ function PickerStage({
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   return (
-    <>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {IMPLEMENTED.map((tile) => (
-          <ProtocolCard
-            key={tile.kind}
-            tile={tile}
-            disabled={busy}
-            onClick={() => {
-              switch (tile.kind) {
-                case 'local':
-                  onPickLocal();
-                  break;
-                case 'https':
-                case 's3':
-                  onPickUrl();
-                  break;
-                case 'gdrive':
-                  onPickGdrive();
-                  break;
-                case 'sftp':
-                  onPickSftp();
-                  break;
-                case 'webdav':
-                  onPickWebDav();
-                  break;
-                case 'dropbox':
-                  onPickDropbox();
-                  break;
-                case 'azure':
-                  onPickAzure();
-                  break;
-                case 'onedrive':
-                  onPickOneDrive();
-                  break;
-                case 'mysql':
-                  onPickMysql();
-                  break;
-                case 'postgresql':
-                  onPickPostgresql();
-                  break;
-                case 'snowflake':
-                  onPickSnowflake();
-                  break;
-                case 'clickhouse':
-                  onPickClickhouse();
-                  break;
-                case 'mongodb':
-                  onPickMongodb();
-                  break;
-                case 'redis':
-                  onPickRedis();
-                  break;
-                case 'sqlite':
-                  onPickSqlite();
-                  break;
-              }
-            }}
-          />
-        ))}
-      </div>
-      {/* F45: S3-compatible providers — DuckDB httpfs talks to all of
-          these the same way once s3_endpoint is set. The presets
-          fill in the right host + url_style + region so the user
-          only types their bucket URL + creds. */}
-      <div className="mt-6">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          S3-compatible
-        </h3>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {S3_COMPATIBLE.map((tile) => (
-            <ProtocolCard
-              key={tile.kind}
-              tile={tile}
-              disabled={busy}
-              onClick={() =>
-                onPickS3Compatible(tile.kind as S3CompatibleKind)
-              }
-            />
-          ))}
-        </div>
-      </div>
-      {COMING_SOON.length > 0 && (
-        <div className="mt-6">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Coming in v0.7+
-          </h3>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {COMING_SOON.map((tile) => (
-              <ProtocolCard key={tile.kind} tile={tile} disabled />
-            ))}
+    <div className="space-y-5">
+      {CATEGORIES.map((cat) => {
+        const tiles = cat.kinds.map(k => ALL_TILES[k]).filter(Boolean);
+        return (
+          <div key={cat.label}>
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+              {cat.label}
+            </h3>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {tiles.map((tile) => (
+                <ProtocolCard
+                  key={tile.kind}
+                  tile={tile}
+                  disabled={busy}
+                  onClick={() => {
+                    switch (tile.kind) {
+                      case 'local': onPickLocal(); break;
+                      case 'https':
+                      case 's3': onPickUrl(); break;
+                      case 'gdrive': onPickGdrive(); break;
+                      case 'sftp': onPickSftp(); break;
+                      case 'webdav': onPickWebDav(); break;
+                      case 'dropbox': onPickDropbox(); break;
+                      case 'azure': onPickAzure(); break;
+                      case 'onedrive': onPickOneDrive(); break;
+                      case 'mysql': onPickMysql(); break;
+                      case 'postgresql': onPickPostgresql(); break;
+                      case 'snowflake': onPickSnowflake(); break;
+                      case 'clickhouse': onPickClickhouse(); break;
+                      case 'mongodb': onPickMongodb(); break;
+                      case 'redis': onPickRedis(); break;
+                      case 'sqlite': onPickSqlite(); break;
+                      case 'b2':
+                      case 'wasabi':
+                      case 'r2':
+                      case 'gcs':
+                        onPickS3Compatible(tile.kind as S3CompatibleKind);
+                        break;
+                    }
+                  }}
+                />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
-    </>
+        );
+      })}
+    </div>
   );
 }
 
@@ -2228,12 +2202,12 @@ function ProtocolCard({
       type="button"
       disabled={disabled || isComingSoon}
       onClick={onClick}
-      className={`flex flex-col items-center gap-2 rounded-lg border p-4 text-center transition-all ${
+      className={`flex flex-col items-center gap-2 rounded-md border p-2.5 text-center transition-all ${
         isComingSoon
-          ? 'cursor-not-allowed border-dashed border-slate-200 bg-slate-50 text-slate-400 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-500'
+          ? 'cursor-not-allowed border-dashed border-black/[0.06] bg-white/40 text-slate-400 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-slate-500'
           : disabled
-            ? 'cursor-wait border-slate-200 bg-slate-50 opacity-60 dark:border-slate-700 dark:bg-slate-800/40'
-            : 'cursor-pointer border-slate-200 bg-white text-slate-700 hover:border-purple-400 hover:bg-purple-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-purple-500 dark:hover:bg-purple-900/20 dark:hover:text-slate-100'
+            ? 'cursor-wait border-black/[0.06] bg-white/70 opacity-60 dark:border-white/[0.08] dark:bg-white/[0.04]'
+            : 'cursor-pointer border-black/[0.06] bg-white/70 text-slate-700 hover:bg-white/90 hover:border-purple-400 hover:text-slate-900 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-slate-300 dark:hover:bg-white/[0.10] dark:hover:border-purple-500 dark:hover:text-slate-100'
       }`}
       title={isComingSoon ? `${tile.label} — coming in v0.7+` : tile.label}
     >
