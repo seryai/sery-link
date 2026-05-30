@@ -204,6 +204,7 @@ type Stage =
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
   const [stage, setStage] = useState<Stage>({ kind: 'picker' });
+  const [pickerTab, setPickerTab] = useState(0);
   const [busy, setBusy] = useState(false);
 
   if (!open) return null;
@@ -211,6 +212,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
   // Reset to picker stage on close so the next open starts fresh.
   const closeAll = () => {
     setStage({ kind: 'picker' });
+    setPickerTab(0);
     onClose();
   };
 
@@ -302,6 +304,8 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           {stage.kind === 'picker' && (
             <PickerStage
               busy={busy}
+              activeTab={pickerTab}
+              onTabChange={setPickerTab}
               onPickLocal={onPickLocal}
               onPickUrl={() => setStage({ kind: 'url' })}
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
@@ -524,6 +528,8 @@ function ModalHeader({
 
 function PickerStage({
   busy,
+  activeTab,
+  onTabChange,
   onPickLocal,
   onPickUrl,
   onPickGdrive,
@@ -542,6 +548,8 @@ function PickerStage({
   onPickS3Compatible,
 }: {
   busy: boolean;
+  activeTab: number;
+  onTabChange: (i: number) => void;
   onPickLocal: () => void;
   onPickUrl: () => void;
   onPickGdrive: () => void;
@@ -559,7 +567,6 @@ function PickerStage({
   onPickSqlite: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
-  const [activeTab, setActiveTab] = useState(0);
   const cat = CATEGORIES[activeTab];
   const tiles = cat.kinds.map(k => ALL_TILES[k]).filter(Boolean);
 
@@ -597,7 +604,7 @@ function PickerStage({
         {CATEGORIES.map((c, i) => (
           <button
             key={c.label}
-            onClick={() => setActiveTab(i)}
+            onClick={() => onTabChange(i)}
             className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
               i === activeTab
                 ? 'bg-white dark:bg-white/[0.12] text-slate-800 dark:text-white shadow-sm'
@@ -610,7 +617,7 @@ function PickerStage({
       </div>
 
       {/* Tile grid — fixed height, no scroll */}
-      <div className="grid grid-cols-3 gap-2 min-h-[220px] content-start">
+      <div className="grid grid-cols-3 gap-2 min-h-[360px] content-start">
         {tiles.map((tile) => (
           <ProtocolCard
             key={tile.kind}
