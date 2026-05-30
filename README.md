@@ -1,6 +1,6 @@
 # Sery Link
 
-**The universal data gateway — search every cloud without a download. Free + open source (AGPL-3.0).**
+**Your private data agent — search every cloud without a download. Free + open source (AGPL-3.0).**
 
 Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
 
@@ -12,7 +12,7 @@ Sery Link works in three independent modes. Use any combination — they coexist
 
 | Mode | What it does | Sery account? |
 |---|---|---|
-| **Local — universal data gateway** | Connect every storage you have. Column-aware search across all of them, per-file column profiles, inline tabular preview (parquet footers read over the wire — no download), CSV/Excel → Parquet conversion. Runs fully offline. | Not required |
+| **Local — private data agent** | Connect every storage you have. Column-aware search across all of them, per-file column profiles, inline tabular preview (parquet footers read over the wire — no download), CSV/Excel → Parquet conversion. Runs fully offline. | Not required |
 | **MCP stdio** | `Settings → MCP` toggle exposes a folder to Claude Desktop / Cursor / Continue via local stdio. The external LLM uses its own key. | Not required |
 | **Cloud workspace** | Connect with a workspace key — AI chat across all your sources at app.sery.ai/chat, multi-machine catalog sync, cross-machine search, MCP cloud endpoint at mcp.sery.ai. The dashboard can also trigger rescans, run SQL, and send OS notifications to any connected machine via the agent RPC layer. | Free or Plus |
 
