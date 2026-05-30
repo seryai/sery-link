@@ -408,9 +408,9 @@ fn introspect_blocking(
     conn_str: &str,
     db_type: &str,
     ext_install_sql: &str,
-    schema: Option<&str>,
-    db_name: &str,
-    use_sqlite: bool,
+    _schema: Option<&str>,
+    _db_name: &str,
+    _use_sqlite: bool,
 ) -> Result<Vec<TableSchema>> {
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("open: {e}")))?;
@@ -423,45 +423,24 @@ fn introspect_blocking(
     ))
     .map_err(|e| AgentError::Database(format!("ATTACH: {e}")))?;
 
-    conn.execute_batch("USE _db;")
-        .map_err(|e| AgentError::Database(format!("USE: {e}")))?;
-
-    if let Some(s) = schema {
-        conn.execute_batch(&format!("SET schema='{s}';"))
-            .map_err(|e| AgentError::Database(format!("SET schema: {e}")))?;
-    }
-
-    let col_sql = if use_sqlite {
-        // SQLite: DuckDB's sqlite extension exposes information_schema after ATTACH.
-        "SELECT table_name, column_name, data_type, 'YES' as is_nullable \
-         FROM information_schema.columns \
-         ORDER BY table_name, ordinal_position".to_string()
-    } else if db_type == "postgres" {
-        // PostgreSQL: table_schema is the schema name (e.g. 'public'), NOT the
-        // database name. Filter out built-in system schemas instead.
-        "SELECT table_name, column_name, data_type, is_nullable \
-         FROM information_schema.columns \
-         WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast', 'pg_internal') \
-         ORDER BY table_name, ordinal_position".to_string()
-    } else if db_type == "snowflake" {
-        // Snowflake: table_schema is the schema name (typically 'PUBLIC').
-        // Exclude Snowflake system schemas.
-        "SELECT table_name, column_name, data_type, is_nullable \
-         FROM information_schema.columns \
-         WHERE table_schema NOT IN ('INFORMATION_SCHEMA') \
-         ORDER BY table_name, ordinal_position".to_string()
-    } else {
-        // MySQL and others: table_schema IS the database name.
-        format!(
-            "SELECT table_name, column_name, data_type, is_nullable \
-             FROM information_schema.columns \
-             WHERE table_schema = '{db_name}' \
-             ORDER BY table_name, ordinal_position"
-        )
-    };
+    // duckdb_columns() is DuckDB's own catalog function — works for every
+    // attached database type without relying on information_schema visibility
+    // after USE. Filter by database_name='_db' to only see the attached DB,
+    // exclude well-known system schemas, and skip internal columns.
+    let col_sql =
+        "SELECT table_name, column_name, data_type, \
+         CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END \
+         FROM duckdb_columns() \
+         WHERE database_name = '_db' \
+           AND schema_name NOT IN ( \
+               'information_schema', 'pg_catalog', 'pg_toast', \
+               'pg_internal', 'INFORMATION_SCHEMA', 'pg_toast_temp_1' \
+           ) \
+           AND NOT internal \
+         ORDER BY table_name, column_index";
 
     let mut stmt = conn
-        .prepare(&col_sql)
+        .prepare(col_sql)
         .map_err(|e| AgentError::Database(format!("prepare schema query: {e}")))?;
 
     let mut tables: std::collections::BTreeMap<String, Vec<ColumnInfo>> =
