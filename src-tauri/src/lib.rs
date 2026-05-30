@@ -125,6 +125,16 @@ pub fn run() {
                 let _ = window.set_icon(icon);
             }
 
+            // Apply macOS vibrancy — frosted glass sidebar effect.
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                if let Some(window) = app.get_webview_window("main") {
+                    apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None)
+                        .unwrap_or_else(|e| eprintln!("[setup] vibrancy not supported: {e}"));
+                }
+            }
+
             // Stash a global AppHandle so background tasks (watcher, periodic
             // rescan) can emit events without us threading it through every
             // layer of the call graph.

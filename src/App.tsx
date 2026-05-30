@@ -39,6 +39,7 @@ import { Notifications } from './components/Notifications';
 import { Recipes } from './components/Recipes';
 import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
+import { TitleBar } from './components/TitleBar';
 import { CommandPalette } from './components/CommandPalette';
 import type { AgentConfig, AgentStats, StoredSchemaNotification } from './types/events';
 
@@ -215,7 +216,7 @@ function AppInner() {
 
   if (bootstrapping) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
+      <div className="flex h-screen items-center justify-center bg-transparent">
         <div className="text-center">
           <Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-purple-600 dark:text-purple-400" />
           <p className="text-sm text-slate-600 dark:text-slate-400">
@@ -233,19 +234,19 @@ function AppInner() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50 dark:bg-slate-950">
+    <div className="flex h-screen flex-col bg-transparent">
       <StatusBar />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="flex w-56 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-
+        <aside className="flex w-56 flex-col border-r border-white/20 dark:border-white/10 bg-transparent">
+          <TitleBar />
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
             <NavLink
               to="/search"
               className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -258,7 +259,7 @@ function AppInner() {
             <NavLink
               to="/sources"
               className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -271,7 +272,7 @@ function AppInner() {
             <NavLink
               to="/results"
               className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -287,7 +288,7 @@ function AppInner() {
                 <NavLink
                   to="/recipes"
                   className={({ isActive }) =>
-                    `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                       isActive
                         ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                         : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -306,7 +307,7 @@ function AppInner() {
             <NavLink
               to="/settings"
               className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -324,7 +325,7 @@ function AppInner() {
                   e.stopPropagation();
                   setShowMoreDropdown(!showMoreDropdown);
                 }}
-                className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                className={`flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                   isMoreActive
                     ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -349,7 +350,7 @@ function AppInner() {
                       setShowMoreDropdown(false);
                     }}
                     className={({ isActive }) =>
-                      `flex w-full items-center justify-between gap-3 px-3 py-2 text-sm transition-colors ${
+                      `flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-sm transition-colors ${
                         isActive
                           ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                           : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -369,7 +370,7 @@ function AppInner() {
                       setShowMoreDropdown(false);
                     }}
                     className={({ isActive }) =>
-                      `flex w-full items-center gap-3 px-3 py-2 text-sm transition-colors ${
+                      `flex w-full items-center gap-3 px-2.5 py-1.5 text-sm transition-colors ${
                         isActive
                           ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
                           : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -386,7 +387,7 @@ function AppInner() {
         </aside>
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto bg-white/85 dark:bg-[#1c1c1e]/90 backdrop-blur-none">
           <Routes>
             <Route path="/" element={<Navigate to="/search" replace />} />
             <Route path="/search" element={<SearchPage />} />
