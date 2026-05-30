@@ -235,12 +235,12 @@ function AppInner() {
 
   return (
     <div className="flex h-screen flex-col bg-transparent">
+      <TitleBar />
       <StatusBar />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside className="flex w-56 flex-col border-r border-white/20 dark:border-white/10 bg-transparent">
-          <TitleBar />
 
           <nav className="flex flex-1 flex-col space-y-0.5 p-2">
             <NavLink
