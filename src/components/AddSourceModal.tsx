@@ -291,14 +291,14 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
       <div
         onClick={(e) => e.stopPropagation()}
         className="flex w-full max-w-2xl flex-col rounded-xl bg-[#f5f5f5] shadow-2xl dark:bg-[#2c2c2e]"
-        style={{ maxHeight: 'calc(100vh - 2rem)' }}
+
       >
         <ModalHeader
           stage={stage}
           onBack={() => setStage({ kind: 'picker' })}
           onClose={closeAll}
         />
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="p-4">
           {stage.kind === 'picker' && (
             <PickerStage
               busy={busy}
@@ -559,53 +559,67 @@ function PickerStage({
   onPickSqlite: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
+  const [activeTab, setActiveTab] = useState(0);
+  const cat = CATEGORIES[activeTab];
+  const tiles = cat.kinds.map(k => ALL_TILES[k]).filter(Boolean);
+
+  const handleTile = (kind: AnyKind) => {
+    switch (kind) {
+      case 'local': onPickLocal(); break;
+      case 'https':
+      case 's3': onPickUrl(); break;
+      case 'gdrive': onPickGdrive(); break;
+      case 'sftp': onPickSftp(); break;
+      case 'webdav': onPickWebDav(); break;
+      case 'dropbox': onPickDropbox(); break;
+      case 'azure': onPickAzure(); break;
+      case 'onedrive': onPickOneDrive(); break;
+      case 'mysql': onPickMysql(); break;
+      case 'postgresql': onPickPostgresql(); break;
+      case 'snowflake': onPickSnowflake(); break;
+      case 'clickhouse': onPickClickhouse(); break;
+      case 'mongodb': onPickMongodb(); break;
+      case 'redis': onPickRedis(); break;
+      case 'sqlite': onPickSqlite(); break;
+      case 'b2':
+      case 'wasabi':
+      case 'r2':
+      case 'gcs':
+        onPickS3Compatible(kind as S3CompatibleKind);
+        break;
+    }
+  };
+
   return (
-    <div className="space-y-5">
-      {CATEGORIES.map((cat) => {
-        const tiles = cat.kinds.map(k => ALL_TILES[k]).filter(Boolean);
-        return (
-          <div key={cat.label}>
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-              {cat.label}
-            </h3>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {tiles.map((tile) => (
-                <ProtocolCard
-                  key={tile.kind}
-                  tile={tile}
-                  disabled={busy}
-                  onClick={() => {
-                    switch (tile.kind) {
-                      case 'local': onPickLocal(); break;
-                      case 'https':
-                      case 's3': onPickUrl(); break;
-                      case 'gdrive': onPickGdrive(); break;
-                      case 'sftp': onPickSftp(); break;
-                      case 'webdav': onPickWebDav(); break;
-                      case 'dropbox': onPickDropbox(); break;
-                      case 'azure': onPickAzure(); break;
-                      case 'onedrive': onPickOneDrive(); break;
-                      case 'mysql': onPickMysql(); break;
-                      case 'postgresql': onPickPostgresql(); break;
-                      case 'snowflake': onPickSnowflake(); break;
-                      case 'clickhouse': onPickClickhouse(); break;
-                      case 'mongodb': onPickMongodb(); break;
-                      case 'redis': onPickRedis(); break;
-                      case 'sqlite': onPickSqlite(); break;
-                      case 'b2':
-                      case 'wasabi':
-                      case 'r2':
-                      case 'gcs':
-                        onPickS3Compatible(tile.kind as S3CompatibleKind);
-                        break;
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        );
-      })}
+    <div className="flex flex-col gap-4">
+      {/* Tab bar */}
+      <div className="flex gap-1 rounded-lg bg-black/[0.05] dark:bg-white/[0.06] p-1">
+        {CATEGORIES.map((c, i) => (
+          <button
+            key={c.label}
+            onClick={() => setActiveTab(i)}
+            className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              i === activeTab
+                ? 'bg-white dark:bg-white/[0.12] text-slate-800 dark:text-white shadow-sm'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+            }`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tile grid — fixed height, no scroll */}
+      <div className="grid grid-cols-3 gap-2">
+        {tiles.map((tile) => (
+          <ProtocolCard
+            key={tile.kind}
+            tile={tile}
+            disabled={busy}
+            onClick={() => handleTile(tile.kind as AnyKind)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
