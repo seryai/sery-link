@@ -432,12 +432,26 @@ fn introspect_blocking(
     }
 
     let col_sql = if use_sqlite {
-        // SQLite: use sqlite_master to list tables, then information_schema.columns
-        // DuckDB's sqlite extension exposes information_schema after ATTACH.
+        // SQLite: DuckDB's sqlite extension exposes information_schema after ATTACH.
         "SELECT table_name, column_name, data_type, 'YES' as is_nullable \
          FROM information_schema.columns \
          ORDER BY table_name, ordinal_position".to_string()
+    } else if db_type == "postgres" {
+        // PostgreSQL: table_schema is the schema name (e.g. 'public'), NOT the
+        // database name. Filter out built-in system schemas instead.
+        "SELECT table_name, column_name, data_type, is_nullable \
+         FROM information_schema.columns \
+         WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast', 'pg_internal') \
+         ORDER BY table_name, ordinal_position".to_string()
+    } else if db_type == "snowflake" {
+        // Snowflake: table_schema is the schema name (typically 'PUBLIC').
+        // Exclude Snowflake system schemas.
+        "SELECT table_name, column_name, data_type, is_nullable \
+         FROM information_schema.columns \
+         WHERE table_schema NOT IN ('INFORMATION_SCHEMA') \
+         ORDER BY table_name, ordinal_position".to_string()
     } else {
+        // MySQL and others: table_schema IS the database name.
         format!(
             "SELECT table_name, column_name, data_type, is_nullable \
              FROM information_schema.columns \
