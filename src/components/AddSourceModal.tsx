@@ -610,7 +610,7 @@ function PickerStage({
       </div>
 
       {/* Tile grid — fixed height, no scroll */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-2 min-h-[220px] content-start">
         {tiles.map((tile) => (
           <ProtocolCard
             key={tile.kind}
