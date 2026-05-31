@@ -35,7 +35,14 @@ export type SourceKind =
   | 'webdav'
   | 'dropbox'
   | 'azure'
-  | 'onedrive';
+  | 'onedrive'
+  | 'mysql'
+  | 'postgresql'
+  | 'redis'
+  | 'mongodb'
+  | 'sqlite'
+  | 'snowflake'
+  | 'clickhouse';
 
 export function classifySource(path: string): SourceKind {
   const lower = path.trim().toLowerCase();
@@ -74,6 +81,20 @@ export function sourceKindLabel(kind: SourceKind): string {
       return 'Azure Blob';
     case 'onedrive':
       return 'OneDrive';
+    case 'mysql':
+      return 'MySQL';
+    case 'postgresql':
+      return 'PostgreSQL';
+    case 'redis':
+      return 'Redis';
+    case 'mongodb':
+      return 'MongoDB';
+    case 'sqlite':
+      return 'SQLite';
+    case 'snowflake':
+      return 'Snowflake';
+    case 'clickhouse':
+      return 'ClickHouse';
   }
 }
 

@@ -204,7 +204,14 @@ export function legacyKindStringOf(
   | 'webdav'
   | 'dropbox'
   | 'azure'
-  | 'onedrive' {
+  | 'onedrive'
+  | 'mysql'
+  | 'postgresql'
+  | 'redis'
+  | 'mongodb'
+  | 'sqlite'
+  | 'snowflake'
+  | 'clickhouse' {
   switch (source.kind.kind) {
     case 'local':
       return 'local';
@@ -224,6 +231,20 @@ export function legacyKindStringOf(
       return 'azure';
     case 'one_drive':
       return 'onedrive';
+    case 'mysql':
+      return 'mysql';
+    case 'postgresql':
+      return 'postgresql';
+    case 'redis':
+      return 'redis';
+    case 'mongodb':
+      return 'mongodb';
+    case 'sqlite':
+      return 'sqlite';
+    case 'snowflake':
+      return 'snowflake';
+    case 'clickhouse':
+      return 'clickhouse';
     default:
       return 'local';
   }

@@ -18,6 +18,13 @@ import {
   SiWasabi,
   SiCloudflare,
   SiGooglecloudstorage,
+  SiMysql,
+  SiPostgresql,
+  SiRedis,
+  SiMongodb,
+  SiSqlite,
+  SiSnowflake,
+  SiClickhouse,
 } from '@icons-pack/react-simple-icons';
 import type { SourceKind } from '../utils/url';
 
@@ -61,6 +68,20 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
       return <KeyRound className={`${cls} text-slate-700 dark:text-slate-300`} />;
     case 'webdav':
       return <WebDavMark className={cls} />;
+    case 'mysql':
+      return <SiMysql size={px} color="default" title="MySQL" />;
+    case 'postgresql':
+      return <SiPostgresql size={px} color="default" title="PostgreSQL" />;
+    case 'redis':
+      return <SiRedis size={px} color="default" title="Redis" />;
+    case 'mongodb':
+      return <SiMongodb size={px} color="default" title="MongoDB" />;
+    case 'sqlite':
+      return <SiSqlite size={px} color="default" title="SQLite" />;
+    case 'snowflake':
+      return <SiSnowflake size={px} color="default" title="Snowflake" />;
+    case 'clickhouse':
+      return <SiClickhouse size={px} color="default" title="ClickHouse" />;
     default:
       return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
@@ -110,6 +131,20 @@ export function sourceIconBgClass(kind: SourceKind | string): string {
       return 'bg-sky-100 dark:bg-sky-950/40';
     case 'onedrive':
       return 'bg-blue-100 dark:bg-blue-950/40';
+    case 'mysql':
+      return 'bg-orange-100 dark:bg-orange-950/40';
+    case 'postgresql':
+      return 'bg-blue-100 dark:bg-blue-950/40';
+    case 'redis':
+      return 'bg-red-100 dark:bg-red-950/40';
+    case 'mongodb':
+      return 'bg-green-100 dark:bg-green-950/40';
+    case 'sqlite':
+      return 'bg-sky-100 dark:bg-sky-950/40';
+    case 'snowflake':
+      return 'bg-sky-100 dark:bg-sky-950/40';
+    case 'clickhouse':
+      return 'bg-yellow-100 dark:bg-yellow-950/40';
     default:
       return 'bg-slate-100 dark:bg-slate-800';
   }
