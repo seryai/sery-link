@@ -466,6 +466,11 @@ fn introspect_blocking(
     ))
     .map_err(|e| AgentError::Database(format!("ATTACH: {e}")))?;
 
+    // Normalize to lowercase so match arms work regardless of how
+    // build_attach_string capitalises the type ("POSTGRES" vs "postgres").
+    let db_type_lc = db_type.to_ascii_lowercase();
+    let db_type = db_type_lc.as_str();
+
     const SYS_DUCKDB: &str =
         "'information_schema', 'pg_catalog', 'pg_toast', \
          'pg_internal', 'INFORMATION_SCHEMA', 'pg_toast_temp_1'";
