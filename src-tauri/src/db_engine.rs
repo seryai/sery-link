@@ -1,13 +1,12 @@
 //! F52 — Database query execution and schema introspection.
 //!
-//! Handles MySQL and PostgreSQL sources via DuckDB's community extensions
-//! (mysql_scanner, postgres_scanner). The extension is installed at
-//! runtime on first use; subsequent connections reuse the cached install.
+//! MySQL and PostgreSQL use native connection pools (db-core crate).
+//! Snowflake and SQLite keep DuckDB ATTACH.
+//! ClickHouse uses HTTP. MongoDB and Redis use their dedicated clients.
 //!
 //! Security model:
 //!   - SELECT only. DDL/DML keywords are rejected before the query runs.
 //!   - Credentials are loaded from the OS keychain, never from the query string.
-//!   - READ_ONLY is enforced at the ATTACH level.
 //!   - 100 000 row cap and 60 s timeout match the file-based engine.
 
 use crate::config::Config;
@@ -16,8 +15,110 @@ use crate::duckdb_engine::QueryResult;
 use crate::error::{AgentError, Result};
 use crate::sources::SourceKind;
 use duckdb::Connection;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
+
+// ─── native connection pool caches ───────────────────────────────────────────
+
+static MYSQL_POOLS: Lazy<Mutex<HashMap<String, db_core::mysql::MySqlPool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static PG_POOLS: Lazy<Mutex<HashMap<String, db_core::postgres::PgPool>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+async fn get_or_create_mysql_pool(
+    source_id: &str,
+    cfg: &db_core::mysql::MySqlConfig,
+) -> Result<db_core::mysql::MySqlPool> {
+    // Check cache first (lock scope must be short — MySqlPool is Clone).
+    if let Some(pool) = MYSQL_POOLS.lock().expect("MYSQL_POOLS").get(source_id).cloned() {
+        return Ok(pool);
+    }
+    let pool = db_core::mysql::create_pool(cfg)
+        .await
+        .map_err(|e| AgentError::Database(format!("MySQL connect: {e}")))?;
+    MYSQL_POOLS.lock().expect("MYSQL_POOLS").insert(source_id.to_string(), pool.clone());
+    Ok(pool)
+}
+
+async fn get_or_create_pg_pool(
+    source_id: &str,
+    cfg: &db_core::postgres::PgConfig,
+) -> Result<db_core::postgres::PgPool> {
+    if let Some(pool) = PG_POOLS.lock().expect("PG_POOLS").get(source_id).cloned() {
+        return Ok(pool);
+    }
+    let pool = db_core::postgres::create_pool(cfg)
+        .await
+        .map_err(|e| AgentError::Database(format!("PostgreSQL connect: {e}")))?;
+    PG_POOLS.lock().expect("PG_POOLS").insert(source_id.to_string(), pool.clone());
+    Ok(pool)
+}
+
+fn mysql_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::mysql::MySqlConfig> {
+    match cfg {
+        DbConnectionConfig::Mysql { host, port, username, database, password } => {
+            Some(db_core::mysql::MySqlConfig {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                database: database.clone(),
+                password: password.clone(),
+                ssl_mode: None,
+                ssl_ca_cert: None,
+                ssh: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn pg_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::postgres::PgConfig> {
+    match cfg {
+        DbConnectionConfig::Postgresql { host, port, username, database, password } => {
+            Some(db_core::postgres::PgConfig {
+                host: host.clone(),
+                port: *port,
+                username: username.clone(),
+                database: database.clone(),
+                password: password.clone(),
+                ssl_mode: None,
+                ssl_ca_cert: None,
+                ssh: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn db_core_result_to_query_result(r: db_core::types::QueryResult) -> QueryResult {
+    QueryResult {
+        columns: r.columns,
+        row_count: r.row_count,
+        rows: r.rows,
+        duration_ms: r.duration_ms,
+        truncated: r.truncated,
+    }
+}
+
+fn db_core_table_info_to_schema(t: db_core::types::TableInfo) -> TableSchema {
+    TableSchema {
+        table_name: t.table_name,
+        columns: t.columns.into_iter().map(|c| ColumnInfo {
+            name: c.name,
+            data_type: c.data_type,
+            nullable: c.nullable,
+            is_primary_key: c.is_primary_key,
+            default_value: c.default_value,
+        }).collect(),
+        row_count_estimate: t.row_count_estimate.map(|v| v as i64),
+        size_bytes: t.size_bytes.map(|v| v as i64),
+        indexes: vec![],
+        foreign_keys: vec![],
+    }
+}
 
 const MAX_ROWS: usize = 100_000;
 const TIMEOUT_SECS: u64 = 60;
@@ -238,6 +339,32 @@ pub async fn execute_db_query(
         AgentError::Database(format!("No credentials for source {source_id}"))
     })?;
 
+    // Native MySQL pool path.
+    if let Some(mysql_cfg) = mysql_config_from_db_config(&cfg) {
+        let pool = get_or_create_mysql_pool(source_id, &mysql_cfg).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(TIMEOUT_SECS),
+            db_core::mysql::execute_query(&pool, sql, MAX_ROWS),
+        )
+        .await
+        .map_err(|_| AgentError::Database(format!("MySQL query timed out after {TIMEOUT_SECS}s")))?
+        .map_err(|e| AgentError::Database(e))?;
+        return Ok(db_core_result_to_query_result(result));
+    }
+
+    // Native PostgreSQL pool path.
+    if let Some(pg_cfg) = pg_config_from_db_config(&cfg) {
+        let pool = get_or_create_pg_pool(source_id, &pg_cfg).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(TIMEOUT_SECS),
+            db_core::postgres::execute_query(&pool, sql, MAX_ROWS),
+        )
+        .await
+        .map_err(|_| AgentError::Database(format!("PostgreSQL query timed out after {TIMEOUT_SECS}s")))?
+        .map_err(|e| AgentError::Database(e))?;
+        return Ok(db_core_result_to_query_result(result));
+    }
+
     // Dispatch to specialised engines for HTTP / document / key-value sources.
     match &cfg {
         DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
@@ -266,7 +393,7 @@ pub async fn execute_db_query(
         _ => {}
     }
 
-    // DuckDB ATTACH path: MySQL, PostgreSQL, Snowflake.
+    // DuckDB ATTACH path: Snowflake only (MySQL/PG handled above).
     let (db_type, conn_str) = build_attach_string_from_config(&cfg);
     let ext_sql = extension_install_sql_for_config(&cfg).to_string();
     let ext_name = extension_name_for_config(&cfg).to_string();
@@ -397,6 +524,36 @@ pub async fn introspect_schema(
         AgentError::Database(format!("No credentials for source {source_id}"))
     })?;
 
+    // Native MySQL introspection.
+    if let Some(mysql_cfg) = mysql_config_from_db_config(&cfg) {
+        let database = match &cfg {
+            DbConnectionConfig::Mysql { database, .. } => database.clone(),
+            _ => unreachable!(),
+        };
+        let pool = get_or_create_mysql_pool(source_id, &mysql_cfg).await?;
+        let tables = tokio::time::timeout(
+            Duration::from_secs(30),
+            db_core::mysql::introspect_schema(&pool, &database),
+        )
+        .await
+        .map_err(|_| AgentError::Database("MySQL introspect timed out".to_string()))?
+        .map_err(|e| AgentError::Database(e))?;
+        return Ok(tables.into_iter().map(db_core_table_info_to_schema).collect());
+    }
+
+    // Native PostgreSQL introspection.
+    if let Some(pg_cfg) = pg_config_from_db_config(&cfg) {
+        let pool = get_or_create_pg_pool(source_id, &pg_cfg).await?;
+        let tables = tokio::time::timeout(
+            Duration::from_secs(30),
+            db_core::postgres::introspect_schema(&pool, "public"),
+        )
+        .await
+        .map_err(|_| AgentError::Database("PostgreSQL introspect timed out".to_string()))?
+        .map_err(|e| AgentError::Database(e))?;
+        return Ok(tables.into_iter().map(db_core_table_info_to_schema).collect());
+    }
+
     match &cfg {
         DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
             let (host, port, username, database, pw) =
@@ -433,7 +590,7 @@ pub async fn introspect_schema(
         _ => {}
     }
 
-    // DuckDB ATTACH path: MySQL, PostgreSQL, Snowflake.
+    // DuckDB ATTACH path: Snowflake only.
     let (db_type, conn_str) = build_attach_string_from_config(&cfg);
     let ext_sql = extension_install_sql_for_config(&cfg).to_string();
     let schema = default_schema_for_config(&cfg).map(|s| s.to_string());
@@ -808,6 +965,28 @@ fn introspect_blocking(
 pub fn test_connection_blocking(
     cfg: &DbConnectionConfig,
 ) -> Result<()> {
+    // Native MySQL test.
+    if let Some(mysql_cfg) = mysql_config_from_db_config(cfg) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
+        return rt
+            .block_on(db_core::mysql::test_connection(&mysql_cfg))
+            .map_err(|e| AgentError::Database(e));
+    }
+
+    // Native PostgreSQL test.
+    if let Some(pg_cfg) = pg_config_from_db_config(cfg) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
+        return rt
+            .block_on(db_core::postgres::test_connection(&pg_cfg))
+            .map_err(|e| AgentError::Database(e));
+    }
+
     match cfg {
         DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
             return test_clickhouse_connection_blocking(host, *port, username, password, database);
@@ -829,6 +1008,7 @@ pub fn test_connection_blocking(
         _ => {}
     }
 
+    // DuckDB ATTACH path for Snowflake.
     let (db_type, conn_str) = build_attach_string_from_config(cfg);
     let ext_install_sql = extension_install_sql_for_config(cfg);
     let ext_name = extension_name_for_config(cfg);

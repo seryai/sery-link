@@ -129,6 +129,8 @@ async-trait = "0.1"
 # F53: MongoDB + Redis database source types.
 mongodb = { version = "3" }
 redis = { version = "0.26", features = ["tokio-comp"] }
+# F52: Native MySQL + PostgreSQL drivers (replaces DuckDB ATTACH for those two types).
+db-core = { path = "../crates/db-core" }
 
 [dev-dependencies]
 tempfile = "3.8"
