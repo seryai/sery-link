@@ -119,55 +119,82 @@ pub enum SourceKind {
 
     /// F52: MySQL database. Password lives in .vault.json; non-secret
     /// connection metadata stored here for display.
+    /// Fields are `#[serde(default)]` for backward compatibility with
+    /// pre-9b14057 configs that stored only `{ "kind": "mysql" }`.
     Mysql {
+        #[serde(default)]
         host: String,
+        #[serde(default)]
         port: u16,
+        #[serde(default)]
         username: String,
+        #[serde(default)]
         database: String,
     },
 
     /// F52: PostgreSQL database. Same pattern as Mysql.
     Postgresql {
+        #[serde(default)]
         host: String,
+        #[serde(default)]
         port: u16,
+        #[serde(default)]
         username: String,
+        #[serde(default)]
         database: String,
     },
 
     /// F53: Snowflake data warehouse via DuckDB community snowflake extension.
     /// Password in .vault.json; non-secret metadata stored here for display.
     Snowflake {
+        #[serde(default)]
         account: String,
+        #[serde(default)]
         username: String,
+        #[serde(default)]
         warehouse: String,
+        #[serde(default)]
         database: String,
+        #[serde(default)]
         schema: String,
     },
 
     /// F53: ClickHouse via HTTP interface (port 8123).
     /// Password in .vault.json; non-secret metadata stored here for display.
     Clickhouse {
+        #[serde(default)]
         host: String,
+        #[serde(default)]
         port: u16,
+        #[serde(default)]
         username: String,
+        #[serde(default)]
         database: String,
     },
 
     /// F53: MongoDB. SQL is executed via DuckDB in-memory bridge.
     /// Password in .vault.json; non-secret metadata stored here for display.
     Mongodb {
+        #[serde(default)]
         host: String,
+        #[serde(default)]
         port: u16,
+        #[serde(default)]
         username: String,
+        #[serde(default)]
         database: String,
+        #[serde(default)]
         auth_db: String,
     },
 
     /// F53: Redis. Exposes all keys as a virtual `keys` table.
     /// Password (if any) in .vault.json; non-secret metadata stored here.
     Redis {
+        #[serde(default)]
         host: String,
+        #[serde(default)]
         port: u16,
+        #[serde(default)]
         db: u16,
     },
 

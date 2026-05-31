@@ -414,6 +414,22 @@ impl Config {
 
         config.migrate_sources_if_needed();
 
+        // ── Drop legacy empty-field DB sources (pre-9b14057) ────────────
+        //
+        // Before commit 9b14057, DB SourceKind variants stored no fields
+        // (e.g. `Mysql {}`). 9b14057 added required fields; old configs
+        // now deserialize with all-zero/empty defaults. Detect and remove
+        // them so they don't appear as broken sources in the UI.
+        config.sources.retain(|s| match &s.kind {
+            SourceKind::Mysql { host, .. }
+            | SourceKind::Postgresql { host, .. }
+            | SourceKind::Clickhouse { host, .. }
+            | SourceKind::Mongodb { host, .. }
+            | SourceKind::Redis { host, .. } => !host.is_empty(),
+            SourceKind::Snowflake { account, .. } => !account.is_empty(),
+            _ => true,
+        });
+
         // ── One-time fixup for pre-v0.8.10 misclassified sources ───────
         //
         // Before v0.8.10, add_remote_source and gdrive_watch_folder both
