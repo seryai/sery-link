@@ -452,7 +452,7 @@ fn introspect_blocking(
     db_type: &str,
     ext_install_sql: &str,
     _schema: Option<&str>,
-    _db_name: &str,
+    db_name: &str,
     _use_sqlite: bool,
 ) -> Result<Vec<TableSchema>> {
     let conn = Connection::open_in_memory()
@@ -481,7 +481,7 @@ fn introspect_blocking(
     let mut pk_cols: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
 
-    let pk_native_sql: Option<&str> = match db_type {
+    let pk_native_sql: Option<String> = match db_type {
         "postgres" => Some(
             "SELECT * FROM postgres_query('_db', \
              'SELECT kcu.table_name, kcu.column_name \
@@ -491,19 +491,25 @@ fn introspect_blocking(
                AND tc.table_schema = kcu.table_schema \
               WHERE tc.constraint_type = ''PRIMARY KEY'' \
                 AND tc.table_schema NOT IN \
-                    (''information_schema'', ''pg_catalog'', ''pg_toast'')')",
+                    (''information_schema'', ''pg_catalog'', ''pg_toast'')')"
+            .to_string(),
         ),
-        "mysql" => Some(
+        // MySQL: replace DATABASE() with actual db_name; single quotes doubled
+        // because the query string is itself inside a DuckDB single-quoted literal. — DATABASE() inside
+        // mysql_query() may return NULL depending on DuckDB driver context.
+        // Single quotes doubled ('' → ') because the whole query is inside
+        // a DuckDB string literal.
+        "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
              'SELECT TABLE_NAME, COLUMN_NAME \
               FROM information_schema.KEY_COLUMN_USAGE \
-              WHERE CONSTRAINT_NAME = \"PRIMARY\" \
-                AND TABLE_SCHEMA = DATABASE()')",
-        ),
+              WHERE CONSTRAINT_NAME = ''PRIMARY'' \
+                AND TABLE_SCHEMA = ''{db_name}''')",
+        )),
         _ => None,
     };
     if let Some(sql) = pk_native_sql {
-        match conn.prepare(sql) {
+        match conn.prepare(&sql) {
             Err(e) => eprintln!("[introspect] pk prepare failed: {e}"),
             Ok(mut st) => match st.query([]) {
                 Err(e) => eprintln!("[introspect] pk query failed: {e}"),
@@ -567,7 +573,7 @@ fn introspect_blocking(
     let mut table_sizes: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
 
-    let stats_sql: Option<&str> = match db_type {
+    let stats_sql: Option<String> = match db_type {
         "postgres" => Some(
             "SELECT * FROM postgres_query('_db', \
              'SELECT c.relname::text, \
@@ -577,21 +583,22 @@ fn introspect_blocking(
               JOIN pg_namespace n ON n.oid = c.relnamespace \
               WHERE c.relkind = ''r'' \
                 AND n.nspname NOT IN \
-                    (''information_schema'',''pg_catalog'',''pg_toast'',''pg_toast_temp_1'')')",
+                    (''information_schema'',''pg_catalog'',''pg_toast'',''pg_toast_temp_1'')')"
+            .to_string(),
         ),
-        "mysql" => Some(
+        "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
              'SELECT TABLE_NAME, \
                      CAST(TABLE_ROWS AS SIGNED), \
                      CAST(DATA_LENGTH + INDEX_LENGTH AS SIGNED) \
               FROM information_schema.TABLES \
-              WHERE TABLE_TYPE = \"BASE TABLE\" \
-                AND TABLE_SCHEMA = DATABASE()')",
-        ),
+              WHERE TABLE_TYPE = ''BASE TABLE'' \
+                AND TABLE_SCHEMA = ''{db_name}''')",
+        )),
         _ => None,
     };
     if let Some(sql) = stats_sql {
-        match conn.prepare(sql) {
+        match conn.prepare(&sql) {
             Err(e) => eprintln!("[introspect] stats prepare failed: {e}"),
             Ok(mut st) => match st.query([]) {
                 Err(e) => eprintln!("[introspect] stats query failed: {e}"),
@@ -615,7 +622,7 @@ fn introspect_blocking(
     let mut table_indexes: std::collections::HashMap<String, Vec<IndexInfo>> =
         std::collections::HashMap::new();
 
-    let idx_native_sql: Option<&str> = match db_type {
+    let idx_native_sql: Option<String> = match db_type {
         "postgres" => Some(
             // pg_indexes already excludes system indexes; filter PKs via pg_constraint.
             // Returns: tablename, indexname, is_unique (t/f), indexdef
@@ -630,22 +637,23 @@ fn introspect_blocking(
                     SELECT 1 FROM pg_constraint pc \
                     WHERE pc.conname = pi.indexname \
                       AND pc.contype = ''p'' \
-                )')",
+                )')"
+            .to_string(),
         ),
-        "mysql" => Some(
+        "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
              'SELECT TABLE_NAME, INDEX_NAME, \
                      CASE NON_UNIQUE WHEN 0 THEN 1 ELSE 0 END, \
                      GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) \
               FROM information_schema.STATISTICS \
-              WHERE TABLE_SCHEMA = DATABASE() \
+              WHERE TABLE_SCHEMA = ''{db_name}'' \
                 AND INDEX_NAME <> ''PRIMARY'' \
               GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE')",
-        ),
+        )),
         _ => None,
     };
     if let Some(sql) = idx_native_sql {
-        match conn.prepare(sql) {
+        match conn.prepare(&sql) {
             Err(e) => eprintln!("[introspect] index query prepare failed: {e}"),
             Ok(mut st) => match st.query([]) {
                 Err(e) => eprintln!("[introspect] index query exec failed: {e}"),
@@ -680,7 +688,7 @@ fn introspect_blocking(
     let mut table_fks: std::collections::HashMap<String, Vec<ForeignKeyInfo>> =
         std::collections::HashMap::new();
 
-    let fk_native_sql: Option<&str> = match db_type {
+    let fk_native_sql: Option<String> = match db_type {
         "postgres" => Some(
             "SELECT * FROM postgres_query('_db', \
              'SELECT tc.constraint_name, tc.table_name, \
@@ -697,9 +705,10 @@ fn introspect_blocking(
               WHERE tc.constraint_type = ''FOREIGN KEY'' \
                 AND tc.table_schema NOT IN \
                     (''information_schema'', ''pg_catalog'', ''pg_toast'') \
-              ORDER BY tc.constraint_name, kcu.ordinal_position')",
+              ORDER BY tc.constraint_name, kcu.ordinal_position')"
+            .to_string(),
         ),
-        "mysql" => Some(
+        "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
              'SELECT kcu.CONSTRAINT_NAME, kcu.TABLE_NAME, \
                      kcu.COLUMN_NAME, \
@@ -709,10 +718,10 @@ fn introspect_blocking(
               JOIN information_schema.TABLE_CONSTRAINTS tc \
                 ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
                AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA \
-              WHERE tc.CONSTRAINT_TYPE = \"FOREIGN KEY\" \
-                AND kcu.TABLE_SCHEMA = DATABASE() \
+              WHERE tc.CONSTRAINT_TYPE = ''FOREIGN KEY'' \
+                AND kcu.TABLE_SCHEMA = ''{db_name}'' \
               ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION')",
-        ),
+        )),
         _ => None,
     };
     if let Some(sql) = fk_native_sql {
@@ -720,7 +729,7 @@ fn introspect_blocking(
             (String, String),
             (Vec<String>, String, Vec<String>),
         > = std::collections::BTreeMap::new();
-        match conn.prepare(sql) {
+        match conn.prepare(&sql) {
             Err(e) => eprintln!("[introspect] fk prepare failed: {e}"),
             Ok(mut st) => match st.query([]) {
                 Err(e) => eprintln!("[introspect] fk query failed: {e}"),
