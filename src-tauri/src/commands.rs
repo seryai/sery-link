@@ -3894,7 +3894,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         let _ = crate::onedrive_creds::delete(&id);
     }
     if is_db {
-        let _ = crate::db_creds::delete(&id);
+        let _ = crate::db_creds::delete_connection(&id);
     }
     let _ = restart_file_watcher().await;
 
@@ -5175,17 +5175,15 @@ pub async fn add_mysql_source(
     database: String,
     password: String,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Mysql {
-            host: host.trim().to_string(),
-            port: port.unwrap_or(3306),
-            username: username.trim().to_string(),
-            database: database.trim().to_string(),
-            password: Some(password.clone()),
-        },
-        &password,
-    )
-    .await
+    let cfg = crate::db_creds::DbConnectionConfig::Mysql {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(3306),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+        password: password.clone(),
+    };
+    let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(3306), database.trim());
+    add_db_source_inner(crate::sources::SourceKind::Mysql {}, cfg, name).await
 }
 
 /// Add a PostgreSQL database source. Same flow as add_mysql_source.
@@ -5197,17 +5195,15 @@ pub async fn add_postgresql_source(
     database: String,
     password: String,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Postgresql {
-            host: host.trim().to_string(),
-            port: port.unwrap_or(5432),
-            username: username.trim().to_string(),
-            database: database.trim().to_string(),
-            password: Some(password.clone()),
-        },
-        &password,
-    )
-    .await
+    let cfg = crate::db_creds::DbConnectionConfig::Postgresql {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(5432),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+        password: password.clone(),
+    };
+    let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(5432), database.trim());
+    add_db_source_inner(crate::sources::SourceKind::Postgresql {}, cfg, name).await
 }
 
 /// Add a Snowflake source via DuckDB community snowflake extension.
@@ -5220,18 +5216,16 @@ pub async fn add_snowflake_source(
     database: String,
     schema: Option<String>,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Snowflake {
-            account: account.trim().to_string(),
-            username: username.trim().to_string(),
-            warehouse: warehouse.trim().to_string(),
-            database: database.trim().to_string(),
-            schema: schema.unwrap_or_else(|| "PUBLIC".to_string()),
-            password: Some(password.clone()),
-        },
-        &password,
-    )
-    .await
+    let cfg = crate::db_creds::DbConnectionConfig::Snowflake {
+        account: account.trim().to_string(),
+        username: username.trim().to_string(),
+        warehouse: warehouse.trim().to_string(),
+        database: database.trim().to_string(),
+        schema: schema.unwrap_or_else(|| "PUBLIC".to_string()),
+        password: password.clone(),
+    };
+    let name = format!("{}/{}", account.trim(), database.trim());
+    add_db_source_inner(crate::sources::SourceKind::Snowflake {}, cfg, name).await
 }
 
 /// Add a ClickHouse source via HTTP interface.
@@ -5243,17 +5237,15 @@ pub async fn add_clickhouse_source(
     password: String,
     database: String,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Clickhouse {
-            host: host.trim().to_string(),
-            port: port.unwrap_or(8123),
-            username: username.trim().to_string(),
-            database: database.trim().to_string(),
-            password: Some(password.clone()),
-        },
-        &password,
-    )
-    .await
+    let cfg = crate::db_creds::DbConnectionConfig::Clickhouse {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(8123),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+        password: password.clone(),
+    };
+    let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(8123), database.trim());
+    add_db_source_inner(crate::sources::SourceKind::Clickhouse {}, cfg, name).await
 }
 
 /// Add a MongoDB source. SQL queries are bridged via DuckDB in-memory tables.
@@ -5266,18 +5258,16 @@ pub async fn add_mongodb_source(
     database: String,
     auth_db: Option<String>,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Mongodb {
-            host: host.trim().to_string(),
-            port: port.unwrap_or(27017),
-            username: username.trim().to_string(),
-            database: database.trim().to_string(),
-            auth_db: auth_db.unwrap_or_else(|| "admin".to_string()),
-            password: Some(password.clone()),
-        },
-        &password,
-    )
-    .await
+    let cfg = crate::db_creds::DbConnectionConfig::Mongodb {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(27017),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+        auth_db: auth_db.unwrap_or_else(|| "admin".to_string()),
+        password: password.clone(),
+    };
+    let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(27017), database.trim());
+    add_db_source_inner(crate::sources::SourceKind::Mongodb {}, cfg, name).await
 }
 
 /// Add a Redis source. Password is optional (empty string = no auth).
@@ -5288,16 +5278,15 @@ pub async fn add_redis_source(
     db: Option<u8>,
     password: String,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Redis {
-            host: host.trim().to_string(),
-            port: port.unwrap_or(6379),
-            db: db.unwrap_or(0),
-            password: if password.is_empty() { None } else { Some(password.clone()) },
-        },
-        &password,
-    )
-    .await
+    let db_num = db.unwrap_or(0);
+    let cfg = crate::db_creds::DbConnectionConfig::Redis {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(6379),
+        db: db_num,
+        password: password.clone(),
+    };
+    let name = format!("redis {}:{}/db{}", host.trim(), port.unwrap_or(6379), db_num);
+    add_db_source_inner(crate::sources::SourceKind::Redis {}, cfg, name).await
 }
 
 /// Add a SQLite file source via DuckDB sqlite extension.
@@ -5305,59 +5294,54 @@ pub async fn add_redis_source(
 pub async fn add_sqlite_source(
     path: String,
 ) -> Result<String, String> {
-    add_db_source_inner(
-        crate::sources::SourceKind::Sqlite {
-            path: std::path::PathBuf::from(path.trim()),
-        },
-        "", // no password for SQLite
-    )
-    .await
-}
+    let pb = std::path::PathBuf::from(path.trim());
+    let name = pb.file_name()
+        .unwrap_or(pb.as_os_str())
+        .to_string_lossy()
+        .to_string();
 
-async fn add_db_source_inner(
-    kind: crate::sources::SourceKind,
-    password: &str,
-) -> Result<String, String> {
-    // Pre-flight connection test
-    let kind_for_test = kind.clone();
-    let pw = password.to_string();
+    // Pre-flight connection test for SQLite.
+    let pb_test = pb.clone();
     tokio::task::spawn_blocking(move || {
-        crate::db_engine::test_connection_blocking(&kind_for_test, &pw)
+        crate::db_engine::test_sqlite_connection_blocking(&pb_test)
     })
     .await
     .map_err(|e| format!("DB test task failed: {e}"))?
     .map_err(|e| e.to_string())?;
 
-    // Persist source + credentials
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let new_source = crate::sources::DataSource {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        kind: crate::sources::SourceKind::Sqlite { path: pb },
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+    let returned_id = config.add_source(new_source);
+    config.save().map_err(|e| e.to_string())?;
+    Ok(returned_id)
+}
+
+async fn add_db_source_inner(
+    kind: crate::sources::SourceKind,
+    cfg: crate::db_creds::DbConnectionConfig,
+    name: String,
+) -> Result<String, String> {
+    // Pre-flight connection test.
+    let cfg_for_test = cfg.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::db_engine::test_connection_blocking(&cfg_for_test)
+    })
+    .await
+    .map_err(|e| format!("DB test task failed: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    // Persist source to config.json (kind only, no credentials).
     let mut config = Config::load().map_err(|e| e.to_string())?;
     let source_id = uuid::Uuid::new_v4().to_string();
-    let name = match &kind {
-        crate::sources::SourceKind::Mysql { host, port, database, .. } => {
-            format!("{host}:{port}/{database}")
-        }
-        crate::sources::SourceKind::Postgresql { host, port, database, .. } => {
-            format!("{host}:{port}/{database}")
-        }
-        crate::sources::SourceKind::Snowflake { account, database, .. } => {
-            format!("{account}/{database}")
-        }
-        crate::sources::SourceKind::Clickhouse { host, port, database, .. } => {
-            format!("{host}:{port}/{database}")
-        }
-        crate::sources::SourceKind::Mongodb { host, port, database, .. } => {
-            format!("{host}:{port}/{database}")
-        }
-        crate::sources::SourceKind::Redis { host, port, db, .. } => {
-            format!("redis {host}:{port}/db{db}")
-        }
-        crate::sources::SourceKind::Sqlite { path } => {
-            path.file_name()
-                .unwrap_or(path.as_os_str())
-                .to_string_lossy()
-                .to_string()
-        }
-        _ => unreachable!(),
-    };
     let new_source = crate::sources::DataSource {
         id: source_id.clone(),
         name,
@@ -5370,6 +5354,9 @@ async fn add_db_source_inner(
     };
     let returned_id = config.add_source(new_source);
     config.save().map_err(|e| e.to_string())?;
+
+    // Persist credentials to vault AFTER config is saved so source_id is stable.
+    crate::db_creds::save_connection(&source_id, &cfg).map_err(|e| e.to_string())?;
 
     Ok(returned_id)
 }
@@ -5384,25 +5371,25 @@ pub async fn test_db_connection(
     password: String,
     kind: String,
 ) -> Result<(), String> {
-    let source_kind = match kind.as_str() {
-        "mysql" => crate::sources::SourceKind::Mysql {
+    let cfg = match kind.as_str() {
+        "mysql" => crate::db_creds::DbConnectionConfig::Mysql {
             host: host.trim().to_string(),
             port,
             username: username.trim().to_string(),
             database: database.trim().to_string(),
-            password: None,
+            password: password.clone(),
         },
-        "postgresql" => crate::sources::SourceKind::Postgresql {
+        "postgresql" => crate::db_creds::DbConnectionConfig::Postgresql {
             host: host.trim().to_string(),
             port,
             username: username.trim().to_string(),
             database: database.trim().to_string(),
-            password: None,
+            password: password.clone(),
         },
         other => return Err(format!("Unknown DB kind: {other}")),
     };
     tokio::task::spawn_blocking(move || {
-        crate::db_engine::test_connection_blocking(&source_kind, &password)
+        crate::db_engine::test_connection_blocking(&cfg)
     })
     .await
     .map_err(|e| format!("task: {e}"))?

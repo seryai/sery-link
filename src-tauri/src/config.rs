@@ -793,24 +793,15 @@ impl Config {
             SourceKind::OneDrive { base_path } => {
                 Some(format!("onedrive::{}", base_path))
             }
-            SourceKind::Mysql {
-                host, port, database, ..
-            } => Some(format!("mysql://{}:{}/{}", host, port, database)),
-            SourceKind::Postgresql {
-                host, port, database, ..
-            } => Some(format!("postgresql://{}:{}/{}", host, port, database)),
-            SourceKind::Snowflake {
-                account, username, database, ..
-            } => Some(format!("snowflake://{}@{}/{}", username, account, database)),
-            SourceKind::Clickhouse {
-                host, port, database, ..
-            } => Some(format!("clickhouse://{}:{}/{}", host, port, database)),
-            SourceKind::Mongodb {
-                host, port, database, ..
-            } => Some(format!("mongodb://{}:{}/{}", host, port, database)),
-            SourceKind::Redis {
-                host, port, db, ..
-            } => Some(format!("redis://{}:{}/{}", host, port, db)),
+            // DB sources: credentials live in the vault, not in SourceKind.
+            // Deduplication is not possible from SourceKind alone; let the
+            // caller handle it (or accept duplicate sources).
+            SourceKind::Mysql { .. }
+            | SourceKind::Postgresql { .. }
+            | SourceKind::Snowflake { .. }
+            | SourceKind::Clickhouse { .. }
+            | SourceKind::Mongodb { .. }
+            | SourceKind::Redis { .. } => None,
             SourceKind::Sqlite { path } => {
                 Some(path.to_string_lossy().to_string())
             }
@@ -839,24 +830,13 @@ impl Config {
                 SourceKind::OneDrive { base_path } => {
                     format!("onedrive::{}", base_path) == *p
                 }
-                SourceKind::Mysql {
-                    host, port, database, ..
-                } => format!("mysql://{}:{}/{}", host, port, database) == *p,
-                SourceKind::Postgresql {
-                    host, port, database, ..
-                } => format!("postgresql://{}:{}/{}", host, port, database) == *p,
-                SourceKind::Snowflake {
-                    account, username, database, ..
-                } => format!("snowflake://{}@{}/{}", username, account, database) == *p,
-                SourceKind::Clickhouse {
-                    host, port, database, ..
-                } => format!("clickhouse://{}:{}/{}", host, port, database) == *p,
-                SourceKind::Mongodb {
-                    host, port, database, ..
-                } => format!("mongodb://{}:{}/{}", host, port, database) == *p,
-                SourceKind::Redis {
-                    host, port, db, ..
-                } => format!("redis://{}:{}/{}", host, port, db) == *p,
+                // DB credentials are in the vault — cannot dedup by SourceKind fields.
+                SourceKind::Mysql { .. }
+                | SourceKind::Postgresql { .. }
+                | SourceKind::Snowflake { .. }
+                | SourceKind::Clickhouse { .. }
+                | SourceKind::Mongodb { .. }
+                | SourceKind::Redis { .. } => false,
                 SourceKind::Sqlite { path } => {
                     path.to_string_lossy().as_ref() == p.as_str()
                 }

@@ -117,82 +117,33 @@ pub enum SourceKind {
         base_path: String,
     },
 
-    /// F52: MySQL database. Connection metadata + password stored in
-    /// ~/.seryai/config.json. Schema introspected via INFORMATION_SCHEMA
-    /// on first connect. Queries execute via DuckDB mysql_scanner (ATTACH).
-    Mysql {
-        host: String,
-        #[serde(default = "default_mysql_port")]
-        port: u16,
-        username: String,
-        database: String,
-        /// Stored in config.json (plaintext, user-owned file).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    /// F52: MySQL database. Full connection config (host, port, username,
+    /// database, password) lives in .vault.json keyed on source_id.
+    /// Only the discriminant `{ "kind": "mysql" }` is stored here.
+    Mysql {},
 
     /// F52: PostgreSQL database. Same pattern as Mysql.
-    Postgresql {
-        host: String,
-        #[serde(default = "default_postgresql_port")]
-        port: u16,
-        username: String,
-        database: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    Postgresql {},
 
     /// F53: Snowflake data warehouse via DuckDB community snowflake extension.
-    Snowflake {
-        account: String,
-        username: String,
-        warehouse: String,
-        database: String,
-        #[serde(default = "default_snowflake_schema")]
-        schema: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    /// Full connection config in .vault.json.
+    Snowflake {},
 
     /// F53: ClickHouse via HTTP interface (port 8123).
-    Clickhouse {
-        host: String,
-        #[serde(default = "default_clickhouse_http_port")]
-        port: u16,
-        username: String,
-        database: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    /// Full connection config in .vault.json.
+    Clickhouse {},
 
     /// F53: MongoDB. SQL is executed via DuckDB in-memory bridge
     /// (collections loaded as temp tables via read_json_auto).
-    Mongodb {
-        host: String,
-        #[serde(default = "default_mongodb_port")]
-        port: u16,
-        username: String,
-        database: String,
-        #[serde(default = "default_mongodb_auth_db")]
-        auth_db: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    /// Full connection config in .vault.json.
+    Mongodb {},
 
-    /// F53: Redis. Password optional (empty = no auth). Exposes all keys
-    /// as a virtual `keys` table (key, value, value_type, ttl).
-    Redis {
-        host: String,
-        #[serde(default = "default_redis_port")]
-        port: u16,
-        #[serde(default)]
-        db: u8,
-        /// Empty string = no auth.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
-    },
+    /// F53: Redis. Exposes all keys as a virtual `keys` table.
+    /// Full connection config in .vault.json.
+    Redis {},
 
     /// F53: SQLite file via DuckDB built-in sqlite extension. No password.
+    /// Path stays here because it's just a file path with no secrets.
     Sqlite {
         path: PathBuf,
     },
@@ -202,33 +153,8 @@ fn default_sftp_port() -> u16 {
     22
 }
 
-fn default_mysql_port() -> u16 {
-    3306
-}
-
-fn default_postgresql_port() -> u16 {
-    5432
-}
-
-fn default_snowflake_schema() -> String {
-    "PUBLIC".to_string()
-}
-
-fn default_clickhouse_http_port() -> u16 {
-    8123
-}
-
-fn default_mongodb_port() -> u16 {
-    27017
-}
-
-fn default_mongodb_auth_db() -> String {
-    "admin".to_string()
-}
-
-fn default_redis_port() -> u16 {
-    6379
-}
+// Note: default port/schema helpers for DB kinds were removed when the
+// connection fields moved to .vault.json (DbConnectionConfig in db_creds.rs).
 
 impl SourceKind {
     /// Return the "root URL" used as the credential lookup key for remote
@@ -418,30 +344,15 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 format!("OneDrive · {}", base_path)
             }
         }
-        SourceKind::Mysql {
-            host,
-            port,
-            database,
-            ..
-        } => format!("{host}:{port}/{database}"),
-        SourceKind::Postgresql {
-            host,
-            port,
-            database,
-            ..
-        } => format!("{host}:{port}/{database}"),
-        SourceKind::Snowflake {
-            account, database, ..
-        } => format!("{account}/{database}"),
-        SourceKind::Clickhouse {
-            host, port, database, ..
-        } => format!("{host}:{port}/{database}"),
-        SourceKind::Mongodb {
-            host, port, database, ..
-        } => format!("{host}:{port}/{database}"),
-        SourceKind::Redis { host, port, db, .. } => {
-            format!("redis {host}:{port}/db{db}")
-        }
+        // DB kinds: connection info lives in .vault.json, not here.
+        // Names are set at add-time from the DbConnectionConfig and
+        // are user-renameable; the kind alone carries no display info.
+        SourceKind::Mysql {}
+        | SourceKind::Postgresql {}
+        | SourceKind::Snowflake {}
+        | SourceKind::Clickhouse {}
+        | SourceKind::Mongodb {}
+        | SourceKind::Redis {} => String::new(),
         SourceKind::Sqlite { path } => path
             .file_name()
             .unwrap_or(path.as_os_str())

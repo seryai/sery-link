@@ -11,6 +11,7 @@
 //!   - 100 000 row cap and 60 s timeout match the file-based engine.
 
 use crate::config::Config;
+use crate::db_creds::{DbConnectionConfig, load_connection};
 use crate::duckdb_engine::QueryResult;
 use crate::error::{AgentError, Result};
 use crate::sources::SourceKind;
@@ -103,129 +104,106 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Build the DuckDB ATTACH connection string for a source.
-/// Returns (db_type_str, conn_str, extension_install_sql).
-/// Only for DuckDB-ATTACH sources: MySQL, PostgreSQL, Snowflake, SQLite.
-fn build_attach_string(
-    kind: &SourceKind,
-    password: &str,
-) -> Option<(&'static str, String)> {
-    match kind {
-        SourceKind::Mysql {
-            host,
-            port,
-            username,
-            database,
-            ..
-        } => {
+/// Build the DuckDB ATTACH connection string from a DbConnectionConfig or
+/// a SQLite SourceKind (SQLite has no credentials, only a path).
+/// Returns (db_type_str, conn_str).
+fn build_attach_string_from_config(cfg: &DbConnectionConfig) -> (&'static str, String) {
+    match cfg {
+        DbConnectionConfig::Mysql { host, port, username, database, password } => {
             let conn_str = format!(
                 "host={host} port={port} database={database} user={username} password={password}"
             );
-            Some(("MYSQL", conn_str))
+            ("MYSQL", conn_str)
         }
-        SourceKind::Postgresql {
-            host,
-            port,
-            username,
-            database,
-            ..
-        } => {
+        DbConnectionConfig::Postgresql { host, port, username, database, password } => {
             let conn_str = format!(
                 "host={host} port={port} dbname={database} user={username} password={password}"
             );
-            Some(("POSTGRES", conn_str))
+            ("POSTGRES", conn_str)
         }
-        SourceKind::Snowflake {
-            account,
-            username,
-            warehouse,
-            database,
-            schema,
-            ..
-        } => {
+        DbConnectionConfig::Snowflake { account, username, warehouse, database, schema, password } => {
             let conn_str = format!(
                 "account={account};user={username};password={password};\
                  warehouse={warehouse};database={database};schema={schema}"
             );
-            Some(("SNOWFLAKE", conn_str))
+            ("SNOWFLAKE", conn_str)
         }
-        SourceKind::Sqlite { path } => {
-            Some(("SQLITE", path.to_string_lossy().to_string()))
+        DbConnectionConfig::Clickhouse { host, port, username, database, .. } => {
+            // ClickHouse uses its own HTTP engine, not DuckDB ATTACH.
+            // This branch should not be reached via build_attach_string_from_config,
+            // but we provide a placeholder to satisfy exhaustiveness.
+            let conn_str = format!("host={host} port={port} database={database} user={username}");
+            ("CLICKHOUSE", conn_str)
         }
+        DbConnectionConfig::Mongodb { host, port, username, database, .. } => {
+            let conn_str = format!("host={host} port={port} database={database} user={username}");
+            ("MONGODB", conn_str)
+        }
+        DbConnectionConfig::Redis { host, port, db, .. } => {
+            let conn_str = format!("host={host} port={port} db={db}");
+            ("REDIS", conn_str)
+        }
+    }
+}
+
+/// Build ATTACH string for a SQLite source (path-only, no DbConnectionConfig).
+fn build_sqlite_attach_string(kind: &SourceKind) -> Option<(&'static str, String)> {
+    match kind {
+        SourceKind::Sqlite { path } => Some(("SQLITE", path.to_string_lossy().to_string())),
         _ => None,
     }
 }
 
-/// Return the DuckDB extension install SQL for a SourceKind.
-fn extension_install_sql(kind: &SourceKind) -> Option<&'static str> {
-    match kind {
-        SourceKind::Mysql { .. } => Some("INSTALL mysql; LOAD mysql;"),
-        SourceKind::Postgresql { .. } => Some("INSTALL postgres; LOAD postgres;"),
-        SourceKind::Snowflake { .. } => Some("INSTALL snowflake FROM community; LOAD snowflake;"),
-        SourceKind::Sqlite { .. } => Some("INSTALL sqlite; LOAD sqlite;"),
-        _ => None,
+/// Return the DuckDB extension install SQL for a DbConnectionConfig.
+fn extension_install_sql_for_config(cfg: &DbConnectionConfig) -> &'static str {
+    match cfg {
+        DbConnectionConfig::Mysql { .. } => "INSTALL mysql; LOAD mysql;",
+        DbConnectionConfig::Postgresql { .. } => "INSTALL postgres; LOAD postgres;",
+        DbConnectionConfig::Snowflake { .. } => "INSTALL snowflake FROM community; LOAD snowflake;",
+        // Clickhouse/Mongodb/Redis use their own engines, not DuckDB ATTACH.
+        _ => "",
     }
 }
 
-/// Return the DuckDB extension name for a SourceKind (used for error messages).
-fn extension_name(kind: &SourceKind) -> Option<&'static str> {
-    match kind {
-        SourceKind::Mysql { .. } => Some("mysql"),
-        SourceKind::Postgresql { .. } => Some("postgres"),
-        SourceKind::Snowflake { .. } => Some("snowflake"),
-        SourceKind::Sqlite { .. } => Some("sqlite"),
-        _ => None,
+/// Return the DuckDB extension name for error messages.
+fn extension_name_for_config(cfg: &DbConnectionConfig) -> &'static str {
+    match cfg {
+        DbConnectionConfig::Mysql { .. } => "mysql",
+        DbConnectionConfig::Postgresql { .. } => "postgres",
+        DbConnectionConfig::Snowflake { .. } => "snowflake",
+        _ => "unknown",
     }
 }
 
 /// Default schema name inside the attached DuckDB database alias.
-/// MySQL / PostgreSQL / Snowflake use 'main'; SQLite uses 'main' too.
-fn default_schema(_kind: &SourceKind) -> Option<&'static str> {
-    match _kind {
-        SourceKind::Sqlite { .. } => None, // SQLite: no SET schema needed
-        _ => Some("main"),
+fn default_schema_for_config(cfg: &DbConnectionConfig) -> Option<&'static str> {
+    match cfg {
+        DbConnectionConfig::Mysql { .. }
+        | DbConnectionConfig::Postgresql { .. }
+        | DbConnectionConfig::Snowflake { .. } => Some("main"),
+        _ => None,
     }
 }
 
-/// Lookup a DB source in config and resolve its password.
-///
-/// Password priority:
-///   1. Embedded in the SourceKind (new path — stored in config.json)
-///   2. OS keychain entry keyed on source_id (legacy path — migrated users)
+/// Lookup a DB source in config and load its full connection config from the vault.
+/// For SQLite sources (no vault entry), returns Err — callers must handle SQLite separately.
 fn resolve_source<'a>(
     source_id: &str,
     config: &'a Config,
-) -> Result<(&'a SourceKind, String)> {
+) -> Result<(&'a SourceKind, Option<DbConnectionConfig>)> {
     let source = config
         .sources
         .iter()
         .find(|s| s.id == source_id)
         .ok_or_else(|| AgentError::Database(format!("DB source not found: {source_id}")))?;
 
-    // Extract inline password from kind (new storage path).
-    let inline_pw = match &source.kind {
-        SourceKind::Mysql { password, .. }
-        | SourceKind::Postgresql { password, .. }
-        | SourceKind::Snowflake { password, .. }
-        | SourceKind::Clickhouse { password, .. }
-        | SourceKind::Mongodb { password, .. }
-        | SourceKind::Redis { password, .. } => password.clone(),
-        _ => None,
-    };
+    // SQLite has no vault entry — return None for the config.
+    if matches!(source.kind, SourceKind::Sqlite { .. }) {
+        return Ok((&source.kind, None));
+    }
 
-    let password = if let Some(pw) = inline_pw {
-        pw
-    } else {
-        // Fall back to keychain for sources added before this change.
-        crate::db_creds::load(&source.id)?
-            .ok_or_else(|| {
-                AgentError::Database(format!(
-                    "No credentials for source {source_id} — please remove and re-add it."
-                ))
-            })?
-    };
-
-    Ok((&source.kind, password))
+    let cfg = load_connection(source_id)?;
+    Ok((&source.kind, Some(cfg)))
 }
 
 /// Execute a SELECT query against a DB source identified by source_id.
@@ -239,15 +217,33 @@ pub async fn execute_db_query(
 ) -> Result<QueryResult> {
     validate_db_sql(sql)?;
 
-    let (kind, password) = resolve_source(source_id, config)?;
+    let (kind, maybe_cfg) = resolve_source(source_id, config)?;
+
+    // SQLite path (no vault credentials).
+    if let SourceKind::Sqlite { .. } = kind {
+        let (db_type, conn_str) = build_sqlite_attach_string(kind)
+            .ok_or_else(|| AgentError::Database("Expected SQLite source".to_string()))?;
+        let ext_sql = "INSTALL sqlite; LOAD sqlite;".to_string();
+        let sql_owned = sql.to_string();
+        let task = tokio::task::spawn_blocking(move || {
+            run_db_query_blocking(&sql_owned, &conn_str, db_type, &ext_sql, "sqlite", None)
+        });
+        return match tokio::time::timeout(Duration::from_secs(TIMEOUT_SECS), task).await {
+            Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
+            Err(_) => Err(AgentError::Database(format!("DB query timed out after {TIMEOUT_SECS}s"))),
+        };
+    }
+
+    let cfg = maybe_cfg.ok_or_else(|| {
+        AgentError::Database(format!("No credentials for source {source_id}"))
+    })?;
 
     // Dispatch to specialised engines for HTTP / document / key-value sources.
-    match kind {
-        SourceKind::Clickhouse { host, port, username, database, .. } => {
-            let (host, port, username, database) =
-                (host.clone(), *port, username.clone(), database.clone());
+    match &cfg {
+        DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
+            let (host, port, username, database, pw) =
+                (host.clone(), *port, username.clone(), database.clone(), password.clone());
             let sql_owned = sql.to_string();
-            let pw = password.clone();
             let task = tokio::task::spawn_blocking(move || {
                 execute_clickhouse_query_blocking(&sql_owned, &host, port, &username, &pw, &database)
             });
@@ -256,30 +252,25 @@ pub async fn execute_db_query(
                 Err(_) => Err(AgentError::Database(format!("ClickHouse query timed out after {TIMEOUT_SECS}s"))),
             };
         }
-        SourceKind::Mongodb { host, port, username, database, auth_db, .. } => {
-            let (host, port, username, database, auth_db) =
-                (host.clone(), *port, username.clone(), database.clone(), auth_db.clone());
+        DbConnectionConfig::Mongodb { host, port, username, database, auth_db, password } => {
+            let (host, port, username, database, auth_db, pw) =
+                (host.clone(), *port, username.clone(), database.clone(), auth_db.clone(), password.clone());
             let sql_owned = sql.to_string();
-            let pw = password.clone();
             return execute_mongodb_query(&sql_owned, &host, port, &username, &pw, &database, &auth_db).await;
         }
-        SourceKind::Redis { host, port, db, .. } => {
-            let (host, port, db) = (host.clone(), *port, *db);
+        DbConnectionConfig::Redis { host, port, db, password } => {
+            let (host, port, db, pw) = (host.clone(), *port, *db, password.clone());
             let sql_owned = sql.to_string();
-            let pw = password.clone();
             return execute_redis_query(&sql_owned, &host, port, db, &pw).await;
         }
         _ => {}
     }
 
-    // DuckDB ATTACH path: MySQL, PostgreSQL, Snowflake, SQLite.
-    let (db_type, conn_str) = build_attach_string(kind, &password)
-        .ok_or_else(|| AgentError::Database("Source is not a database type".to_string()))?;
-    let ext_sql = extension_install_sql(kind)
-        .ok_or_else(|| AgentError::Database("Unknown DB extension".to_string()))?
-        .to_string();
-    let ext_name = extension_name(kind).unwrap_or("unknown").to_string();
-    let schema = default_schema(kind).map(|s| s.to_string());
+    // DuckDB ATTACH path: MySQL, PostgreSQL, Snowflake.
+    let (db_type, conn_str) = build_attach_string_from_config(&cfg);
+    let ext_sql = extension_install_sql_for_config(&cfg).to_string();
+    let ext_name = extension_name_for_config(&cfg).to_string();
+    let schema = default_schema_for_config(&cfg).map(|s| s.to_string());
     let sql_owned = sql.to_string();
 
     let task = tokio::task::spawn_blocking(move || {
@@ -386,13 +377,30 @@ pub async fn introspect_schema(
     source_id: &str,
     config: &Config,
 ) -> Result<Vec<TableSchema>> {
-    let (kind, password) = resolve_source(source_id, config)?;
+    let (kind, maybe_cfg) = resolve_source(source_id, config)?;
 
-    match kind {
-        SourceKind::Clickhouse { host, port, username, database, .. } => {
-            let (host, port, username, database) =
-                (host.clone(), *port, username.clone(), database.clone());
-            let pw = password.clone();
+    // SQLite path.
+    if let SourceKind::Sqlite { .. } = kind {
+        let (db_type, conn_str) = build_sqlite_attach_string(kind)
+            .ok_or_else(|| AgentError::Database("Expected SQLite source".to_string()))?;
+        let ext_sql = "INSTALL sqlite; LOAD sqlite;".to_string();
+        let task = tokio::task::spawn_blocking(move || {
+            introspect_blocking(&conn_str, db_type, &ext_sql, None, "", true)
+        });
+        return match tokio::time::timeout(Duration::from_secs(30), task).await {
+            Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
+            Err(_) => Err(AgentError::Database("Schema introspection timed out".to_string())),
+        };
+    }
+
+    let cfg = maybe_cfg.ok_or_else(|| {
+        AgentError::Database(format!("No credentials for source {source_id}"))
+    })?;
+
+    match &cfg {
+        DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
+            let (host, port, username, database, pw) =
+                (host.clone(), *port, username.clone(), database.clone(), password.clone());
             let task = tokio::task::spawn_blocking(move || {
                 introspect_clickhouse_blocking(&host, port, &username, &pw, &database)
             });
@@ -401,13 +409,12 @@ pub async fn introspect_schema(
                 Err(_) => Err(AgentError::Database("ClickHouse introspect timed out".to_string())),
             };
         }
-        SourceKind::Mongodb { host, port, username, database, auth_db, .. } => {
-            let (host, port, username, database, auth_db) =
-                (host.clone(), *port, username.clone(), database.clone(), auth_db.clone());
-            let pw = password.clone();
+        DbConnectionConfig::Mongodb { host, port, username, database, auth_db, password } => {
+            let (host, port, username, database, auth_db, pw) =
+                (host.clone(), *port, username.clone(), database.clone(), auth_db.clone(), password.clone());
             return introspect_mongodb(&host, port, &username, &pw, &database, &auth_db).await;
         }
-        SourceKind::Redis { .. } => {
+        DbConnectionConfig::Redis { .. } => {
             // Redis: single virtual table
             return Ok(vec![TableSchema {
                 table_name: "keys".to_string(),
@@ -426,17 +433,14 @@ pub async fn introspect_schema(
         _ => {}
     }
 
-    let (db_type, conn_str) = build_attach_string(kind, &password)
-        .ok_or_else(|| AgentError::Database("Source is not a database type".to_string()))?;
-    let ext_sql = extension_install_sql(kind)
-        .ok_or_else(|| AgentError::Database("Unknown extension".to_string()))?
-        .to_string();
-    let schema = default_schema(kind).map(|s| s.to_string());
-    let db_name = db_name_from_kind(kind).to_string();
-    let use_sqlite = matches!(kind, SourceKind::Sqlite { .. });
+    // DuckDB ATTACH path: MySQL, PostgreSQL, Snowflake.
+    let (db_type, conn_str) = build_attach_string_from_config(&cfg);
+    let ext_sql = extension_install_sql_for_config(&cfg).to_string();
+    let schema = default_schema_for_config(&cfg).map(|s| s.to_string());
+    let db_name = db_name_from_config(&cfg).to_string();
 
     let task = tokio::task::spawn_blocking(move || {
-        introspect_blocking(&conn_str, db_type, &ext_sql, schema.as_deref(), &db_name, use_sqlite)
+        introspect_blocking(&conn_str, db_type, &ext_sql, schema.as_deref(), &db_name, false)
     });
 
     match tokio::time::timeout(Duration::from_secs(30), task).await {
@@ -445,14 +449,14 @@ pub async fn introspect_schema(
     }
 }
 
-fn db_name_from_kind(kind: &SourceKind) -> &str {
-    match kind {
-        SourceKind::Mysql { database, .. } => database.as_str(),
-        SourceKind::Postgresql { database, .. } => database.as_str(),
-        SourceKind::Snowflake { database, .. } => database.as_str(),
-        SourceKind::Clickhouse { database, .. } => database.as_str(),
-        SourceKind::Mongodb { database, .. } => database.as_str(),
-        _ => "",
+fn db_name_from_config(cfg: &DbConnectionConfig) -> &str {
+    match cfg {
+        DbConnectionConfig::Mysql { database, .. } => database.as_str(),
+        DbConnectionConfig::Postgresql { database, .. } => database.as_str(),
+        DbConnectionConfig::Snowflake { database, .. } => database.as_str(),
+        DbConnectionConfig::Clickhouse { database, .. } => database.as_str(),
+        DbConnectionConfig::Mongodb { database, .. } => database.as_str(),
+        DbConnectionConfig::Redis { .. } => "",
     }
 }
 
@@ -800,25 +804,22 @@ fn introspect_blocking(
 }
 
 /// Test a DB connection using provided credentials (before persisting).
-/// Handles all 7 DB source kinds. For Clickhouse/MongoDB/Redis, uses
-/// their respective blocking test helpers.
+/// Accepts a DbConnectionConfig (for all non-SQLite types) or a SQLite SourceKind.
 pub fn test_connection_blocking(
-    kind: &SourceKind,
-    password: &str,
+    cfg: &DbConnectionConfig,
 ) -> Result<()> {
-    match kind {
-        SourceKind::Clickhouse { host, port, username, database, .. } => {
+    match cfg {
+        DbConnectionConfig::Clickhouse { host, port, username, database, password } => {
             return test_clickhouse_connection_blocking(host, *port, username, password, database);
         }
-        SourceKind::Mongodb { host, port, username, auth_db, .. } => {
-            // MongoDB is async; block on it here via a mini tokio runtime.
+        DbConnectionConfig::Mongodb { host, port, username, auth_db, password, .. } => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
             return rt.block_on(test_mongodb_connection(host, *port, username, password, auth_db));
         }
-        SourceKind::Redis { host, port, db, .. } => {
+        DbConnectionConfig::Redis { host, port, db, password } => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -828,12 +829,10 @@ pub fn test_connection_blocking(
         _ => {}
     }
 
-    let (db_type, conn_str) = build_attach_string(kind, password)
-        .ok_or_else(|| AgentError::Database("Not a database source type".to_string()))?;
-    let ext_install_sql = extension_install_sql(kind)
-        .ok_or_else(|| AgentError::Database("Unknown extension".to_string()))?;
-    let ext_name = extension_name(kind).unwrap_or("unknown");
-    let schema = default_schema(kind);
+    let (db_type, conn_str) = build_attach_string_from_config(cfg);
+    let ext_install_sql = extension_install_sql_for_config(cfg);
+    let ext_name = extension_name_for_config(cfg);
+    let schema = default_schema_for_config(cfg);
 
     let conn = Connection::open_in_memory()
         .map_err(|e| AgentError::Database(format!("open: {e}")))?;
@@ -857,6 +856,22 @@ pub fn test_connection_blocking(
     conn.execute_batch("SELECT 1;")
         .map_err(|e| AgentError::Database(format!("ping: {e}")))?;
 
+    Ok(())
+}
+
+/// Test a SQLite connection (path only, no DbConnectionConfig needed).
+pub fn test_sqlite_connection_blocking(path: &std::path::Path) -> Result<()> {
+    let conn_str = path.to_string_lossy().to_string();
+    let conn = Connection::open_in_memory()
+        .map_err(|e| AgentError::Database(format!("open: {e}")))?;
+    conn.execute_batch("INSTALL sqlite; LOAD sqlite;")
+        .map_err(|e| AgentError::Database(format!("load sqlite ext: {e}")))?;
+    conn.execute_batch(&format!(
+        "ATTACH '{conn_str}' AS _db (TYPE SQLITE, READ_ONLY);"
+    ))
+    .map_err(|e| AgentError::Database(format!("connection failed: {e}")))?;
+    conn.execute_batch("USE _db; SELECT 1;")
+        .map_err(|e| AgentError::Database(format!("ping: {e}")))?;
     Ok(())
 }
 
