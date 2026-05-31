@@ -770,7 +770,7 @@ pub async fn execute_query(pool: &PgPool, sql: &str, max_rows: usize) -> Result<
         execute_select_query(&client, sql, start, row_limit).await
     } else {
         let client = pool.get().await.map_err(|e| e.to_string())?;
-        let affected = client.execute(sql, &[]).await.map_err(pg_error_to_string)?;
+        let _affected = client.execute(sql, &[]).await.map_err(pg_error_to_string)?;
         Ok(QueryResult {
             columns: vec![],
             row_count: 0,
@@ -796,7 +796,7 @@ pub async fn execute_query_with_schema(
     let result = if starts_with_executable_sql_keyword(sql, &["SELECT", "SHOW", "EXPLAIN", "WITH", "TABLE"]) {
         execute_select_query(&client, sql, start, row_limit).await
     } else {
-        let affected = client.execute(sql, &[]).await.map_err(pg_error_to_string)?;
+        let _affected = client.execute(sql, &[]).await.map_err(pg_error_to_string)?;
         Ok(QueryResult {
             columns: vec![],
             row_count: 0,

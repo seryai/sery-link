@@ -163,12 +163,14 @@ fn get_str(row: &mysql_async::Row, idx: usize) -> String {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
 fn get_str_by_name(row: &mysql_async::Row, name: &str) -> String {
     row_get::<String, _>(row, name)
         .or_else(|| row_get::<Vec<u8>, _>(row, name).map(|b| String::from_utf8_lossy(&b).to_string()))
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
 fn get_opt_str(row: &mysql_async::Row, name: &str) -> Option<String> {
     row_get::<String, _>(row, name)
         .or_else(|| row_get::<Vec<u8>, _>(row, name).map(|b| String::from_utf8_lossy(&b).to_string()))
@@ -838,7 +840,7 @@ pub async fn execute_query(pool: &MySqlPool, sql: &str, max_rows: usize) -> Resu
         }
     } else {
         let result = conn.query_iter(sql).await.map_err(|e| e.to_string())?;
-        let affected_rows = result.affected_rows();
+        let _affected_rows = result.affected_rows();
         result.drop_result().await.map_err(|e| e.to_string())?;
         Ok(QueryResult {
             columns: vec![],
