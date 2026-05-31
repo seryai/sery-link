@@ -452,43 +452,57 @@ fn introspect_blocking(
     ))
     .map_err(|e| AgentError::Database(format!("ATTACH: {e}")))?;
 
-    const SYS: &str =
+    const SYS_DUCKDB: &str =
         "'information_schema', 'pg_catalog', 'pg_toast', \
          'pg_internal', 'INFORMATION_SCHEMA', 'pg_toast_temp_1'";
 
-    // ── 1. PK column sets (best-effort; skip if backend doesn't expose it) ─
-    // array_to_string is safer than unnest in the duckdb Rust crate —
-    // array column types need special handling whereas strings are trivial.
+    // ── 1. PK column sets — via native catalog (postgres_query / mysql_query)
+    // duckdb_constraints() only tracks DuckDB-native constraints, not remote ones.
+    // postgres_query / mysql_query push the SQL to the actual server.
     let mut pk_cols: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
-    let pk_sql = format!(
-        "SELECT table_name, \
-         array_to_string(constraint_column_names, ',') \
-         FROM duckdb_constraints() \
-         WHERE database_name = '_db' \
-           AND schema_name NOT IN ({SYS}) \
-           AND constraint_type = 'PRIMARY KEY'"
-    );
-    if let Ok(mut st) = conn.prepare(&pk_sql) {
-        if let Ok(mut rows) = st.query([]) {
-            while let Ok(Some(row)) = rows.next() {
-                let tbl: String = row.get(0).unwrap_or_default();
-                let cols_str: String = row.get(1).unwrap_or_default();
-                for col in cols_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    pk_cols.entry(tbl.clone()).or_default().insert(col.to_string());
+
+    let pk_native_sql: Option<&str> = match db_type {
+        "postgres" => Some(
+            "SELECT * FROM postgres_query('_db', \
+             'SELECT kcu.table_name, kcu.column_name \
+              FROM information_schema.table_constraints tc \
+              JOIN information_schema.key_column_usage kcu \
+                ON tc.constraint_name = kcu.constraint_name \
+               AND tc.table_schema = kcu.table_schema \
+              WHERE tc.constraint_type = ''PRIMARY KEY'' \
+                AND tc.table_schema NOT IN \
+                    (''information_schema'', ''pg_catalog'', ''pg_toast'')')",
+        ),
+        "mysql" => Some(
+            "SELECT * FROM mysql_query('_db', \
+             'SELECT TABLE_NAME, COLUMN_NAME \
+              FROM information_schema.KEY_COLUMN_USAGE \
+              WHERE CONSTRAINT_NAME = \"PRIMARY\" \
+                AND TABLE_SCHEMA = DATABASE()')",
+        ),
+        _ => None,
+    };
+    if let Some(sql) = pk_native_sql {
+        if let Ok(mut st) = conn.prepare(sql) {
+            if let Ok(mut rows) = st.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let tbl: String = row.get(0).unwrap_or_default();
+                    let col: String = row.get(1).unwrap_or_default();
+                    pk_cols.entry(tbl).or_default().insert(col);
                 }
             }
         }
     }
 
-    // ── 2. Columns ─────────────────────────────────────────────────────────
+    // ── 2. Columns (duckdb_columns — proven reliable for attached DBs) ──────
     let col_sql = format!(
         "SELECT table_name, column_name, data_type, \
          CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END, \
          column_default \
          FROM duckdb_columns() \
          WHERE database_name = '_db' \
-           AND schema_name NOT IN ({SYS}) \
+           AND schema_name NOT IN ({SYS_DUCKDB}) \
            AND NOT internal \
          ORDER BY table_name, column_index"
     );
@@ -522,138 +536,173 @@ fn introspect_blocking(
         });
     }
 
-    // ── 3. Table sizes from duckdb_tables() ────────────────────────────────
-    // estimated_size is on-disk bytes; no row count is available here.
-    let size_sql = format!(
-        "SELECT table_name, estimated_size \
-         FROM duckdb_tables() \
-         WHERE database_name = '_db' \
-           AND schema_name NOT IN ({SYS}) \
-           AND NOT internal"
-    );
-    let mut table_sizes: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
-    if let Ok(mut st) = conn.prepare(&size_sql) {
-        if let Ok(mut rows) = st.query([]) {
-            while let Ok(Some(row)) = rows.next() {
-                let tbl: String = row.get(0).unwrap_or_default();
-                let sz: i64 = row.get(1).unwrap_or(0);
-                table_sizes.insert(tbl, sz);
-            }
-        }
-    }
-
-    // ── 3b. Row count estimates — native catalog, db_type-specific ──────────
-    // pg_class.reltuples for Postgres (updated by ANALYZE, fast approximate).
-    // information_schema.TABLES.TABLE_ROWS for MySQL (engine-managed estimate).
-    // SQLite has no built-in row estimate without a full COUNT(*) — skip.
+    // ── 3. Row counts + sizes via native server catalog ─────────────────────
+    // postgres_query / mysql_query push SQL to the actual database server so
+    // pg_class.reltuples and information_schema.TABLES are always reachable.
     let mut row_counts: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
-    let row_count_sql: Option<String> = match db_type {
-        "postgres" => Some(format!(
-            "SELECT c.relname, CAST(c.reltuples AS BIGINT) \
-             FROM _db.pg_catalog.pg_class c \
-             JOIN _db.pg_catalog.pg_namespace n ON c.relnamespace = n.oid \
-             WHERE c.relkind = 'r' \
-               AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast', \
-                                     'pg_internal', 'pg_toast_temp_1') \
-               AND c.reltuples >= 0"
-        )),
+    let mut table_sizes: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+
+    let stats_sql: Option<&str> = match db_type {
+        "postgres" => Some(
+            "SELECT * FROM postgres_query('_db', \
+             'SELECT c.relname::text, \
+                     GREATEST(c.reltuples::bigint, 0), \
+                     pg_total_relation_size(c.oid)::bigint \
+              FROM pg_class c \
+              JOIN pg_namespace n ON n.oid = c.relnamespace \
+              WHERE c.relkind = ''r'' \
+                AND n.nspname NOT IN \
+                    (''information_schema'',''pg_catalog'',''pg_toast'',''pg_toast_temp_1'')')",
+        ),
         "mysql" => Some(
-            "SELECT TABLE_NAME, CAST(TABLE_ROWS AS BIGINT) \
-             FROM _db.information_schema.TABLES \
-             WHERE TABLE_TYPE = 'BASE TABLE' \
-               AND TABLE_ROWS IS NOT NULL"
-                .to_string(),
+            "SELECT * FROM mysql_query('_db', \
+             'SELECT TABLE_NAME, \
+                     CAST(TABLE_ROWS AS SIGNED), \
+                     CAST(DATA_LENGTH + INDEX_LENGTH AS SIGNED) \
+              FROM information_schema.TABLES \
+              WHERE TABLE_TYPE = \"BASE TABLE\" \
+                AND TABLE_SCHEMA = DATABASE()')",
         ),
         _ => None,
     };
-    if let Some(sql) = row_count_sql {
-        if let Ok(mut st) = conn.prepare(&sql) {
+    if let Some(sql) = stats_sql {
+        if let Ok(mut st) = conn.prepare(sql) {
             if let Ok(mut rows) = st.query([]) {
                 while let Ok(Some(row)) = rows.next() {
                     let tbl: String = row.get(0).unwrap_or_default();
-                    let cnt: i64 = row.get(1).unwrap_or(-1);
-                    if cnt >= 0 {
-                        row_counts.insert(tbl, cnt);
-                    }
+                    let cnt: i64 = row.get(1).unwrap_or(0);
+                    let sz: i64 = row.get(2).unwrap_or(0);
+                    if cnt >= 0 { row_counts.insert(tbl.clone(), cnt); }
+                    if sz > 0  { table_sizes.insert(tbl, sz); }
                 }
             }
         }
     }
 
-    // ── 4. Indexes (non-PK only; PK already shown via is_primary_key) ──────
-    // duckdb_indexes().expressions is VARCHAR[] — cast to string for safe Rust get().
-    let idx_sql = format!(
-        "SELECT index_name, table_name, is_unique, \
-         CAST(expressions AS VARCHAR) \
-         FROM duckdb_indexes() \
-         WHERE database_name = '_db' \
-           AND schema_name NOT IN ({SYS}) \
-           AND NOT is_primary \
-           AND NOT internal"
-    );
+    // ── 4. Indexes — native catalog ─────────────────────────────────────────
     let mut table_indexes: std::collections::HashMap<String, Vec<IndexInfo>> =
         std::collections::HashMap::new();
-    if let Ok(mut st) = conn.prepare(&idx_sql) {
-        if let Ok(mut rows) = st.query([]) {
-            while let Ok(Some(row)) = rows.next() {
-                let name: String = row.get(0).unwrap_or_default();
-                let tbl: String = row.get(1).unwrap_or_default();
-                let unique: bool = row.get(2).unwrap_or(false);
-                // expressions comes back as "[col1, col2]" from CAST(… AS VARCHAR)
-                let expr_str: String = row.get(3).unwrap_or_default();
-                let columns: Vec<String> = expr_str
-                    .trim_matches(|c| c == '[' || c == ']')
-                    .split(',')
-                    .map(|p| p.trim().trim_matches('"').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                table_indexes.entry(tbl).or_default().push(IndexInfo {
-                    name,
-                    columns,
-                    unique,
-                    primary: false,
-                });
+
+    let idx_native_sql: Option<&str> = match db_type {
+        "postgres" => Some(
+            "SELECT * FROM postgres_query('_db', \
+             'SELECT t.relname::text, i.relname::text, \
+                     ix.indisunique::text, \
+                     array_to_string(array_agg(a.attname ORDER BY \
+                         array_position(ix.indkey, a.attnum)), '','') \
+              FROM pg_class t \
+              JOIN pg_index ix ON t.oid = ix.indrelid \
+              JOIN pg_class i ON i.oid = ix.indexrelid \
+              JOIN pg_namespace n ON n.oid = t.relnamespace \
+              JOIN pg_attribute a \
+                ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) \
+              WHERE n.nspname NOT IN \
+                    (''information_schema'',''pg_catalog'',''pg_toast'') \
+                AND NOT ix.indisprimary \
+                AND a.attnum > 0 \
+              GROUP BY t.relname, i.relname, ix.indisunique')",
+        ),
+        "mysql" => Some(
+            "SELECT * FROM mysql_query('_db', \
+             'SELECT TABLE_NAME, INDEX_NAME, \
+                     CASE NON_UNIQUE WHEN 0 THEN \"true\" ELSE \"false\" END, \
+                     GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) \
+              FROM information_schema.STATISTICS \
+              WHERE TABLE_SCHEMA = DATABASE() \
+                AND INDEX_NAME <> \"PRIMARY\" \
+              GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE')",
+        ),
+        _ => None,
+    };
+    if let Some(sql) = idx_native_sql {
+        if let Ok(mut st) = conn.prepare(sql) {
+            if let Ok(mut rows) = st.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let tbl: String = row.get(0).unwrap_or_default();
+                    let name: String = row.get(1).unwrap_or_default();
+                    let unique_str: String = row.get(2).unwrap_or_default();
+                    let cols_str: String = row.get(3).unwrap_or_default();
+                    let columns: Vec<String> = cols_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    table_indexes.entry(tbl).or_default().push(IndexInfo {
+                        name,
+                        columns,
+                        unique: unique_str == "true" || unique_str == "t",
+                        primary: false,
+                    });
+                }
             }
         }
     }
 
-    // ── 5. Foreign keys ────────────────────────────────────────────────────
-    let fk_sql = format!(
-        "SELECT constraint_text, table_name, \
-         CAST(constraint_column_names AS VARCHAR), \
-         foreign_key_table, \
-         CAST(foreign_key_column_names AS VARCHAR) \
-         FROM duckdb_constraints() \
-         WHERE database_name = '_db' \
-           AND schema_name NOT IN ({SYS}) \
-           AND constraint_type = 'FOREIGN KEY'"
-    );
+    // ── 5. Foreign keys — native catalog ────────────────────────────────────
     let mut table_fks: std::collections::HashMap<String, Vec<ForeignKeyInfo>> =
         std::collections::HashMap::new();
-    let parse_arr = |s: &str| -> Vec<String> {
-        s.trim_matches(|c| c == '[' || c == ']')
-            .split(',')
-            .map(|p| p.trim().trim_matches('"').to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+
+    let fk_native_sql: Option<&str> = match db_type {
+        "postgres" => Some(
+            "SELECT * FROM postgres_query('_db', \
+             'SELECT tc.constraint_name, tc.table_name, \
+                     kcu.column_name, \
+                     ccu.table_name AS foreign_table_name, \
+                     ccu.column_name AS foreign_column_name \
+              FROM information_schema.table_constraints tc \
+              JOIN information_schema.key_column_usage kcu \
+                ON tc.constraint_name = kcu.constraint_name \
+               AND tc.table_schema = kcu.table_schema \
+              JOIN information_schema.constraint_column_usage ccu \
+                ON ccu.constraint_name = tc.constraint_name \
+               AND ccu.table_schema = tc.table_schema \
+              WHERE tc.constraint_type = ''FOREIGN KEY'' \
+                AND tc.table_schema NOT IN \
+                    (''information_schema'', ''pg_catalog'', ''pg_toast'') \
+              ORDER BY tc.constraint_name, kcu.ordinal_position')",
+        ),
+        "mysql" => Some(
+            "SELECT * FROM mysql_query('_db', \
+             'SELECT kcu.CONSTRAINT_NAME, kcu.TABLE_NAME, \
+                     kcu.COLUMN_NAME, \
+                     kcu.REFERENCED_TABLE_NAME, \
+                     kcu.REFERENCED_COLUMN_NAME \
+              FROM information_schema.KEY_COLUMN_USAGE kcu \
+              JOIN information_schema.TABLE_CONSTRAINTS tc \
+                ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
+               AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA \
+              WHERE tc.CONSTRAINT_TYPE = \"FOREIGN KEY\" \
+                AND kcu.TABLE_SCHEMA = DATABASE() \
+              ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION')",
+        ),
+        _ => None,
     };
-    if let Ok(mut st) = conn.prepare(&fk_sql) {
-        if let Ok(mut rows) = st.query([]) {
-            while let Ok(Some(row)) = rows.next() {
-                let name: String = row.get(0).unwrap_or_default();
-                let tbl: String = row.get(1).unwrap_or_default();
-                let cols_raw: String = row.get(2).unwrap_or_default();
-                let ref_tbl: String = row.get(3).unwrap_or_default();
-                let ref_cols_raw: String = row.get(4).unwrap_or_default();
-                table_fks.entry(tbl).or_default().push(ForeignKeyInfo {
-                    name,
-                    columns: parse_arr(&cols_raw),
-                    ref_table: ref_tbl,
-                    ref_columns: parse_arr(&ref_cols_raw),
-                });
+    if let Some(sql) = fk_native_sql {
+        // FK rows come one column per row — group by constraint name
+        let mut fk_map: std::collections::BTreeMap<
+            (String, String),          // (table, constraint_name)
+            (Vec<String>, String, Vec<String>), // (cols, ref_table, ref_cols)
+        > = std::collections::BTreeMap::new();
+        if let Ok(mut st) = conn.prepare(sql) {
+            if let Ok(mut rows) = st.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let cname: String = row.get(0).unwrap_or_default();
+                    let tbl: String = row.get(1).unwrap_or_default();
+                    let col: String = row.get(2).unwrap_or_default();
+                    let ref_tbl: String = row.get(3).unwrap_or_default();
+                    let ref_col: String = row.get(4).unwrap_or_default();
+                    let e = fk_map.entry((tbl, cname)).or_insert_with(|| (vec![], ref_tbl, vec![]));
+                    e.0.push(col);
+                    e.2.push(ref_col);
+                }
             }
+        }
+        for ((tbl, name), (columns, ref_table, ref_columns)) in fk_map {
+            table_fks.entry(tbl).or_default().push(ForeignKeyInfo {
+                name, columns, ref_table, ref_columns,
+            });
         }
     }
 
