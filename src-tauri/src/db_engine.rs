@@ -543,6 +543,45 @@ fn introspect_blocking(
         }
     }
 
+    // ── 3b. Row count estimates — native catalog, db_type-specific ──────────
+    // pg_class.reltuples for Postgres (updated by ANALYZE, fast approximate).
+    // information_schema.TABLES.TABLE_ROWS for MySQL (engine-managed estimate).
+    // SQLite has no built-in row estimate without a full COUNT(*) — skip.
+    let mut row_counts: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    let row_count_sql: Option<String> = match db_type {
+        "postgres" => Some(format!(
+            "SELECT c.relname, CAST(c.reltuples AS BIGINT) \
+             FROM _db.pg_catalog.pg_class c \
+             JOIN _db.pg_catalog.pg_namespace n ON c.relnamespace = n.oid \
+             WHERE c.relkind = 'r' \
+               AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast', \
+                                     'pg_internal', 'pg_toast_temp_1') \
+               AND c.reltuples >= 0"
+        )),
+        "mysql" => Some(
+            "SELECT TABLE_NAME, CAST(TABLE_ROWS AS BIGINT) \
+             FROM _db.information_schema.TABLES \
+             WHERE TABLE_TYPE = 'BASE TABLE' \
+               AND TABLE_ROWS IS NOT NULL"
+                .to_string(),
+        ),
+        _ => None,
+    };
+    if let Some(sql) = row_count_sql {
+        if let Ok(mut st) = conn.prepare(&sql) {
+            if let Ok(mut rows) = st.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let tbl: String = row.get(0).unwrap_or_default();
+                    let cnt: i64 = row.get(1).unwrap_or(-1);
+                    if cnt >= 0 {
+                        row_counts.insert(tbl, cnt);
+                    }
+                }
+            }
+        }
+    }
+
     // ── 4. Indexes (non-PK only; PK already shown via is_primary_key) ──────
     // duckdb_indexes().expressions is VARCHAR[] — cast to string for safe Rust get().
     let idx_sql = format!(
@@ -624,10 +663,11 @@ fn introspect_blocking(
             let size_bytes = table_sizes.get(&table_name).copied().filter(|&s| s > 0);
             let indexes = table_indexes.remove(&table_name).unwrap_or_default();
             let foreign_keys = table_fks.remove(&table_name).unwrap_or_default();
+            let row_count = row_counts.get(&table_name).copied();
             TableSchema {
                 table_name,
                 columns,
-                row_count_estimate: None, // no row count from duckdb_tables(); add later via pg_class
+                row_count_estimate: row_count,
                 size_bytes,
                 indexes,
                 foreign_keys,
