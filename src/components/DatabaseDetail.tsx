@@ -7,6 +7,7 @@ import { ArrowLeft, ChevronRight, Database, Loader2, Key, Link, List } from 'luc
 import { useAgentStore } from '../stores/agentStore';
 import { legacyKindStringOf } from '../utils/sources';
 import { SourceIcon } from './SourceIcon';
+import type { AgentConfig } from '../types/events';
 
 interface ColumnInfo {
   name: string;
@@ -55,7 +56,7 @@ function formatBytes(bytes: number): string {
 export function DatabaseDetail() {
   const { sourceId } = useParams<{ sourceId: string }>();
   const navigate = useNavigate();
-  const { config } = useAgentStore();
+  const { config, setConfig } = useAgentStore();
 
   const decodedId = sourceId ? decodeURIComponent(sourceId) : '';
   const source = config?.sources?.find((s) => s.id === decodedId);
@@ -70,7 +71,14 @@ export function DatabaseDetail() {
 
     invoke<TableSchema[]>('introspect_db_schema', { sourceId: decodedId })
       .then((tables) => {
-        if (!cancelled) setState({ kind: 'ok', tables });
+        if (!cancelled) {
+          setState({ kind: 'ok', tables });
+          // Reload config so last_scan_at / last_scan_stats written by
+          // introspect_db_schema appear in the sidebar immediately.
+          invoke<AgentConfig>('get_config')
+            .then((cfg) => { if (!cancelled) setConfig(cfg); })
+            .catch(() => undefined);
+        }
       })
       .catch((err) => {
         if (!cancelled) setState({ kind: 'error', message: String(err) });

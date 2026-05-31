@@ -56,10 +56,13 @@ export function useAgentEvents() {
       }),
     );
 
-    // Scan completion (clear the progress row)
+    // Scan completion — clear progress spinner AND reload config so
+    // last_scan_at / last_scan_stats written by the scanner are
+    // reflected in the sidebar without requiring a manual refresh.
     unsubs.push(
       listen<ScanComplete>(EVENT_NAMES.SCAN_COMPLETE, (event) => {
         clearScanProgress(event.payload.folder);
+        refreshConfig(setConfig);
       }),
     );
 
