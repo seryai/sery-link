@@ -15,6 +15,25 @@ use std::sync::Mutex;
 
 const SERVICE: &str = "sery-link-db";
 
+fn default_ssh_port() -> u16 {
+    22
+}
+
+/// SSH tunnel configuration stored alongside a DB connection config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshConfig {
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_passphrase: Option<String>,
+}
+
 /// Full connection configuration for a database source.
 /// Stored in .vault.json via cred_store, keyed on source_id.
 /// SQLite is excluded — it has no credentials, only a file path.
@@ -27,6 +46,8 @@ pub enum DbConnectionConfig {
         username: String,
         database: String,
         password: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh: Option<SshConfig>,
     },
     Postgresql {
         host: String,
@@ -34,6 +55,8 @@ pub enum DbConnectionConfig {
         username: String,
         database: String,
         password: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh: Option<SshConfig>,
     },
     Snowflake {
         account: String,

@@ -2343,17 +2343,48 @@ function DatabaseStage({
   const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // SSH tunnel state
+  const [sshEnabled, setSshEnabled] = useState(false);
+  const [sshHost, setSshHost] = useState('');
+  const [sshPort, setSshPort] = useState('22');
+  const [sshUsername, setSshUsername] = useState('');
+  const [sshAuthMode, setSshAuthMode] = useState<'password' | 'key'>('key');
+  const [sshPassword, setSshPassword] = useState('');
+  const [sshKeyPath, setSshKeyPath] = useState('');
+  const [sshKeyPassphrase, setSshKeyPassphrase] = useState('');
+
   const portNumber = parseInt(port, 10);
   const portValid = !isNaN(portNumber) && portNumber > 0 && portNumber <= 65535;
+  const sshPortNumber = parseInt(sshPort, 10);
+  const sshPortValid = !isNaN(sshPortNumber) && sshPortNumber > 0 && sshPortNumber <= 65535;
+  const sshValid = !sshEnabled || (
+    sshHost.trim() !== '' &&
+    sshUsername.trim() !== '' &&
+    sshPortValid &&
+    (sshAuthMode === 'password' ? sshPassword !== '' : sshKeyPath.trim() !== '')
+  );
   const canSubmit =
     !busy &&
     host.trim() !== '' &&
     username.trim() !== '' &&
     database.trim() !== '' &&
     password !== '' &&
-    portValid;
+    portValid &&
+    sshValid;
 
   const resetTest = () => setTestStatus(null);
+
+  const buildSshArgs = () => {
+    if (!sshEnabled || sshHost.trim() === '') return {};
+    return {
+      sshHost: sshHost.trim(),
+      sshPort: sshPortNumber,
+      sshUsername: sshUsername.trim(),
+      sshPassword: sshAuthMode === 'password' ? sshPassword : undefined,
+      sshKeyPath: sshAuthMode === 'key' ? sshKeyPath.trim() : undefined,
+      sshKeyPassphrase: sshAuthMode === 'key' && sshKeyPassphrase ? sshKeyPassphrase : undefined,
+    };
+  };
 
   const test = async () => {
     setError(null);
@@ -2367,6 +2398,7 @@ function DatabaseStage({
         database: database.trim(),
         password,
         kind: dbKind,
+        ...buildSshArgs(),
       });
       setTestStatus('ok');
       toast.success('Connection OK');
@@ -2388,6 +2420,7 @@ function DatabaseStage({
         username: username.trim(),
         database: database.trim(),
         password,
+        ...buildSshArgs(),
       });
       toast.success(`${label} source added`);
       onAdded();
@@ -2448,6 +2481,101 @@ function DatabaseStage({
           Stored in your OS keychain. Never sent to Sery servers — queries
           execute locally on this machine via DuckDB.
         </p>
+      </div>
+
+      {/* SSH tunnel section */}
+      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/30">
+        <button
+          type="button"
+          onClick={() => { setSshEnabled(!sshEnabled); resetTest(); }}
+          className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
+        >
+          <span>SSH Tunnel</span>
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${sshEnabled ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' : 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'}`}>
+            {sshEnabled ? 'enabled' : 'disabled'}
+          </span>
+        </button>
+
+        {sshEnabled && (
+          <div className="border-t border-slate-200 px-3 pb-3 pt-2 dark:border-slate-700">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-2">
+                <CredField
+                  label="SSH Host"
+                  value={sshHost}
+                  onChange={(v) => { setSshHost(v); resetTest(); }}
+                  placeholder="bastion.example.com"
+                />
+              </div>
+              <CredField
+                label="SSH Port"
+                value={sshPort}
+                onChange={(v) => { setSshPort(v); resetTest(); }}
+                placeholder="22"
+              />
+            </div>
+            <div className="mt-3">
+              <CredField
+                label="SSH Username"
+                value={sshUsername}
+                onChange={(v) => { setSshUsername(v); resetTest(); }}
+                placeholder="ubuntu"
+              />
+            </div>
+            <div className="mt-3">
+              <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">
+                Auth method
+              </label>
+              <div className="flex gap-3">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="radio"
+                    checked={sshAuthMode === 'key'}
+                    onChange={() => { setSshAuthMode('key'); resetTest(); }}
+                    className="accent-purple-600"
+                  />
+                  Private key
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+                  <input
+                    type="radio"
+                    checked={sshAuthMode === 'password'}
+                    onChange={() => { setSshAuthMode('password'); resetTest(); }}
+                    className="accent-purple-600"
+                  />
+                  Password
+                </label>
+              </div>
+            </div>
+            {sshAuthMode === 'key' ? (
+              <div className="mt-3 space-y-3">
+                <CredField
+                  label="Key path"
+                  value={sshKeyPath}
+                  onChange={(v) => { setSshKeyPath(v); resetTest(); }}
+                  placeholder="~/.ssh/id_ed25519"
+                />
+                <CredField
+                  label="Key passphrase (optional)"
+                  value={sshKeyPassphrase}
+                  onChange={(v) => { setSshKeyPassphrase(v); resetTest(); }}
+                  type="password"
+                  placeholder="leave blank if none"
+                />
+              </div>
+            ) : (
+              <div className="mt-3">
+                <CredField
+                  label="SSH Password"
+                  value={sshPassword}
+                  onChange={(v) => { setSshPassword(v); resetTest(); }}
+                  type="password"
+                  placeholder="••••••••"
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">

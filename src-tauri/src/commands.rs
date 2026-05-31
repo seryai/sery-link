@@ -5174,13 +5174,30 @@ pub async fn add_mysql_source(
     username: String,
     database: String,
     password: String,
+    ssh_host: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_username: Option<String>,
+    ssh_password: Option<String>,
+    ssh_key_path: Option<String>,
+    ssh_key_passphrase: Option<String>,
 ) -> Result<String, String> {
+    let ssh = ssh_host.as_deref().filter(|h| !h.is_empty()).map(|h| {
+        crate::db_creds::SshConfig {
+            host: h.to_string(),
+            port: ssh_port.unwrap_or(22),
+            username: ssh_username.unwrap_or_default(),
+            password: ssh_password.filter(|s| !s.is_empty()),
+            key_path: ssh_key_path.filter(|s| !s.is_empty()),
+            key_passphrase: ssh_key_passphrase.filter(|s| !s.is_empty()),
+        }
+    });
     let cfg = crate::db_creds::DbConnectionConfig::Mysql {
         host: host.trim().to_string(),
         port: port.unwrap_or(3306),
         username: username.trim().to_string(),
         database: database.trim().to_string(),
         password: password.clone(),
+        ssh,
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(3306), database.trim());
     add_db_source_inner(crate::sources::SourceKind::Mysql {}, cfg, name).await
@@ -5194,13 +5211,30 @@ pub async fn add_postgresql_source(
     username: String,
     database: String,
     password: String,
+    ssh_host: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_username: Option<String>,
+    ssh_password: Option<String>,
+    ssh_key_path: Option<String>,
+    ssh_key_passphrase: Option<String>,
 ) -> Result<String, String> {
+    let ssh = ssh_host.as_deref().filter(|h| !h.is_empty()).map(|h| {
+        crate::db_creds::SshConfig {
+            host: h.to_string(),
+            port: ssh_port.unwrap_or(22),
+            username: ssh_username.unwrap_or_default(),
+            password: ssh_password.filter(|s| !s.is_empty()),
+            key_path: ssh_key_path.filter(|s| !s.is_empty()),
+            key_passphrase: ssh_key_passphrase.filter(|s| !s.is_empty()),
+        }
+    });
     let cfg = crate::db_creds::DbConnectionConfig::Postgresql {
         host: host.trim().to_string(),
         port: port.unwrap_or(5432),
         username: username.trim().to_string(),
         database: database.trim().to_string(),
         password: password.clone(),
+        ssh,
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(5432), database.trim());
     add_db_source_inner(crate::sources::SourceKind::Postgresql {}, cfg, name).await
@@ -5370,7 +5404,23 @@ pub async fn test_db_connection(
     database: String,
     password: String,
     kind: String,
+    ssh_host: Option<String>,
+    ssh_port: Option<u16>,
+    ssh_username: Option<String>,
+    ssh_password: Option<String>,
+    ssh_key_path: Option<String>,
+    ssh_key_passphrase: Option<String>,
 ) -> Result<(), String> {
+    let ssh = ssh_host.as_deref().filter(|h| !h.is_empty()).map(|h| {
+        crate::db_creds::SshConfig {
+            host: h.to_string(),
+            port: ssh_port.unwrap_or(22),
+            username: ssh_username.unwrap_or_default(),
+            password: ssh_password.filter(|s| !s.is_empty()),
+            key_path: ssh_key_path.filter(|s| !s.is_empty()),
+            key_passphrase: ssh_key_passphrase.filter(|s| !s.is_empty()),
+        }
+    });
     let cfg = match kind.as_str() {
         "mysql" => crate::db_creds::DbConnectionConfig::Mysql {
             host: host.trim().to_string(),
@@ -5378,6 +5428,7 @@ pub async fn test_db_connection(
             username: username.trim().to_string(),
             database: database.trim().to_string(),
             password: password.clone(),
+            ssh,
         },
         "postgresql" => crate::db_creds::DbConnectionConfig::Postgresql {
             host: host.trim().to_string(),
@@ -5385,6 +5436,7 @@ pub async fn test_db_connection(
             username: username.trim().to_string(),
             database: database.trim().to_string(),
             password: password.clone(),
+            ssh,
         },
         other => return Err(format!("Unknown DB kind: {other}")),
     };
