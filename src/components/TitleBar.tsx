@@ -11,9 +11,17 @@ export function TitleBar() {
     const startX = e.screenX;
     const startY = e.screenY;
     const factor = window.devicePixelRatio ?? 1;
-    const base = await win.outerPosition();
+
+    // Register listeners synchronously so the webview keeps mouse capture
+    // during the outerPosition() IPC round-trip. Without this, when the
+    // window is already focused the first mousemove fires before the listener
+    // is added, the browser loses capture, and drag silently stops working.
+    let base: Awaited<ReturnType<typeof win.outerPosition>> | null = null;
+    let lastMv: MouseEvent | null = null;
 
     const onMove = (mv: MouseEvent) => {
+      lastMv = mv;
+      if (!base) return;
       const dx = Math.round((mv.screenX - startX) * factor);
       const dy = Math.round((mv.screenY - startY) * factor);
       void win.setPosition(new PhysicalPosition(base.x + dx, base.y + dy));
@@ -26,6 +34,9 @@ export function TitleBar() {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+
+    base = await win.outerPosition();
+    if (lastMv) onMove(lastMv);
   }, []);
 
   return (
