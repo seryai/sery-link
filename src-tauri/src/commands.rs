@@ -5487,6 +5487,27 @@ pub async fn introspect_db_schema(
         }
     });
 
+    // Persist scan stats so the sidebar can show table count, column
+    // count, and "last scanned X ago" for DB sources — the same data
+    // the file scanner writes for local/S3/SFTP sources.
+    let total_tables = tables.len();
+    let total_columns: usize = tables.iter().map(|t| t.columns.len()).sum();
+    let total_bytes: u64 = tables.iter().filter_map(|t| t.size_bytes).map(|b| b as u64).sum();
+    if let Ok(mut cfg) = Config::load() {
+        cfg.update_source_scan_stats(
+            &source_id,
+            crate::config::ScanStats {
+                datasets: total_tables as u64,
+                columns: total_columns as u64,
+                errors: 0,
+                total_bytes,
+                duration_ms: 0,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = cfg.save();
+    }
+
     Ok(tables)
 }
 
