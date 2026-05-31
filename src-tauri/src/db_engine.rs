@@ -586,14 +586,11 @@ fn introspect_blocking(
                     (''information_schema'',''pg_catalog'',''pg_toast'',''pg_toast_temp_1'')')"
             .to_string(),
         ),
+        // SHOW TABLE STATUS reads from engine metadata cache — much faster than
+        // information_schema.TABLES for large databases (avoids live stats scan).
+        // Columns: 0=Name, 4=Rows, 6=Data_length, 8=Index_length.
         "mysql" => Some(format!(
-            "SELECT * FROM mysql_query('_db', \
-             'SELECT TABLE_NAME, \
-                     CAST(TABLE_ROWS AS SIGNED), \
-                     CAST(DATA_LENGTH + INDEX_LENGTH AS SIGNED) \
-              FROM information_schema.TABLES \
-              WHERE TABLE_TYPE = ''BASE TABLE'' \
-                AND TABLE_SCHEMA = ''{db_name}''')",
+            "SELECT * FROM mysql_query('_db', 'SHOW TABLE STATUS FROM `{db_name}`')",
         )),
         _ => None,
     };
@@ -605,8 +602,22 @@ fn introspect_blocking(
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next() {
                         let tbl: String = row.get(0).unwrap_or_default();
-                        let cnt: i64 = row.get(1).unwrap_or(0);
-                        let sz: i64 = row.get(2).unwrap_or(0);
+                        // Postgres: cols (0=relname, 1=reltuples, 2=total_size)
+                        // MySQL SHOW TABLE STATUS: cols (0=Name, 4=Rows, 6=Data_length, 8=Index_length)
+                        let (cnt, sz) = if db_type == "mysql" {
+                            let rows_val: i64 = row.get::<_, i64>(4)
+                                .or_else(|_| row.get::<_, u64>(4).map(|v| v as i64))
+                                .unwrap_or(0);
+                            let data_len: i64 = row.get::<_, i64>(6)
+                                .or_else(|_| row.get::<_, u64>(6).map(|v| v as i64))
+                                .unwrap_or(0);
+                            let idx_len: i64 = row.get::<_, i64>(8)
+                                .or_else(|_| row.get::<_, u64>(8).map(|v| v as i64))
+                                .unwrap_or(0);
+                            (rows_val, data_len + idx_len)
+                        } else {
+                            (row.get(1).unwrap_or(0), row.get(2).unwrap_or(0))
+                        };
                         if cnt >= 0 { row_counts.insert(tbl.clone(), cnt); }
                         if sz > 0  { table_sizes.insert(tbl, sz); }
                     }
@@ -640,15 +651,16 @@ fn introspect_blocking(
                 )')"
             .to_string(),
         ),
+        // Per-row (no GROUP_CONCAT): avoids slow aggregation on large schemas.
+        // Grouping by (TABLE_NAME, INDEX_NAME) is done in Rust below.
+        // Columns: 0=TABLE_NAME, 1=INDEX_NAME, 2=NON_UNIQUE(0=unique), 3=COLUMN_NAME
         "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
-             'SELECT TABLE_NAME, INDEX_NAME, \
-                     CASE NON_UNIQUE WHEN 0 THEN 1 ELSE 0 END, \
-                     GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) \
+             'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME \
               FROM information_schema.STATISTICS \
               WHERE TABLE_SCHEMA = ''{db_name}'' \
                 AND INDEX_NAME <> ''PRIMARY'' \
-              GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE')",
+              ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX')",
         )),
         _ => None,
     };
@@ -658,23 +670,34 @@ fn introspect_blocking(
             Ok(mut st) => match st.query([]) {
                 Err(e) => eprintln!("[introspect] index query exec failed: {e}"),
                 Ok(mut rows) => {
+                    // For MySQL: per-row (no GROUP_CONCAT), group by (tbl, name) here.
+                    // For Postgres: each row has the full indexdef; parse columns from it.
+                    let mut mysql_idx_acc: std::collections::BTreeMap<
+                        (String, String),
+                        (bool, Vec<String>),
+                    > = std::collections::BTreeMap::new();
+
                     while let Ok(Some(row)) = rows.next() {
                         let tbl: String = row.get(0).unwrap_or_default();
                         let name: String = row.get(1).unwrap_or_default();
-                        let columns = if db_type == "postgres" {
-                            // col2 = bool (true/false), col3 = indexdef string
+                        if db_type == "postgres" {
+                            // col2 = unique bool, col3 = indexdef string
                             let indexdef: String = row.get(3).unwrap_or_default();
-                            // Extract last (...) from "CREATE INDEX name ON table USING btree (col1, col2)"
-                            parse_indexdef_columns(&indexdef)
+                            let columns = parse_indexdef_columns(&indexdef);
+                            let unique: bool = row.get::<_, bool>(2).unwrap_or(false);
+                            table_indexes.entry(tbl).or_default().push(IndexInfo {
+                                name, columns, unique, primary: false,
+                            });
                         } else {
-                            let cols_str: String = row.get(3).unwrap_or_default();
-                            cols_str.split(',').map(|s| s.trim().to_string())
-                                .filter(|s| !s.is_empty()).collect()
-                        };
-                        // col2 is bool (postgres) or int (mysql)
-                        let unique: bool = row.get::<_, bool>(2)
-                            .or_else(|_| row.get::<_, i64>(2).map(|v| v != 0))
-                            .unwrap_or(false);
+                            // col2 = NON_UNIQUE (0 = unique), col3 = COLUMN_NAME
+                            let non_unique: i64 = row.get::<_, i64>(2).unwrap_or(1);
+                            let col: String = row.get(3).unwrap_or_default();
+                            let entry = mysql_idx_acc.entry((tbl, name))
+                                .or_insert_with(|| (non_unique == 0, vec![]));
+                            if !col.is_empty() { entry.1.push(col); }
+                        }
+                    }
+                    for ((tbl, name), (unique, columns)) in mysql_idx_acc {
                         table_indexes.entry(tbl).or_default().push(IndexInfo {
                             name, columns, unique, primary: false,
                         });
@@ -708,19 +731,17 @@ fn introspect_blocking(
               ORDER BY tc.constraint_name, kcu.ordinal_position')"
             .to_string(),
         ),
+        // No JOIN — REFERENCED_TABLE_NAME IS NOT NULL identifies FK rows cheaply.
         "mysql" => Some(format!(
             "SELECT * FROM mysql_query('_db', \
-             'SELECT kcu.CONSTRAINT_NAME, kcu.TABLE_NAME, \
-                     kcu.COLUMN_NAME, \
-                     kcu.REFERENCED_TABLE_NAME, \
-                     kcu.REFERENCED_COLUMN_NAME \
-              FROM information_schema.KEY_COLUMN_USAGE kcu \
-              JOIN information_schema.TABLE_CONSTRAINTS tc \
-                ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME \
-               AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA \
-              WHERE tc.CONSTRAINT_TYPE = ''FOREIGN KEY'' \
-                AND kcu.TABLE_SCHEMA = ''{db_name}'' \
-              ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION')",
+             'SELECT CONSTRAINT_NAME, TABLE_NAME, \
+                     COLUMN_NAME, \
+                     REFERENCED_TABLE_NAME, \
+                     REFERENCED_COLUMN_NAME \
+              FROM information_schema.KEY_COLUMN_USAGE \
+              WHERE TABLE_SCHEMA = ''{db_name}'' \
+                AND REFERENCED_TABLE_NAME IS NOT NULL \
+              ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION')",
         )),
         _ => None,
     };
