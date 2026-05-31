@@ -45,11 +45,25 @@ const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
   lg: 'h-8 w-8',
 };
 
+// DB chip fills the outer container (sidebar = h-8 w-8, detail = h-10 w-10).
+// These are larger than SIZE_CLASS so the chip is visually on par with
+// folder / S3 icons which fill their slot with full-bleed SVG art.
+const DB_CHIP_CLASS: Record<NonNullable<Props['size']>, string> = {
+  sm: 'h-8 w-8',   // fills the sidebar's h-8 w-8 outer chip
+  md: 'h-8 w-8',
+  lg: 'h-10 w-10',
+};
+const DB_INNER_PX: Record<NonNullable<Props['size']>, number> = {
+  sm: 20,
+  md: 20,
+  lg: 28,
+};
+
 export function SourceIcon({ kind, size = 'md' }: Props) {
   const px = SIZE_PX[size];
   const cls = SIZE_CLASS[size];
-  // Inner icon size for DB chips: ~65 % of the chip so there's visible padding.
-  const dbPx = Math.max(8, Math.round(px * 0.65));
+  const dbCls = DB_CHIP_CLASS[size];
+  const dbPx  = DB_INNER_PX[size];
 
   switch (kind) {
     case 'gdrive':
@@ -72,19 +86,19 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
       return <WebDavMark className={cls} />;
     // Database types: solid brand-color chip, white icon — self-contained app-icon style.
     case 'mysql':
-      return <DbChip cls={cls} bg="#4479A1"><SiMysql size={dbPx} color="#ffffff" title="MySQL" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#4479A1"><SiMysql size={dbPx} color="#ffffff" title="MySQL" /></DbChip>;
     case 'postgresql':
-      return <DbChip cls={cls} bg="#336791"><SiPostgresql size={dbPx} color="#ffffff" title="PostgreSQL" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#336791"><SiPostgresql size={dbPx} color="#ffffff" title="PostgreSQL" /></DbChip>;
     case 'redis':
-      return <DbChip cls={cls} bg="#DC382D"><SiRedis size={dbPx} color="#ffffff" title="Redis" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#DC382D"><SiRedis size={dbPx} color="#ffffff" title="Redis" /></DbChip>;
     case 'mongodb':
-      return <DbChip cls={cls} bg="#47A248"><SiMongodb size={dbPx} color="#ffffff" title="MongoDB" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#47A248"><SiMongodb size={dbPx} color="#ffffff" title="MongoDB" /></DbChip>;
     case 'sqlite':
-      return <DbChip cls={cls} bg="#003B57"><SiSqlite size={dbPx} color="#ffffff" title="SQLite" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#003B57"><SiSqlite size={dbPx} color="#ffffff" title="SQLite" /></DbChip>;
     case 'snowflake':
-      return <DbChip cls={cls} bg="#29B5E8"><SiSnowflake size={dbPx} color="#ffffff" title="Snowflake" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#29B5E8"><SiSnowflake size={dbPx} color="#ffffff" title="Snowflake" /></DbChip>;
     case 'clickhouse':
-      return <DbChip cls={cls} bg="#FFCC01"><SiClickhouse size={dbPx} color="#1a1a1a" title="ClickHouse" /></DbChip>;
+      return <DbChip cls={dbCls} bg="#FFCC01"><SiClickhouse size={dbPx} color="#1a1a1a" title="ClickHouse" /></DbChip>;
     default:
       return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
