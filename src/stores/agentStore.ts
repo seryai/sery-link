@@ -149,6 +149,13 @@ interface AgentState {
   historySearch: string;
   setHistoryFilter: (f: 'all' | 'success' | 'error') => void;
   setHistorySearch: (s: string) => void;
+  // Cross-component triggers for TitleBar → SourcesSidebar / StatusBar
+  addSourceOpen: boolean;
+  setAddSourceOpen: (v: boolean) => void;
+  showConnectModal: boolean;
+  setShowConnectModal: (v: boolean) => void;
+  connectDefaultKey: string | null;
+  setConnectDefaultKey: (key: string | null) => void;
   setLoading: (value: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
@@ -175,6 +182,9 @@ const initial = {
   folderSort: {} as Record<string, FolderSort>,
   historyFilter: 'all' as 'all' | 'success' | 'error',
   historySearch: '',
+  addSourceOpen: false,
+  showConnectModal: false,
+  connectDefaultKey: null,
   isLoading: false,
   error: null,
 };
@@ -233,6 +243,9 @@ export const useAgentStore = create<AgentState>((set) => ({
     })),
   setHistoryFilter: (f) => set({ historyFilter: f }),
   setHistorySearch: (s) => set({ historySearch: s }),
+  setAddSourceOpen: (v) => set({ addSourceOpen: v }),
+  setShowConnectModal: (v) => set({ showConnectModal: v }),
+  setConnectDefaultKey: (key) => set({ connectDefaultKey: key }),
   setSchemaNotifications: (entries) =>
     set({ schemaNotifications: entries.slice(0, MAX_NOTIFICATIONS_KEEP) }),
   addSchemaNotification: (payload) =>

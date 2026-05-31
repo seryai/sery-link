@@ -183,6 +183,8 @@ export function SourcesSidebar() {
     scansInFlight,
     applyScanProgress,
     clearScanProgress,
+    addSourceOpen,
+    setAddSourceOpen,
   } = useAgentStore();
   const toast = useToast();
   const navigate = useNavigate();
@@ -197,6 +199,15 @@ export function SourcesSidebar() {
     null,
   );
   const [reauthSourceId, setReauthSourceId] = useState<string | null>(null);
+
+  // Sync: when TitleBar's [+ New Source] button sets addSourceOpen in
+  // the store, open the local AddSourceModal and reset the store flag.
+  useEffect(() => {
+    if (addSourceOpen) {
+      setAddOpen(true);
+      setAddSourceOpen(false);
+    }
+  }, [addSourceOpen, setAddSourceOpen]);
 
   // Close any open context menu on outside click / escape.
   useEffect(() => {
@@ -786,13 +797,6 @@ export function SourcesSidebar() {
           >
             <RefreshCw className="h-3.5 w-3.5" />
             Scan all
-          </button>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-purple-700"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add source
           </button>
         </div>
       </div>

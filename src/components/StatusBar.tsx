@@ -52,17 +52,31 @@ const CONNECTED_STATUS: Record<
   },
 };
 
-export function StatusBar() {
+export function StatusBar({ headless }: { headless?: boolean }) {
   const {
     authenticated,
     connectionStatus,
     connectionDetail,
     agentInfo,
     stats,
+    showConnectModal: storeShowConnect,
+    setShowConnectModal,
+    connectDefaultKey,
   } = useAgentStore();
   const toast = useToast();
   const [showConnect, setShowConnect] = useState(false);
   const [savedKey, setSavedKey] = useState<string | undefined>();
+  const [deepLinkKeyOverride, setDeepLinkKeyOverride] = useState<string | null>(null);
+
+  // Sync: when TitleBar (or any other component) sets showConnectModal
+  // in the store, open the local ConnectModal and reset the store flag.
+  useEffect(() => {
+    if (storeShowConnect) {
+      setDeepLinkKeyOverride(connectDefaultKey);
+      setShowConnect(true);
+      setShowConnectModal(false);
+    }
+  }, [storeShowConnect, connectDefaultKey, setShowConnectModal]);
   // Catch-up follow-up: when the user clicked "Not now" on the
   // post-connect prompt, the folders stay locally indexed but
   // never make it to the workspace. Poll list_catch_up_folders
@@ -169,6 +183,31 @@ export function StatusBar() {
   function closeConnect() {
     setShowConnect(false);
     setDeepLinkKey(null);
+    setDeepLinkKeyOverride(null);
+  }
+
+  // Effective default key: store-triggered override > deep-link > saved key
+  const effectiveDefaultKey = deepLinkKeyOverride ?? deepLinkKey ?? savedKey;
+
+  // Headless mode: render only modals (no visible bar). Used in the new
+  // layout where TitleBar shows status inline and StatusBar is a
+  // ConnectionManager with no visible UI.
+  if (headless) {
+    return (
+      <>
+        {showConnect && (
+          <ConnectModal onClose={closeConnect} defaultKey={effectiveDefaultKey} />
+        )}
+        {showCatchUp && (
+          <CatchUpDialog
+            folders={catchUpFolders}
+            onClose={() => setShowCatchUp(false)}
+            title="Share these folders with your workspace?"
+            subtitle="These folders are indexed on this machine but haven't been shared with your workspace yet."
+          />
+        )}
+      </>
+    );
   }
 
   // Two shells — local-only vs connected. Keeping the branch at the
@@ -206,7 +245,7 @@ export function StatusBar() {
         {showConnect && (
           <ConnectModal
             onClose={closeConnect}
-            defaultKey={deepLinkKey ?? savedKey}
+            defaultKey={effectiveDefaultKey}
           />
         )}
       </>

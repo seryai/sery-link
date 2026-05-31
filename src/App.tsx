@@ -8,20 +8,10 @@
 //   5. Providers: ToastProvider wraps everything so all components can show toasts.
 
 import { useEffect, useState } from 'react';
-import { HashRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import {
-  BarChart3,
-  Bell,
-  ChevronDown,
-  Layers,
-  Loader2,
-  Search,
-  Settings as SettingsIcon,
-  Shield,
-  Sparkles,
-} from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useAgentStore, type AgentToken } from './stores/agentStore';
 import { useAgentEvents } from './hooks/useAgentEvents';
 import { useTheme } from './hooks/useTheme';
@@ -42,6 +32,7 @@ import { ReAuthModal } from './components/ReAuthModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { TitleBar } from './components/TitleBar';
 import { CommandPalette } from './components/CommandPalette';
+import { Dashboard } from './components/Dashboard';
 import type { AgentConfig, AgentStats, StoredSchemaNotification } from './types/events';
 
 export default function App() {
@@ -56,13 +47,10 @@ export default function App() {
 
 function AppInner() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [showMoreDropdown, setShowMoreDropdown] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
 
   const {
     agentInfo,
-    authenticated,
     config,
     setAuthenticated,
     setAgentInfo,
@@ -70,9 +58,6 @@ function AppInner() {
     setStats,
     setSchemaNotifications,
   } = useAgentStore();
-
-  // Check if current route is in More dropdown
-  const isMoreActive = location.pathname.startsWith('/notifications') || location.pathname.startsWith('/privacy');
 
   // Keep the `html.dark` class and `html.theme` in sync with config
   useTheme();
@@ -117,30 +102,6 @@ function AppInner() {
       unlisten?.();
     };
   }, [navigate]);
-
-  // Close More dropdown when clicking outside
-  useEffect(() => {
-    if (!showMoreDropdown) return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // Don't close if clicking inside the dropdown or on NavLinks
-      if (target.closest('.dropdown-container') || target.closest('a[href]')) {
-        return;
-      }
-      setShowMoreDropdown(false);
-    };
-
-    // Use setTimeout to allow NavLink clicks to register first
-    const timeoutId = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside);
-    }, 0);
-
-    return () => {
-      clearTimeout(timeoutId);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [showMoreDropdown]);
 
   // Bootstrap on launch.
   //
@@ -237,174 +198,36 @@ function AppInner() {
   return (
     <div className="flex h-screen flex-col bg-transparent">
       <TitleBar />
-      <StatusBar />
+      {/* StatusBar in headless mode — runs all event listeners and
+          renders ConnectModal / CatchUpDialog via fixed-position
+          portals, but shows no visible bar (that's now in TitleBar). */}
+      <StatusBar headless />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="flex w-56 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-black/[0.03] dark:bg-white/[0.04]">
-
-          <nav className="flex flex-1 flex-col space-y-0.5 p-2">
-            <NavLink
-              to="/search"
-              className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`
-              }
-            >
-              <Search className="h-4 w-4" />
-              Find
-            </NavLink>
-            <NavLink
-              to="/sources"
-              className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`
-              }
-            >
-              <Layers className="h-4 w-4" />
-              Sources
-            </NavLink>
-            <NavLink
-              to="/results"
-              className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`
-              }
-            >
-              <BarChart3 className="h-4 w-4" />
-              History
-            </NavLink>
-            {/* Recipes are workspace-scoped — hidden until connected. */}
-            {authenticated && (
-              <>
-                <NavLink
-                  to="/recipes"
-                  className={({ isActive }) =>
-                    `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                      isActive
-                        ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                        : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                    }`
-                  }
-                >
-                  <Sparkles className="h-4 w-4" />
-                  Recipes
-                </NavLink>
-              </>
-            )}
-            {/* Spacer to push bottom items down */}
-            <div className="flex-1" />
-
-            {/* Settings — direct link, always visible */}
-            <NavLink
-              to="/settings"
-              className={({ isActive }) =>
-                `flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`
-              }
-            >
-              <SettingsIcon className="h-4 w-4" />
-              Settings
-            </NavLink>
-
-            {/* More dropdown — low-frequency items */}
-            <div className="dropdown-container relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMoreDropdown(!showMoreDropdown);
-                }}
-                className={`flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
-                  isMoreActive
-                    ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <ChevronDown
-                    className={`h-4 w-4 transition-transform ${showMoreDropdown ? 'rotate-180' : ''}`}
-                  />
-                  <span>More</span>
-                </div>
-                <MoreNotificationsBadge />
-              </button>
-
-              {/* Dropdown menu */}
-              {showMoreDropdown && (
-                <div className="dropdown-container absolute bottom-full left-0 mb-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                  <NavLink
-                    to="/notifications"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowMoreDropdown(false);
-                    }}
-                    className={({ isActive }) =>
-                      `flex w-full items-center justify-between gap-3 px-2.5 py-1.5 text-sm transition-colors ${
-                        isActive
-                          ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                          : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                      }`
-                    }
-                  >
-                    <div className="flex items-center gap-3">
-                      <Bell className="h-4 w-4" />
-                      <span>Notifications</span>
-                    </div>
-                    <NotificationsBadge />
-                  </NavLink>
-                  <NavLink
-                    to="/privacy"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowMoreDropdown(false);
-                    }}
-                    className={({ isActive }) =>
-                      `flex w-full items-center gap-3 px-2.5 py-1.5 text-sm transition-colors ${
-                        isActive
-                          ? 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
-                          : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'
-                      }`
-                    }
-                  >
-                    <Shield className="h-4 w-4" />
-                    <span>Privacy</span>
-                  </NavLink>
-                </div>
-              )}
-            </div>
-          </nav>
+        {/* Left: persistent sources list */}
+        <aside className="flex w-56 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-black/[0.03] dark:bg-white/[0.04] overflow-hidden">
+          <SourcesSidebar />
         </aside>
 
-        {/* Main content */}
-        <main className="flex-1 overflow-auto bg-white/85 dark:bg-[#1c1c1e]/90 backdrop-blur-none">
+        {/* Right: main content */}
+        <main className="flex-1 overflow-auto bg-white/85 dark:bg-[#1c1c1e]/90">
           <Routes>
-            <Route path="/" element={<Navigate to="/search" replace />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/search" element={<SearchPage />} />
-            <Route path="/folders" element={<Navigate to="/sources" replace />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/sources" element={<Navigate to="/" replace />} />
+            <Route path="/results" element={<Navigate to="/history" replace />} />
+            <Route path="/recipes" element={<Recipes />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/notifications" element={<Notifications />} />
+            <Route path="/privacy" element={<Privacy />} />
             <Route path="/db/:sourceId" element={<DatabaseDetail />} />
             <Route path="/folders/:folderId" element={<FolderDetail />} />
-            <Route path="/sources" element={<SourcesSidebar />} />
             <Route
               path="/folders/:folderId/files/:filePath"
               element={<FileDetail />}
             />
-            <Route path="/results" element={<History />} />
-            <Route path="/recipes" element={<Recipes />} />
-            <Route path="/notifications" element={<Notifications />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/folders" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>
@@ -417,40 +240,12 @@ function AppInner() {
         workspaceId={agentInfo?.workspace_id ?? null}
         onNavigate={(tab) => {
           navigate(`/${tab}`);
-          setShowMoreDropdown(false);
         }}
         onAddFolder={() => {
-          navigate('/sources');
-          setShowMoreDropdown(false);
+          navigate('/');
         }}
       />
     </div>
-  );
-}
-
-// Unread badge shown inside the More dropdown next to Notifications.
-function NotificationsBadge() {
-  const unread = useAgentStore((s) =>
-    s.schemaNotifications.reduce((n, x) => n + (x.read ? 0 : 1), 0),
-  );
-  if (unread === 0) return null;
-  return (
-    <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-      {unread > 99 ? '99+' : unread}
-    </span>
-  );
-}
-
-// Badge shown on the More button itself when there are unread notifications.
-function MoreNotificationsBadge() {
-  const unread = useAgentStore((s) =>
-    s.schemaNotifications.reduce((n, x) => n + (x.read ? 0 : 1), 0),
-  );
-  if (unread === 0) return null;
-  return (
-    <span className="rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-      {unread > 99 ? '99+' : unread}
-    </span>
   );
 }
 
