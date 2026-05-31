@@ -1,5 +1,6 @@
 mod agent_rpc;
 mod analytics;
+mod driver_manager;
 mod cred_store;
 mod db_creds;
 mod db_engine;
@@ -391,6 +392,16 @@ pub fn run() {
             commands::clear_gdrive_cache,
             commands::get_gdrive_skipped,
             commands::agent_invoke,
+            // Driver Store — on-demand Java JDBC driver installation
+            driver_manager::list_drivers_local,
+            driver_manager::list_drivers,
+            driver_manager::install_driver_cmd,
+            driver_manager::uninstall_driver_cmd,
+            driver_manager::get_driver_store_usage,
+            driver_manager::get_java_runtime_config,
+            driver_manager::set_java_runtime_config,
+            driver_manager::invalidate_driver_registry_cache,
+            driver_manager::import_driver_jar_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

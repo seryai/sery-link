@@ -21,6 +21,22 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
+// ─── Agent-based DB types (Oracle, DB2, SAP HANA, Snowflake via JDBC) ────────
+//
+// These database types require a Java JDBC agent that must be installed
+// via Settings → Driver Store before a connection can be opened.
+// The execute_via_agent stub below provides a clear error message when
+// the driver has not been installed yet.
+#[allow(dead_code)]
+pub fn execute_via_agent(_driver_key: &str, _sql: &str) -> Result<QueryResult> {
+    // TODO: route through db_core::agent_runtime::call_daemon when a driver
+    // is installed. For now, surface a useful error pointing users to the
+    // Driver Store.
+    Err(AgentError::Database(
+        "Install the driver via Settings → Driver Store before connecting to this database type.".to_string(),
+    ))
+}
+
 // ─── native connection pool caches ───────────────────────────────────────────
 
 static MYSQL_POOLS: Lazy<Mutex<HashMap<String, db_core::mysql::MySqlPool>>> =

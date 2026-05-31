@@ -32,9 +32,10 @@ import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { McpPanel } from './settings/McpPanel';
 import { StoragePanel } from './settings/StoragePanel';
+import { DriverStoreDialog } from './DriverStoreDialog';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'storage' | 'about';
+type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'storage' | 'drivers' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
@@ -241,6 +242,9 @@ export function Settings() {
           <TabButton active={tab === 'storage'} onClick={() => setTab('storage')}>
             Storage
           </TabButton>
+          <TabButton active={tab === 'drivers'} onClick={() => setTab('drivers')}>
+            Drivers
+          </TabButton>
           <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
             About
           </TabButton>
@@ -254,6 +258,7 @@ export function Settings() {
         {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
         {tab === 'mcp' && <McpPanel draft={draft} setDraft={setDraft} />}
         {tab === 'storage' && <StoragePanel />}
+        {tab === 'drivers' && <DriverStoreDialog open={true} onClose={() => setTab('general')} embedded />}
         {tab === 'about' && (
           <AboutPanel
             draft={draft}
