@@ -494,17 +494,13 @@ fn introspect_blocking(
                     (''information_schema'', ''pg_catalog'', ''pg_toast'')')"
             .to_string(),
         ),
-        // MySQL: replace DATABASE() with actual db_name; single quotes doubled
-        // because the query string is itself inside a DuckDB single-quoted literal. — DATABASE() inside
-        // mysql_query() may return NULL depending on DuckDB driver context.
-        // Single quotes doubled ('' → ') because the whole query is inside
-        // a DuckDB string literal.
+        // Direct attachment access — same connection path as duckdb_columns(),
+        // avoids mysql_query() which opens a new TCP connection that drops.
         "mysql" => Some(format!(
-            "SELECT * FROM mysql_query('_db', \
-             'SELECT TABLE_NAME, COLUMN_NAME \
-              FROM information_schema.KEY_COLUMN_USAGE \
-              WHERE CONSTRAINT_NAME = ''PRIMARY'' \
-                AND TABLE_SCHEMA = ''{db_name}''')",
+            "SELECT TABLE_NAME, COLUMN_NAME \
+             FROM _db.information_schema.KEY_COLUMN_USAGE \
+             WHERE CONSTRAINT_NAME = 'PRIMARY' \
+               AND TABLE_SCHEMA = '{db_name}'",
         )),
         _ => None,
     };
@@ -586,11 +582,10 @@ fn introspect_blocking(
                     (''information_schema'',''pg_catalog'',''pg_toast'',''pg_toast_temp_1'')')"
             .to_string(),
         ),
-        // SHOW TABLE STATUS reads from engine metadata cache — much faster than
-        // information_schema.TABLES for large databases (avoids live stats scan).
-        // Columns: 0=Name, 4=Rows, 6=Data_length, 8=Index_length.
         "mysql" => Some(format!(
-            "SELECT * FROM mysql_query('_db', 'SHOW TABLE STATUS FROM `{db_name}`')",
+            "SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH + INDEX_LENGTH \
+             FROM _db.information_schema.TABLES \
+             WHERE TABLE_SCHEMA = '{db_name}' AND TABLE_TYPE = 'BASE TABLE'",
         )),
         _ => None,
     };
@@ -602,22 +597,12 @@ fn introspect_blocking(
                 Ok(mut rows) => {
                     while let Ok(Some(row)) = rows.next() {
                         let tbl: String = row.get(0).unwrap_or_default();
-                        // Postgres: cols (0=relname, 1=reltuples, 2=total_size)
-                        // MySQL SHOW TABLE STATUS: cols (0=Name, 4=Rows, 6=Data_length, 8=Index_length)
-                        let (cnt, sz) = if db_type == "mysql" {
-                            let rows_val: i64 = row.get::<_, i64>(4)
-                                .or_else(|_| row.get::<_, u64>(4).map(|v| v as i64))
-                                .unwrap_or(0);
-                            let data_len: i64 = row.get::<_, i64>(6)
-                                .or_else(|_| row.get::<_, u64>(6).map(|v| v as i64))
-                                .unwrap_or(0);
-                            let idx_len: i64 = row.get::<_, i64>(8)
-                                .or_else(|_| row.get::<_, u64>(8).map(|v| v as i64))
-                                .unwrap_or(0);
-                            (rows_val, data_len + idx_len)
-                        } else {
-                            (row.get(1).unwrap_or(0), row.get(2).unwrap_or(0))
-                        };
+                        let cnt: i64 = row.get::<_, i64>(1)
+                            .or_else(|_| row.get::<_, u64>(1).map(|v| v as i64))
+                            .unwrap_or(0);
+                        let sz: i64 = row.get::<_, i64>(2)
+                            .or_else(|_| row.get::<_, u64>(2).map(|v| v as i64))
+                            .unwrap_or(0);
                         if cnt >= 0 { row_counts.insert(tbl.clone(), cnt); }
                         if sz > 0  { table_sizes.insert(tbl, sz); }
                     }
@@ -651,16 +636,11 @@ fn introspect_blocking(
                 )')"
             .to_string(),
         ),
-        // Per-row (no GROUP_CONCAT): avoids slow aggregation on large schemas.
-        // Grouping by (TABLE_NAME, INDEX_NAME) is done in Rust below.
-        // Columns: 0=TABLE_NAME, 1=INDEX_NAME, 2=NON_UNIQUE(0=unique), 3=COLUMN_NAME
         "mysql" => Some(format!(
-            "SELECT * FROM mysql_query('_db', \
-             'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME \
-              FROM information_schema.STATISTICS \
-              WHERE TABLE_SCHEMA = ''{db_name}'' \
-                AND INDEX_NAME <> ''PRIMARY'' \
-              ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX')",
+            "SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME \
+             FROM _db.information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA = '{db_name}' AND INDEX_NAME <> 'PRIMARY' \
+             ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
         )),
         _ => None,
     };
@@ -731,17 +711,13 @@ fn introspect_blocking(
               ORDER BY tc.constraint_name, kcu.ordinal_position')"
             .to_string(),
         ),
-        // No JOIN — REFERENCED_TABLE_NAME IS NOT NULL identifies FK rows cheaply.
         "mysql" => Some(format!(
-            "SELECT * FROM mysql_query('_db', \
-             'SELECT CONSTRAINT_NAME, TABLE_NAME, \
-                     COLUMN_NAME, \
-                     REFERENCED_TABLE_NAME, \
-                     REFERENCED_COLUMN_NAME \
-              FROM information_schema.KEY_COLUMN_USAGE \
-              WHERE TABLE_SCHEMA = ''{db_name}'' \
-                AND REFERENCED_TABLE_NAME IS NOT NULL \
-              ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION')",
+            "SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME, \
+                    REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME \
+             FROM _db.information_schema.KEY_COLUMN_USAGE \
+             WHERE TABLE_SCHEMA = '{db_name}' \
+               AND REFERENCED_TABLE_NAME IS NOT NULL \
+             ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
         )),
         _ => None,
     };
