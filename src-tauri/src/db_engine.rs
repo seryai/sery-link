@@ -433,6 +433,20 @@ fn db_name_from_kind(kind: &SourceKind) -> &str {
     }
 }
 
+/// Extract column names from a Postgres `CREATE INDEX ... (col1, col2)` definition.
+fn parse_indexdef_columns(indexdef: &str) -> Vec<String> {
+    let start = indexdef.rfind('(').map(|i| i + 1).unwrap_or(indexdef.len());
+    let end = indexdef.rfind(')').unwrap_or(indexdef.len());
+    if start >= end {
+        return vec![];
+    }
+    indexdef[start..end]
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn introspect_blocking(
     conn_str: &str,
     db_type: &str,
@@ -484,14 +498,18 @@ fn introspect_blocking(
         _ => None,
     };
     if let Some(sql) = pk_native_sql {
-        if let Ok(mut st) = conn.prepare(sql) {
-            if let Ok(mut rows) = st.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    let tbl: String = row.get(0).unwrap_or_default();
-                    let col: String = row.get(1).unwrap_or_default();
-                    pk_cols.entry(tbl).or_default().insert(col);
+        match conn.prepare(sql) {
+            Err(e) => eprintln!("[introspect] pk prepare failed: {e}"),
+            Ok(mut st) => match st.query([]) {
+                Err(e) => eprintln!("[introspect] pk query failed: {e}"),
+                Ok(mut rows) => {
+                    while let Ok(Some(row)) = rows.next() {
+                        let tbl: String = row.get(0).unwrap_or_default();
+                        let col: String = row.get(1).unwrap_or_default();
+                        pk_cols.entry(tbl).or_default().insert(col);
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -568,75 +586,88 @@ fn introspect_blocking(
         _ => None,
     };
     if let Some(sql) = stats_sql {
-        if let Ok(mut st) = conn.prepare(sql) {
-            if let Ok(mut rows) = st.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    let tbl: String = row.get(0).unwrap_or_default();
-                    let cnt: i64 = row.get(1).unwrap_or(0);
-                    let sz: i64 = row.get(2).unwrap_or(0);
-                    if cnt >= 0 { row_counts.insert(tbl.clone(), cnt); }
-                    if sz > 0  { table_sizes.insert(tbl, sz); }
+        match conn.prepare(sql) {
+            Err(e) => eprintln!("[introspect] stats prepare failed: {e}"),
+            Ok(mut st) => match st.query([]) {
+                Err(e) => eprintln!("[introspect] stats query failed: {e}"),
+                Ok(mut rows) => {
+                    while let Ok(Some(row)) = rows.next() {
+                        let tbl: String = row.get(0).unwrap_or_default();
+                        let cnt: i64 = row.get(1).unwrap_or(0);
+                        let sz: i64 = row.get(2).unwrap_or(0);
+                        if cnt >= 0 { row_counts.insert(tbl.clone(), cnt); }
+                        if sz > 0  { table_sizes.insert(tbl, sz); }
+                    }
                 }
-            }
+            },
         }
     }
 
     // ── 4. Indexes — native catalog ─────────────────────────────────────────
+    // Postgres: use pg_indexes view (returns indexdef string, avoids int2vector
+    // casting issues with array_position). Parse column names from indexdef in Rust.
+    // MySQL: information_schema.STATISTICS with GROUP_CONCAT.
     let mut table_indexes: std::collections::HashMap<String, Vec<IndexInfo>> =
         std::collections::HashMap::new();
 
     let idx_native_sql: Option<&str> = match db_type {
         "postgres" => Some(
+            // pg_indexes already excludes system indexes; filter PKs via pg_constraint.
+            // Returns: tablename, indexname, is_unique (t/f), indexdef
             "SELECT * FROM postgres_query('_db', \
-             'SELECT t.relname::text, i.relname::text, \
-                     ix.indisunique::text, \
-                     array_to_string(array_agg(a.attname ORDER BY \
-                         array_position(ix.indkey, a.attnum)), '','') \
-              FROM pg_class t \
-              JOIN pg_index ix ON t.oid = ix.indrelid \
-              JOIN pg_class i ON i.oid = ix.indexrelid \
-              JOIN pg_namespace n ON n.oid = t.relnamespace \
-              JOIN pg_attribute a \
-                ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey) \
-              WHERE n.nspname NOT IN \
-                    (''information_schema'',''pg_catalog'',''pg_toast'') \
-                AND NOT ix.indisprimary \
-                AND a.attnum > 0 \
-              GROUP BY t.relname, i.relname, ix.indisunique')",
+             'SELECT pi.tablename::text, pi.indexname::text, \
+                     pi.indexdef LIKE ''CREATE UNIQUE%'', \
+                     pi.indexdef \
+              FROM pg_indexes pi \
+              WHERE pi.schemaname NOT IN \
+                    (''information_schema'', ''pg_catalog'', ''pg_toast'') \
+                AND NOT EXISTS ( \
+                    SELECT 1 FROM pg_constraint pc \
+                    WHERE pc.conname = pi.indexname \
+                      AND pc.contype = ''p'' \
+                )')",
         ),
         "mysql" => Some(
             "SELECT * FROM mysql_query('_db', \
              'SELECT TABLE_NAME, INDEX_NAME, \
-                     CASE NON_UNIQUE WHEN 0 THEN \"true\" ELSE \"false\" END, \
+                     CASE NON_UNIQUE WHEN 0 THEN 1 ELSE 0 END, \
                      GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) \
               FROM information_schema.STATISTICS \
               WHERE TABLE_SCHEMA = DATABASE() \
-                AND INDEX_NAME <> \"PRIMARY\" \
+                AND INDEX_NAME <> ''PRIMARY'' \
               GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE')",
         ),
         _ => None,
     };
     if let Some(sql) = idx_native_sql {
-        if let Ok(mut st) = conn.prepare(sql) {
-            if let Ok(mut rows) = st.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    let tbl: String = row.get(0).unwrap_or_default();
-                    let name: String = row.get(1).unwrap_or_default();
-                    let unique_str: String = row.get(2).unwrap_or_default();
-                    let cols_str: String = row.get(3).unwrap_or_default();
-                    let columns: Vec<String> = cols_str
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    table_indexes.entry(tbl).or_default().push(IndexInfo {
-                        name,
-                        columns,
-                        unique: unique_str == "true" || unique_str == "t",
-                        primary: false,
-                    });
+        match conn.prepare(sql) {
+            Err(e) => eprintln!("[introspect] index query prepare failed: {e}"),
+            Ok(mut st) => match st.query([]) {
+                Err(e) => eprintln!("[introspect] index query exec failed: {e}"),
+                Ok(mut rows) => {
+                    while let Ok(Some(row)) = rows.next() {
+                        let tbl: String = row.get(0).unwrap_or_default();
+                        let name: String = row.get(1).unwrap_or_default();
+                        let columns = if db_type == "postgres" {
+                            // col2 = bool (true/false), col3 = indexdef string
+                            let indexdef: String = row.get(3).unwrap_or_default();
+                            // Extract last (...) from "CREATE INDEX name ON table USING btree (col1, col2)"
+                            parse_indexdef_columns(&indexdef)
+                        } else {
+                            let cols_str: String = row.get(3).unwrap_or_default();
+                            cols_str.split(',').map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty()).collect()
+                        };
+                        // col2 is bool (postgres) or int (mysql)
+                        let unique: bool = row.get::<_, bool>(2)
+                            .or_else(|_| row.get::<_, i64>(2).map(|v| v != 0))
+                            .unwrap_or(false);
+                        table_indexes.entry(tbl).or_default().push(IndexInfo {
+                            name, columns, unique, primary: false,
+                        });
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -680,24 +711,28 @@ fn introspect_blocking(
         _ => None,
     };
     if let Some(sql) = fk_native_sql {
-        // FK rows come one column per row — group by constraint name
         let mut fk_map: std::collections::BTreeMap<
-            (String, String),          // (table, constraint_name)
-            (Vec<String>, String, Vec<String>), // (cols, ref_table, ref_cols)
+            (String, String),
+            (Vec<String>, String, Vec<String>),
         > = std::collections::BTreeMap::new();
-        if let Ok(mut st) = conn.prepare(sql) {
-            if let Ok(mut rows) = st.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    let cname: String = row.get(0).unwrap_or_default();
-                    let tbl: String = row.get(1).unwrap_or_default();
-                    let col: String = row.get(2).unwrap_or_default();
-                    let ref_tbl: String = row.get(3).unwrap_or_default();
-                    let ref_col: String = row.get(4).unwrap_or_default();
-                    let e = fk_map.entry((tbl, cname)).or_insert_with(|| (vec![], ref_tbl, vec![]));
-                    e.0.push(col);
-                    e.2.push(ref_col);
+        match conn.prepare(sql) {
+            Err(e) => eprintln!("[introspect] fk prepare failed: {e}"),
+            Ok(mut st) => match st.query([]) {
+                Err(e) => eprintln!("[introspect] fk query failed: {e}"),
+                Ok(mut rows) => {
+                    while let Ok(Some(row)) = rows.next() {
+                        let cname: String = row.get(0).unwrap_or_default();
+                        let tbl: String = row.get(1).unwrap_or_default();
+                        let col: String = row.get(2).unwrap_or_default();
+                        let ref_tbl: String = row.get(3).unwrap_or_default();
+                        let ref_col: String = row.get(4).unwrap_or_default();
+                        let e = fk_map.entry((tbl, cname))
+                            .or_insert_with(|| (vec![], ref_tbl, vec![]));
+                        e.0.push(col);
+                        e.2.push(ref_col);
+                    }
                 }
-            }
+            },
         }
         for ((tbl, name), (columns, ref_table, ref_columns)) in fk_map {
             table_fks.entry(tbl).or_default().push(ForeignKeyInfo {
@@ -705,6 +740,11 @@ fn introspect_blocking(
             });
         }
     }
+
+    eprintln!(
+        "[introspect] {db_type}: {} tables, {} with row counts, {} with sizes, {} index entries, {} fk entries",
+        tables.len(), row_counts.len(), table_sizes.len(), table_indexes.len(), table_fks.len()
+    );
 
     Ok(tables
         .into_iter()
