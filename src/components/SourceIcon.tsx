@@ -48,6 +48,8 @@ const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
 export function SourceIcon({ kind, size = 'md' }: Props) {
   const px = SIZE_PX[size];
   const cls = SIZE_CLASS[size];
+  // Inner icon size for DB chips: ~65 % of the chip so there's visible padding.
+  const dbPx = Math.max(8, Math.round(px * 0.65));
 
   switch (kind) {
     case 'gdrive':
@@ -68,23 +70,36 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
       return <KeyRound className={`${cls} text-slate-700 dark:text-slate-300`} />;
     case 'webdav':
       return <WebDavMark className={cls} />;
+    // Database types: solid brand-color chip, white icon — self-contained app-icon style.
     case 'mysql':
-      return <SiMysql size={px} color="default" title="MySQL" />;
+      return <DbChip cls={cls} bg="#4479A1"><SiMysql size={dbPx} color="#ffffff" title="MySQL" /></DbChip>;
     case 'postgresql':
-      return <SiPostgresql size={px} color="default" title="PostgreSQL" />;
+      return <DbChip cls={cls} bg="#336791"><SiPostgresql size={dbPx} color="#ffffff" title="PostgreSQL" /></DbChip>;
     case 'redis':
-      return <SiRedis size={px} color="default" title="Redis" />;
+      return <DbChip cls={cls} bg="#DC382D"><SiRedis size={dbPx} color="#ffffff" title="Redis" /></DbChip>;
     case 'mongodb':
-      return <SiMongodb size={px} color="default" title="MongoDB" />;
+      return <DbChip cls={cls} bg="#47A248"><SiMongodb size={dbPx} color="#ffffff" title="MongoDB" /></DbChip>;
     case 'sqlite':
-      return <SiSqlite size={px} color="default" title="SQLite" />;
+      return <DbChip cls={cls} bg="#003B57"><SiSqlite size={dbPx} color="#ffffff" title="SQLite" /></DbChip>;
     case 'snowflake':
-      return <SiSnowflake size={px} color="default" title="Snowflake" />;
+      return <DbChip cls={cls} bg="#29B5E8"><SiSnowflake size={dbPx} color="#ffffff" title="Snowflake" /></DbChip>;
     case 'clickhouse':
-      return <SiClickhouse size={px} color="default" title="ClickHouse" />;
+      return <DbChip cls={cls} bg="#FFCC01"><SiClickhouse size={dbPx} color="#1a1a1a" title="ClickHouse" /></DbChip>;
     default:
       return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
+}
+
+/** Solid colored rounded chip that makes thin simple-icons legible at small sizes. */
+function DbChip({ cls, bg, children }: { cls: string; bg: string; children: React.ReactNode }) {
+  return (
+    <div
+      className={`${cls} flex flex-shrink-0 items-center justify-center rounded-md`}
+      style={{ backgroundColor: bg }}
+    >
+      {children}
+    </div>
+  );
 }
 
 /** Used by S3-compatible preset sources (B2, Wasabi, R2, GCS) when the
@@ -131,20 +146,15 @@ export function sourceIconBgClass(kind: SourceKind | string): string {
       return 'bg-sky-100 dark:bg-sky-950/40';
     case 'onedrive':
       return 'bg-blue-100 dark:bg-blue-950/40';
+    // DB icons render their own solid chip — no outer bg needed.
     case 'mysql':
-      return 'bg-orange-100 dark:bg-orange-950/40';
     case 'postgresql':
-      return 'bg-blue-100 dark:bg-blue-950/40';
     case 'redis':
-      return 'bg-red-100 dark:bg-red-950/40';
     case 'mongodb':
-      return 'bg-green-100 dark:bg-green-950/40';
     case 'sqlite':
-      return 'bg-sky-100 dark:bg-sky-950/40';
     case 'snowflake':
-      return 'bg-sky-100 dark:bg-sky-950/40';
     case 'clickhouse':
-      return 'bg-yellow-100 dark:bg-yellow-950/40';
+      return '';
     default:
       return 'bg-slate-100 dark:bg-slate-800';
   }
