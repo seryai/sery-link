@@ -453,3 +453,14 @@ export interface QueryHistoryEntry {
   duration_ms: number;
   error: string | null;
 }
+
+/** SSH tunnel configuration for MySQL and PostgreSQL sources.
+ *  Mirrors the Rust SshConfig struct in src-tauri/src/db_creds.rs. */
+export interface DbSshConfig {
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  key_path?: string;
+  key_passphrase?: string;
+}

@@ -27,6 +27,12 @@ static MYSQL_POOLS: Lazy<Mutex<HashMap<String, db_core::mysql::MySqlPool>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static PG_POOLS: Lazy<Mutex<HashMap<String, db_core::postgres::PgPool>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+// SSH tunnels must be kept alive as long as the corresponding pool is alive.
+// Stored alongside pools, keyed on the same source_id.
+static MYSQL_TUNNELS: Lazy<Mutex<HashMap<String, db_core::ssh_tunnel::SshTunnel>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static PG_TUNNELS: Lazy<Mutex<HashMap<String, db_core::ssh_tunnel::SshTunnel>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 async fn get_or_create_mysql_pool(
     source_id: &str,
@@ -36,7 +42,37 @@ async fn get_or_create_mysql_pool(
     if let Some(pool) = MYSQL_POOLS.lock().expect("MYSQL_POOLS").get(source_id).cloned() {
         return Ok(pool);
     }
-    let pool = db_core::mysql::create_pool(cfg)
+    // If SSH tunnel is configured, open it and redirect host/port.
+    let resolved_cfg = if let Some(ref ssh_cfg) = cfg.ssh {
+        let tunnel = db_core::ssh_tunnel::SshTunnel::open(ssh_cfg, &cfg.host, cfg.port)
+            .await
+            .map_err(|e| AgentError::Database(format!("SSH tunnel: {e}")))?;
+        let local_port = tunnel.local_port();
+        let redirected = db_core::mysql::MySqlConfig {
+            host: "127.0.0.1".to_string(),
+            port: local_port,
+            username: cfg.username.clone(),
+            database: cfg.database.clone(),
+            password: cfg.password.clone(),
+            ssl_mode: cfg.ssl_mode.clone(),
+            ssl_ca_cert: cfg.ssl_ca_cert.clone(),
+            ssh: None, // already handled
+        };
+        MYSQL_TUNNELS.lock().expect("MYSQL_TUNNELS").insert(source_id.to_string(), tunnel);
+        redirected
+    } else {
+        db_core::mysql::MySqlConfig {
+            host: cfg.host.clone(),
+            port: cfg.port,
+            username: cfg.username.clone(),
+            database: cfg.database.clone(),
+            password: cfg.password.clone(),
+            ssl_mode: cfg.ssl_mode.clone(),
+            ssl_ca_cert: cfg.ssl_ca_cert.clone(),
+            ssh: None,
+        }
+    };
+    let pool = db_core::mysql::create_pool(&resolved_cfg)
         .await
         .map_err(|e| AgentError::Database(format!("MySQL connect: {e}")))?;
     MYSQL_POOLS.lock().expect("MYSQL_POOLS").insert(source_id.to_string(), pool.clone());
@@ -50,16 +86,65 @@ async fn get_or_create_pg_pool(
     if let Some(pool) = PG_POOLS.lock().expect("PG_POOLS").get(source_id).cloned() {
         return Ok(pool);
     }
-    let pool = db_core::postgres::create_pool(cfg)
+    // If SSH tunnel is configured, open it and redirect host/port.
+    let resolved_cfg = if let Some(ref ssh_cfg) = cfg.ssh {
+        let tunnel = db_core::ssh_tunnel::SshTunnel::open(ssh_cfg, &cfg.host, cfg.port)
+            .await
+            .map_err(|e| AgentError::Database(format!("SSH tunnel: {e}")))?;
+        let local_port = tunnel.local_port();
+        let redirected = db_core::postgres::PgConfig {
+            host: "127.0.0.1".to_string(),
+            port: local_port,
+            username: cfg.username.clone(),
+            database: cfg.database.clone(),
+            password: cfg.password.clone(),
+            ssl_mode: cfg.ssl_mode.clone(),
+            ssl_ca_cert: cfg.ssl_ca_cert.clone(),
+            ssh: None, // already handled
+        };
+        PG_TUNNELS.lock().expect("PG_TUNNELS").insert(source_id.to_string(), tunnel);
+        redirected
+    } else {
+        db_core::postgres::PgConfig {
+            host: cfg.host.clone(),
+            port: cfg.port,
+            username: cfg.username.clone(),
+            database: cfg.database.clone(),
+            password: cfg.password.clone(),
+            ssl_mode: cfg.ssl_mode.clone(),
+            ssl_ca_cert: cfg.ssl_ca_cert.clone(),
+            ssh: None,
+        }
+    };
+    let pool = db_core::postgres::create_pool(&resolved_cfg)
         .await
         .map_err(|e| AgentError::Database(format!("PostgreSQL connect: {e}")))?;
     PG_POOLS.lock().expect("PG_POOLS").insert(source_id.to_string(), pool.clone());
     Ok(pool)
 }
 
+fn ssh_config_to_tunnel_config(
+    ssh: &crate::db_creds::SshConfig,
+) -> db_core::ssh_tunnel::SshTunnelConfig {
+    let auth = match (&ssh.key_path, &ssh.password) {
+        (Some(path), _) => db_core::ssh_tunnel::SshAuth::PrivateKey {
+            path: path.clone(),
+            passphrase: ssh.key_passphrase.clone(),
+        },
+        (None, Some(pw)) => db_core::ssh_tunnel::SshAuth::Password(pw.clone()),
+        (None, None) => db_core::ssh_tunnel::SshAuth::Password(String::new()),
+    };
+    db_core::ssh_tunnel::SshTunnelConfig {
+        host: ssh.host.clone(),
+        port: ssh.port,
+        username: ssh.username.clone(),
+        auth,
+    }
+}
+
 fn mysql_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::mysql::MySqlConfig> {
     match cfg {
-        DbConnectionConfig::Mysql { host, port, username, database, password } => {
+        DbConnectionConfig::Mysql { host, port, username, database, password, ssh } => {
             Some(db_core::mysql::MySqlConfig {
                 host: host.clone(),
                 port: *port,
@@ -68,7 +153,7 @@ fn mysql_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::mysq
                 password: password.clone(),
                 ssl_mode: None,
                 ssl_ca_cert: None,
-                ssh: None,
+                ssh: ssh.as_ref().map(ssh_config_to_tunnel_config),
             })
         }
         _ => None,
@@ -77,7 +162,7 @@ fn mysql_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::mysq
 
 fn pg_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::postgres::PgConfig> {
     match cfg {
-        DbConnectionConfig::Postgresql { host, port, username, database, password } => {
+        DbConnectionConfig::Postgresql { host, port, username, database, password, ssh } => {
             Some(db_core::postgres::PgConfig {
                 host: host.clone(),
                 port: *port,
@@ -86,7 +171,7 @@ fn pg_config_from_db_config(cfg: &DbConnectionConfig) -> Option<db_core::postgre
                 password: password.clone(),
                 ssl_mode: None,
                 ssl_ca_cert: None,
-                ssh: None,
+                ssh: ssh.as_ref().map(ssh_config_to_tunnel_config),
             })
         }
         _ => None,
@@ -210,13 +295,13 @@ fn is_ident_char(b: u8) -> bool {
 /// Returns (db_type_str, conn_str).
 fn build_attach_string_from_config(cfg: &DbConnectionConfig) -> (&'static str, String) {
     match cfg {
-        DbConnectionConfig::Mysql { host, port, username, database, password } => {
+        DbConnectionConfig::Mysql { host, port, username, database, password, .. } => {
             let conn_str = format!(
                 "host={host} port={port} database={database} user={username} password={password}"
             );
             ("MYSQL", conn_str)
         }
-        DbConnectionConfig::Postgresql { host, port, username, database, password } => {
+        DbConnectionConfig::Postgresql { host, port, username, database, password, .. } => {
             let conn_str = format!(
                 "host={host} port={port} dbname={database} user={username} password={password}"
             );
@@ -960,31 +1045,72 @@ fn introspect_blocking(
         .collect())
 }
 
+/// Open an SSH tunnel if configured and return a resolved (host, port) pair.
+/// The returned `SshTunnel` must be kept alive for the duration of the test.
+async fn resolve_ssh_for_test(
+    ssh: Option<&crate::db_creds::SshConfig>,
+    remote_host: &str,
+    remote_port: u16,
+) -> Result<(String, u16, Option<db_core::ssh_tunnel::SshTunnel>)> {
+    if let Some(ssh_cfg) = ssh {
+        let tunnel_cfg = ssh_config_to_tunnel_config(ssh_cfg);
+        let tunnel = db_core::ssh_tunnel::SshTunnel::open(&tunnel_cfg, remote_host, remote_port)
+            .await
+            .map_err(|e| AgentError::Database(format!("SSH tunnel: {e}")))?;
+        let port = tunnel.local_port();
+        Ok(("127.0.0.1".to_string(), port, Some(tunnel)))
+    } else {
+        Ok((remote_host.to_string(), remote_port, None))
+    }
+}
+
 /// Test a DB connection using provided credentials (before persisting).
 /// Accepts a DbConnectionConfig (for all non-SQLite types) or a SQLite SourceKind.
 pub fn test_connection_blocking(
     cfg: &DbConnectionConfig,
 ) -> Result<()> {
     // Native MySQL test.
-    if let Some(mysql_cfg) = mysql_config_from_db_config(cfg) {
+    if let Some(mut mysql_cfg) = mysql_config_from_db_config(cfg) {
+        let ssh_opt = match cfg {
+            DbConnectionConfig::Mysql { ssh, .. } => ssh.as_ref(),
+            _ => None,
+        };
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
-        return rt
-            .block_on(db_core::mysql::test_connection(&mysql_cfg))
-            .map_err(|e| AgentError::Database(e));
+        return rt.block_on(async {
+            let (host, port, _tunnel) =
+                resolve_ssh_for_test(ssh_opt, &mysql_cfg.host, mysql_cfg.port).await?;
+            mysql_cfg.host = host;
+            mysql_cfg.port = port;
+            mysql_cfg.ssh = None;
+            db_core::mysql::test_connection(&mysql_cfg)
+                .await
+                .map_err(|e| AgentError::Database(e))
+        });
     }
 
     // Native PostgreSQL test.
-    if let Some(pg_cfg) = pg_config_from_db_config(cfg) {
+    if let Some(mut pg_cfg) = pg_config_from_db_config(cfg) {
+        let ssh_opt = match cfg {
+            DbConnectionConfig::Postgresql { ssh, .. } => ssh.as_ref(),
+            _ => None,
+        };
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
-        return rt
-            .block_on(db_core::postgres::test_connection(&pg_cfg))
-            .map_err(|e| AgentError::Database(e));
+        return rt.block_on(async {
+            let (host, port, _tunnel) =
+                resolve_ssh_for_test(ssh_opt, &pg_cfg.host, pg_cfg.port).await?;
+            pg_cfg.host = host;
+            pg_cfg.port = port;
+            pg_cfg.ssh = None;
+            db_core::postgres::test_connection(&pg_cfg)
+                .await
+                .map_err(|e| AgentError::Database(e))
+        });
     }
 
     match cfg {
