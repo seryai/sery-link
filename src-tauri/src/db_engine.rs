@@ -26,6 +26,25 @@ pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
     pub nullable: bool,
+    pub is_primary_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndexInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub primary: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -33,6 +52,13 @@ pub struct TableSchema {
     pub table_name: String,
     pub columns: Vec<ColumnInfo>,
     pub row_count_estimate: Option<i64>,
+    /// Approximate on-disk size in bytes (table + indexes). None if unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexes: Vec<IndexInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foreign_keys: Vec<ForeignKeyInfo>,
 }
 
 /// Validate that the SQL is SELECT-only. DB sources accept plain SQL
@@ -363,12 +389,15 @@ pub async fn introspect_schema(
             return Ok(vec![TableSchema {
                 table_name: "keys".to_string(),
                 columns: vec![
-                    ColumnInfo { name: "key".to_string(), data_type: "TEXT".to_string(), nullable: false },
-                    ColumnInfo { name: "value".to_string(), data_type: "TEXT".to_string(), nullable: true },
-                    ColumnInfo { name: "value_type".to_string(), data_type: "TEXT".to_string(), nullable: false },
-                    ColumnInfo { name: "ttl".to_string(), data_type: "INTEGER".to_string(), nullable: false },
+                    ColumnInfo { name: "key".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: true, default_value: None },
+                    ColumnInfo { name: "value".to_string(), data_type: "TEXT".to_string(), nullable: true, is_primary_key: false, default_value: None },
+                    ColumnInfo { name: "value_type".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: false, default_value: None },
+                    ColumnInfo { name: "ttl".to_string(), data_type: "INTEGER".to_string(), nullable: false, is_primary_key: false, default_value: None },
                 ],
                 row_count_estimate: None,
+                size_bytes: None,
+                indexes: vec![],
+                foreign_keys: vec![],
             }]);
         }
         _ => {}
@@ -423,24 +452,49 @@ fn introspect_blocking(
     ))
     .map_err(|e| AgentError::Database(format!("ATTACH: {e}")))?;
 
-    // duckdb_columns() is DuckDB's own catalog function — works for every
-    // attached database type without relying on information_schema visibility
-    // after USE. Filter by database_name='_db' to only see the attached DB,
-    // exclude well-known system schemas, and skip internal columns.
-    let col_sql =
+    const SYS: &str =
+        "'information_schema', 'pg_catalog', 'pg_toast', \
+         'pg_internal', 'INFORMATION_SCHEMA', 'pg_toast_temp_1'";
+
+    // ── 1. PK column sets (best-effort; skip if backend doesn't expose it) ─
+    // array_to_string is safer than unnest in the duckdb Rust crate —
+    // array column types need special handling whereas strings are trivial.
+    let mut pk_cols: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    let pk_sql = format!(
+        "SELECT table_name, \
+         array_to_string(constraint_column_names, ',') \
+         FROM duckdb_constraints() \
+         WHERE database_name = '_db' \
+           AND schema_name NOT IN ({SYS}) \
+           AND constraint_type = 'PRIMARY KEY'"
+    );
+    if let Ok(mut st) = conn.prepare(&pk_sql) {
+        if let Ok(mut rows) = st.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                let tbl: String = row.get(0).unwrap_or_default();
+                let cols_str: String = row.get(1).unwrap_or_default();
+                for col in cols_str.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    pk_cols.entry(tbl.clone()).or_default().insert(col.to_string());
+                }
+            }
+        }
+    }
+
+    // ── 2. Columns ─────────────────────────────────────────────────────────
+    let col_sql = format!(
         "SELECT table_name, column_name, data_type, \
-         CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END \
+         CASE WHEN is_nullable THEN 'YES' ELSE 'NO' END, \
+         column_default \
          FROM duckdb_columns() \
          WHERE database_name = '_db' \
-           AND schema_name NOT IN ( \
-               'information_schema', 'pg_catalog', 'pg_toast', \
-               'pg_internal', 'INFORMATION_SCHEMA', 'pg_toast_temp_1' \
-           ) \
+           AND schema_name NOT IN ({SYS}) \
            AND NOT internal \
-         ORDER BY table_name, column_index";
+         ORDER BY table_name, column_index"
+    );
 
     let mut stmt = conn
-        .prepare(col_sql)
+        .prepare(&col_sql)
         .map_err(|e| AgentError::Database(format!("prepare schema query: {e}")))?;
 
     let mut tables: std::collections::BTreeMap<String, Vec<ColumnInfo>> =
@@ -454,19 +508,130 @@ fn introspect_blocking(
         let col_name: String = row.get(1).unwrap_or_default();
         let data_type: String = row.get(2).unwrap_or_default();
         let nullable: String = row.get(3).unwrap_or_else(|_| "YES".to_string());
+        let default_value: Option<String> = row.get::<_, Option<String>>(4).unwrap_or(None);
+        let is_pk = pk_cols
+            .get(&table)
+            .map(|s| s.contains(&col_name))
+            .unwrap_or(false);
         tables.entry(table).or_default().push(ColumnInfo {
             name: col_name,
             data_type,
             nullable: nullable.to_ascii_uppercase() == "YES",
+            is_primary_key: is_pk,
+            default_value,
         });
+    }
+
+    // ── 3. Table sizes from duckdb_tables() ────────────────────────────────
+    // estimated_size is on-disk bytes; no row count is available here.
+    let size_sql = format!(
+        "SELECT table_name, estimated_size \
+         FROM duckdb_tables() \
+         WHERE database_name = '_db' \
+           AND schema_name NOT IN ({SYS}) \
+           AND NOT internal"
+    );
+    let mut table_sizes: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    if let Ok(mut st) = conn.prepare(&size_sql) {
+        if let Ok(mut rows) = st.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                let tbl: String = row.get(0).unwrap_or_default();
+                let sz: i64 = row.get(1).unwrap_or(0);
+                table_sizes.insert(tbl, sz);
+            }
+        }
+    }
+
+    // ── 4. Indexes (non-PK only; PK already shown via is_primary_key) ──────
+    // duckdb_indexes().expressions is VARCHAR[] — cast to string for safe Rust get().
+    let idx_sql = format!(
+        "SELECT index_name, table_name, is_unique, \
+         CAST(expressions AS VARCHAR) \
+         FROM duckdb_indexes() \
+         WHERE database_name = '_db' \
+           AND schema_name NOT IN ({SYS}) \
+           AND NOT is_primary \
+           AND NOT internal"
+    );
+    let mut table_indexes: std::collections::HashMap<String, Vec<IndexInfo>> =
+        std::collections::HashMap::new();
+    if let Ok(mut st) = conn.prepare(&idx_sql) {
+        if let Ok(mut rows) = st.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                let name: String = row.get(0).unwrap_or_default();
+                let tbl: String = row.get(1).unwrap_or_default();
+                let unique: bool = row.get(2).unwrap_or(false);
+                // expressions comes back as "[col1, col2]" from CAST(… AS VARCHAR)
+                let expr_str: String = row.get(3).unwrap_or_default();
+                let columns: Vec<String> = expr_str
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .split(',')
+                    .map(|p| p.trim().trim_matches('"').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                table_indexes.entry(tbl).or_default().push(IndexInfo {
+                    name,
+                    columns,
+                    unique,
+                    primary: false,
+                });
+            }
+        }
+    }
+
+    // ── 5. Foreign keys ────────────────────────────────────────────────────
+    let fk_sql = format!(
+        "SELECT constraint_text, table_name, \
+         CAST(constraint_column_names AS VARCHAR), \
+         foreign_key_table, \
+         CAST(foreign_key_column_names AS VARCHAR) \
+         FROM duckdb_constraints() \
+         WHERE database_name = '_db' \
+           AND schema_name NOT IN ({SYS}) \
+           AND constraint_type = 'FOREIGN KEY'"
+    );
+    let mut table_fks: std::collections::HashMap<String, Vec<ForeignKeyInfo>> =
+        std::collections::HashMap::new();
+    let parse_arr = |s: &str| -> Vec<String> {
+        s.trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|p| p.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    if let Ok(mut st) = conn.prepare(&fk_sql) {
+        if let Ok(mut rows) = st.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                let name: String = row.get(0).unwrap_or_default();
+                let tbl: String = row.get(1).unwrap_or_default();
+                let cols_raw: String = row.get(2).unwrap_or_default();
+                let ref_tbl: String = row.get(3).unwrap_or_default();
+                let ref_cols_raw: String = row.get(4).unwrap_or_default();
+                table_fks.entry(tbl).or_default().push(ForeignKeyInfo {
+                    name,
+                    columns: parse_arr(&cols_raw),
+                    ref_table: ref_tbl,
+                    ref_columns: parse_arr(&ref_cols_raw),
+                });
+            }
+        }
     }
 
     Ok(tables
         .into_iter()
-        .map(|(table_name, columns)| TableSchema {
-            table_name,
-            columns,
-            row_count_estimate: None,
+        .map(|(table_name, columns)| {
+            let size_bytes = table_sizes.get(&table_name).copied().filter(|&s| s > 0);
+            let indexes = table_indexes.remove(&table_name).unwrap_or_default();
+            let foreign_keys = table_fks.remove(&table_name).unwrap_or_default();
+            TableSchema {
+                table_name,
+                columns,
+                row_count_estimate: None, // no row count from duckdb_tables(); add later via pg_class
+                size_bytes,
+                indexes,
+                foreign_keys,
+            }
         })
         .collect())
 }
@@ -630,10 +795,13 @@ fn introspect_clickhouse_blocking(
             name: col_name,
             data_type,
             nullable: is_pk == "0",
+            is_primary_key: is_pk == "1",
+            default_value: None,
         });
     }
     Ok(tables.into_iter().map(|(table_name, columns)| TableSchema {
         table_name, columns, row_count_estimate: None,
+        size_bytes: None, indexes: vec![], foreign_keys: vec![],
     }).collect())
 }
 
@@ -804,10 +972,10 @@ async fn introspect_mongodb(
 
         let columns: Vec<ColumnInfo> = field_map
             .into_iter()
-            .map(|(name, data_type)| ColumnInfo { name, data_type, nullable: true })
+            .map(|(name, data_type)| ColumnInfo { name, data_type, nullable: true, is_primary_key: false, default_value: None })
             .collect();
 
-        tables.push(TableSchema { table_name: coll_name, columns, row_count_estimate: None });
+        tables.push(TableSchema { table_name: coll_name, columns, row_count_estimate: None, size_bytes: None, indexes: vec![], foreign_keys: vec![] });
     }
     Ok(tables)
 }

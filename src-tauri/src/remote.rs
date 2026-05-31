@@ -294,6 +294,7 @@ pub fn scan_remote_blocking_with_creds(
         sample_rows,
         samples_redacted,
         source_id: None,
+        db_catalog: None,
     })
 }
 

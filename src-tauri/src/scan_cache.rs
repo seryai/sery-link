@@ -358,6 +358,7 @@ mod tests {
             sample_rows: None,
             samples_redacted: false,
             source_id: None,
+            db_catalog: None,
         }
     }
 

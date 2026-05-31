@@ -5406,15 +5406,88 @@ pub async fn test_db_connection(
 }
 
 /// Introspect the schema of an already-registered DB source.
-/// Returns a list of tables with their column names and types.
+/// Returns a list of tables with their column names and types, and
+/// asynchronously syncs the catalog to the cloud (best-effort).
 #[tauri::command]
 pub async fn introspect_db_schema(
     source_id: String,
 ) -> Result<Vec<crate::db_engine::TableSchema>, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
-    crate::db_engine::introspect_schema(&source_id, &config)
+    let tables = crate::db_engine::introspect_schema(&source_id, &config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Best-effort cloud sync — fire-and-forget, never fail the caller.
+    let tables_clone = tables.clone();
+    let config_clone = config.clone();
+    let source_id_clone = source_id.clone();
+    tokio::spawn(async move {
+        if let Ok(token) = crate::keyring_store::get_token() {
+            let source = config_clone.sources.iter().find(|s| s.id == source_id_clone);
+            let db_kind = source
+                .map(|s| {
+                    use crate::sources::SourceKind;
+                    let kind_str = match &s.kind {
+                        SourceKind::Postgresql { .. } => "postgresql",
+                        SourceKind::Mysql { .. } => "mysql",
+                        SourceKind::Snowflake { .. } => "snowflake",
+                        SourceKind::Clickhouse { .. } => "clickhouse",
+                        SourceKind::Mongodb { .. } => "mongodb",
+                        SourceKind::Redis { .. } => "redis",
+                        SourceKind::Sqlite { .. } => "sqlite",
+                        _ => "database",
+                    };
+                    format!("{kind_str}_table")
+                })
+                .unwrap_or_else(|| "database_table".to_string());
+
+            let datasets: Vec<crate::scanner::DatasetMetadata> = tables_clone
+                .iter()
+                .map(|t| {
+                    use crate::scanner::DatasetMetadata;
+                    use crate::scanner::ColumnSchema;
+                    let db_catalog = serde_json::json!({
+                        "indexes": t.indexes,
+                        "foreign_keys": t.foreign_keys,
+                        "size_bytes": t.size_bytes,
+                    });
+                    DatasetMetadata {
+                        // relative_path encodes source + table so the cloud
+                        // can distinguish tables from different DB sources.
+                        relative_path: format!("db/{}/{}", source_id_clone, t.table_name),
+                        file_format: db_kind.clone(),
+                        size_bytes: t.size_bytes.unwrap_or(0) as u64,
+                        row_count_estimate: t.row_count_estimate,
+                        schema: t.columns.iter().map(|c| ColumnSchema {
+                            name: c.name.clone(),
+                            col_type: c.data_type.clone(),
+                            nullable: c.nullable,
+                        }).collect(),
+                        last_modified: chrono::Utc::now()
+                            .format("%Y-%m-%dT%H:%M:%SZ")
+                            .to_string(),
+                        document_markdown: None,
+                        sample_rows: None,
+                        samples_redacted: false,
+                        source_id: Some(source_id_clone.clone()),
+                        db_catalog: Some(db_catalog),
+                    }
+                })
+                .collect();
+
+            let roots = collect_source_roots(&config_clone);
+            let _ = crate::scanner::sync_metadata_to_cloud(
+                &config_clone.cloud.api_url,
+                &token,
+                None,
+                Some(roots),
+                datasets,
+            )
+            .await;
+        }
+    });
+
+    Ok(tables)
 }
 
 #[cfg(test)]
@@ -5445,6 +5518,7 @@ mod search_tests {
                 sample_rows: None,
                 samples_redacted: false,
                 source_id: None,
+                db_catalog: None,
             },
         }
     }
@@ -5464,6 +5538,7 @@ mod search_tests {
                 sample_rows: None,
                 samples_redacted: false,
                 source_id: None,
+                db_catalog: None,
             },
         }
     }

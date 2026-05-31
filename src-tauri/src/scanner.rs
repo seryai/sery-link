@@ -54,6 +54,11 @@ pub struct DatasetMetadata {
     /// caveat LLM answers that rely on sampled values.
     #[serde(default)]
     pub samples_redacted: bool,
+
+    /// Rich catalog metadata for database tables: indexes, foreign keys, size.
+    /// Only populated when syncing DB-source tables; None for file-based datasets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_catalog: Option<serde_json::Value>,
 }
 
 /// File extensions classified as document (non-tabular) types.
@@ -1278,6 +1283,7 @@ fn extract_minimal_metadata(file_path: &Path, base_path: &str) -> Result<Dataset
         document_markdown: None,
         sample_rows: None,
         samples_redacted: false,
+        db_catalog: None,
         source_id: None,
     })
 }
@@ -1333,6 +1339,7 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
             sample_rows: None,
             samples_redacted: false,
             source_id: None,
+            db_catalog: None,
         })
     } else {
         // Tabular files — DuckDB schema extraction + optional sampling.
@@ -1358,6 +1365,7 @@ fn extract_metadata(file_path: &Path, base_path: &str, tier: ScanTier) -> Result
             sample_rows,
             samples_redacted,
             source_id: None,
+            db_catalog: None,
         })
     }
 }
