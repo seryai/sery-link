@@ -34,6 +34,7 @@ import {
 import { useAgentStore } from '../stores/agentStore';
 import seryLogo from '../assets/sery-logo.svg';
 import { useToast } from './Toast';
+import { TitleBar } from './TitleBar';
 import type { AgentConfig } from '../types/events';
 
 // 'idle'    – fresh install, offer folder pick or skip
@@ -147,7 +148,9 @@ export function OnboardingWizard() {
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-purple-50 p-8 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950">
+    <div className="flex h-screen flex-col bg-gradient-to-br from-slate-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-purple-950">
+      <TitleBar />
+      <div className="flex flex-1 items-center justify-center p-8">
       <div className="w-full max-w-md">
         <Card>
           <div className="mb-6 flex items-center justify-center">
@@ -249,6 +252,7 @@ export function OnboardingWizard() {
             </>
           )}
         </Card>
+      </div>
       </div>
     </div>
   );
