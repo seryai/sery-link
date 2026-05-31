@@ -5200,7 +5200,13 @@ pub async fn add_mysql_source(
         ssh,
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(3306), database.trim());
-    add_db_source_inner(crate::sources::SourceKind::Mysql {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Mysql {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(3306),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a PostgreSQL database source. Same flow as add_mysql_source.
@@ -5237,7 +5243,13 @@ pub async fn add_postgresql_source(
         ssh,
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(5432), database.trim());
-    add_db_source_inner(crate::sources::SourceKind::Postgresql {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Postgresql {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(5432),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a Snowflake source via DuckDB community snowflake extension.
@@ -5250,16 +5262,24 @@ pub async fn add_snowflake_source(
     database: String,
     schema: Option<String>,
 ) -> Result<String, String> {
+    let schema_val = schema.unwrap_or_else(|| "PUBLIC".to_string());
     let cfg = crate::db_creds::DbConnectionConfig::Snowflake {
         account: account.trim().to_string(),
         username: username.trim().to_string(),
         warehouse: warehouse.trim().to_string(),
         database: database.trim().to_string(),
-        schema: schema.unwrap_or_else(|| "PUBLIC".to_string()),
+        schema: schema_val.clone(),
         password: password.clone(),
     };
     let name = format!("{}/{}", account.trim(), database.trim());
-    add_db_source_inner(crate::sources::SourceKind::Snowflake {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Snowflake {
+        account: account.trim().to_string(),
+        username: username.trim().to_string(),
+        warehouse: warehouse.trim().to_string(),
+        database: database.trim().to_string(),
+        schema: schema_val,
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a ClickHouse source via HTTP interface.
@@ -5279,7 +5299,13 @@ pub async fn add_clickhouse_source(
         password: password.clone(),
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(8123), database.trim());
-    add_db_source_inner(crate::sources::SourceKind::Clickhouse {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Clickhouse {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(8123),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a MongoDB source. SQL queries are bridged via DuckDB in-memory tables.
@@ -5292,16 +5318,24 @@ pub async fn add_mongodb_source(
     database: String,
     auth_db: Option<String>,
 ) -> Result<String, String> {
+    let auth_db_val = auth_db.unwrap_or_else(|| "admin".to_string());
     let cfg = crate::db_creds::DbConnectionConfig::Mongodb {
         host: host.trim().to_string(),
         port: port.unwrap_or(27017),
         username: username.trim().to_string(),
         database: database.trim().to_string(),
-        auth_db: auth_db.unwrap_or_else(|| "admin".to_string()),
+        auth_db: auth_db_val.clone(),
         password: password.clone(),
     };
     let name = format!("{}:{}/{}", host.trim(), port.unwrap_or(27017), database.trim());
-    add_db_source_inner(crate::sources::SourceKind::Mongodb {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Mongodb {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(27017),
+        username: username.trim().to_string(),
+        database: database.trim().to_string(),
+        auth_db: auth_db_val,
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a Redis source. Password is optional (empty string = no auth).
@@ -5320,7 +5354,12 @@ pub async fn add_redis_source(
         password: password.clone(),
     };
     let name = format!("redis {}:{}/db{}", host.trim(), port.unwrap_or(6379), db_num);
-    add_db_source_inner(crate::sources::SourceKind::Redis {}, cfg, name).await
+    let kind = crate::sources::SourceKind::Redis {
+        host: host.trim().to_string(),
+        port: port.unwrap_or(6379),
+        db: u16::from(db_num),
+    };
+    add_db_source_inner(kind, cfg, name).await
 }
 
 /// Add a SQLite file source via DuckDB sqlite extension.

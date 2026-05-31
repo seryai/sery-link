@@ -117,30 +117,59 @@ pub enum SourceKind {
         base_path: String,
     },
 
-    /// F52: MySQL database. Full connection config (host, port, username,
-    /// database, password) lives in .vault.json keyed on source_id.
-    /// Only the discriminant `{ "kind": "mysql" }` is stored here.
-    Mysql {},
+    /// F52: MySQL database. Password lives in .vault.json; non-secret
+    /// connection metadata stored here for display.
+    Mysql {
+        host: String,
+        port: u16,
+        username: String,
+        database: String,
+    },
 
     /// F52: PostgreSQL database. Same pattern as Mysql.
-    Postgresql {},
+    Postgresql {
+        host: String,
+        port: u16,
+        username: String,
+        database: String,
+    },
 
     /// F53: Snowflake data warehouse via DuckDB community snowflake extension.
-    /// Full connection config in .vault.json.
-    Snowflake {},
+    /// Password in .vault.json; non-secret metadata stored here for display.
+    Snowflake {
+        account: String,
+        username: String,
+        warehouse: String,
+        database: String,
+        schema: String,
+    },
 
     /// F53: ClickHouse via HTTP interface (port 8123).
-    /// Full connection config in .vault.json.
-    Clickhouse {},
+    /// Password in .vault.json; non-secret metadata stored here for display.
+    Clickhouse {
+        host: String,
+        port: u16,
+        username: String,
+        database: String,
+    },
 
-    /// F53: MongoDB. SQL is executed via DuckDB in-memory bridge
-    /// (collections loaded as temp tables via read_json_auto).
-    /// Full connection config in .vault.json.
-    Mongodb {},
+    /// F53: MongoDB. SQL is executed via DuckDB in-memory bridge.
+    /// Password in .vault.json; non-secret metadata stored here for display.
+    Mongodb {
+        host: String,
+        port: u16,
+        username: String,
+        database: String,
+        auth_db: String,
+    },
 
     /// F53: Redis. Exposes all keys as a virtual `keys` table.
-    /// Full connection config in .vault.json.
-    Redis {},
+    /// Password (if any) in .vault.json; non-secret metadata stored here.
+    Redis {
+        host: String,
+        port: u16,
+        db: u16,
+    },
 
     /// F53: SQLite file via DuckDB built-in sqlite extension. No password.
     /// Path stays here because it's just a file path with no secrets.
@@ -344,15 +373,12 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
                 format!("OneDrive · {}", base_path)
             }
         }
-        // DB kinds: connection info lives in .vault.json, not here.
-        // Names are set at add-time from the DbConnectionConfig and
-        // are user-renameable; the kind alone carries no display info.
-        SourceKind::Mysql {}
-        | SourceKind::Postgresql {}
-        | SourceKind::Snowflake {}
-        | SourceKind::Clickhouse {}
-        | SourceKind::Mongodb {}
-        | SourceKind::Redis {} => String::new(),
+        SourceKind::Mysql { host, port, database, .. } => format!("{host}:{port}/{database}"),
+        SourceKind::Postgresql { host, port, database, .. } => format!("{host}:{port}/{database}"),
+        SourceKind::Snowflake { account, database, .. } => format!("{account}/{database}"),
+        SourceKind::Clickhouse { host, port, database, .. } => format!("{host}:{port}/{database}"),
+        SourceKind::Mongodb { host, port, database, .. } => format!("{host}:{port}/{database}"),
+        SourceKind::Redis { host, port, .. } => format!("{host}:{port}"),
         SourceKind::Sqlite { path } => path
             .file_name()
             .unwrap_or(path.as_os_str())
