@@ -160,7 +160,7 @@ export function OnboardingWizard() {
           {phase === 'idle' && (
             <>
               <h1 className="mb-2 text-center text-3xl font-bold text-slate-900 dark:text-slate-50">
-                Welcome to Sery
+                Welcome to Sery Link
               </h1>
               <p className="mb-6 text-center text-slate-600 dark:text-slate-300">
                 Search your CSVs, spreadsheets, and documents by
