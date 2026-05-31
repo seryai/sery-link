@@ -1,5 +1,6 @@
 mod agent_rpc;
 mod analytics;
+mod cred_store;
 mod db_creds;
 mod db_engine;
 

@@ -73,13 +73,13 @@ pub fn save(url: &str, creds: &S3Credentials) -> Result<()> {
             "S3 credentials need access key, secret, and region".to_string(),
         ));
     }
-    let entry = keyring::Entry::new(SERVICE, url)
-        .map_err(|e| AgentError::Config(format!("keyring entry: {}", e)))?;
+    let entry = crate::cred_store::Entry::new(SERVICE, url)
+        .map_err(|e| AgentError::Config(format!("cred_store entry: {}", e)))?;
     let json = serde_json::to_string(creds)
         .map_err(|e| AgentError::Serialization(format!("serialize creds: {}", e)))?;
     entry
         .set_password(&json)
-        .map_err(|e| AgentError::Config(format!("keyring write: {}", e)))?;
+        .map_err(|e| AgentError::Config(format!("cred_store write: {}", e)))?;
     CRED_CACHE
         .lock()
         .expect("CRED_CACHE poisoned")
@@ -99,9 +99,9 @@ pub fn load(url: &str) -> Result<Option<S3Credentials>> {
     {
         return Ok(Some(cached.clone()));
     }
-    let entry = match keyring::Entry::new(SERVICE, url) {
+    let entry = match crate::cred_store::Entry::new(SERVICE, url) {
         Ok(e) => e,
-        Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
+        Err(e) => return Err(AgentError::Config(format!("cred_store entry: {}", e))),
     };
     match entry.get_password() {
         Ok(json) => {
@@ -117,8 +117,8 @@ pub fn load(url: &str) -> Result<Option<S3Credentials>> {
         // The keyring crate returns NoEntry when no matching item exists;
         // treat anything else as a real error so permission issues get
         // surfaced rather than silently falling back.
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(AgentError::Config(format!("keyring read: {}", e))),
+        Err(crate::cred_store::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AgentError::Config(format!("cred_store read: {}", e))),
     }
 }
 
@@ -126,14 +126,14 @@ pub fn load(url: &str) -> Result<Option<S3Credentials>> {
 /// source so we don't leave orphan keyring entries behind. Deleting a
 /// non-existent entry is treated as success — idempotent by design.
 pub fn delete(url: &str) -> Result<()> {
-    let entry = match keyring::Entry::new(SERVICE, url) {
+    let entry = match crate::cred_store::Entry::new(SERVICE, url) {
         Ok(e) => e,
-        Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
+        Err(e) => return Err(AgentError::Config(format!("cred_store entry: {}", e))),
     };
     let result = match entry.delete_password() {
         Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(AgentError::Config(format!("keyring delete: {}", e))),
+        Err(crate::cred_store::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AgentError::Config(format!("cred_store delete: {}", e))),
     };
     CRED_CACHE
         .lock()

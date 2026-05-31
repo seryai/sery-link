@@ -91,13 +91,13 @@ impl StoredTokens {
 }
 
 pub fn save(account_id: &str, tokens: &StoredTokens) -> Result<()> {
-    let entry = keyring::Entry::new(SERVICE, account_id)
-        .map_err(|e| AgentError::Config(format!("keyring entry: {}", e)))?;
+    let entry = crate::cred_store::Entry::new(SERVICE, account_id)
+        .map_err(|e| AgentError::Config(format!("cred_store entry: {}", e)))?;
     let json = serde_json::to_string(tokens)
         .map_err(|e| AgentError::Serialization(format!("serialize tokens: {}", e)))?;
     entry
         .set_password(&json)
-        .map_err(|e| AgentError::Config(format!("keyring write: {}", e)))?;
+        .map_err(|e| AgentError::Config(format!("cred_store write: {}", e)))?;
     TOKEN_CACHE
         .lock()
         .expect("TOKEN_CACHE poisoned")
@@ -113,9 +113,9 @@ pub fn load(account_id: &str) -> Result<Option<StoredTokens>> {
     {
         return Ok(Some(cached.clone()));
     }
-    let entry = match keyring::Entry::new(SERVICE, account_id) {
+    let entry = match crate::cred_store::Entry::new(SERVICE, account_id) {
         Ok(e) => e,
-        Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
+        Err(e) => return Err(AgentError::Config(format!("cred_store entry: {}", e))),
     };
     match entry.get_password() {
         Ok(json) => {
@@ -128,20 +128,20 @@ pub fn load(account_id: &str) -> Result<Option<StoredTokens>> {
                 .insert(account_id.to_string(), tokens.clone());
             Ok(Some(tokens))
         }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(AgentError::Config(format!("keyring read: {}", e))),
+        Err(crate::cred_store::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AgentError::Config(format!("cred_store read: {}", e))),
     }
 }
 
 pub fn delete(account_id: &str) -> Result<()> {
-    let entry = match keyring::Entry::new(SERVICE, account_id) {
+    let entry = match crate::cred_store::Entry::new(SERVICE, account_id) {
         Ok(e) => e,
-        Err(e) => return Err(AgentError::Config(format!("keyring entry: {}", e))),
+        Err(e) => return Err(AgentError::Config(format!("cred_store entry: {}", e))),
     };
     let result = match entry.delete_password() {
         Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(AgentError::Config(format!("keyring delete: {}", e))),
+        Err(crate::cred_store::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AgentError::Config(format!("cred_store delete: {}", e))),
     };
     TOKEN_CACHE
         .lock()
