@@ -3,24 +3,28 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import { useCallback } from 'react';
 
 export function TitleBar() {
-  const onMouseDown = useCallback(async (e: React.MouseEvent) => {
+  const onPointerDown = useCallback(async (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
+
+    // setPointerCapture before any await: gives OS-level mouse capture so
+    // pointermove keeps firing even after the cursor leaves the window.
+    // Without this, events stop at the window edge and drag breaks when
+    // the window is already focused (native macOS activation no longer
+    // holds implicit capture for us).
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
 
     const win = getCurrentWindow();
     const startX = e.screenX;
     const startY = e.screenY;
     const factor = window.devicePixelRatio ?? 1;
 
-    // Register listeners synchronously so the webview keeps mouse capture
-    // during the outerPosition() IPC round-trip. Without this, when the
-    // window is already focused the first mousemove fires before the listener
-    // is added, the browser loses capture, and drag silently stops working.
     let base: Awaited<ReturnType<typeof win.outerPosition>> | null = null;
-    let lastMv: MouseEvent | null = null;
+    let lastEv: PointerEvent | null = null;
 
-    const onMove = (mv: MouseEvent) => {
-      lastMv = mv;
+    const onMove = (mv: PointerEvent) => {
+      lastEv = mv;
       if (!base) return;
       const dx = Math.round((mv.screenX - startX) * factor);
       const dy = Math.round((mv.screenY - startY) * factor);
@@ -28,21 +32,21 @@ export function TitleBar() {
     };
 
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
 
     base = await win.outerPosition();
-    if (lastMv) onMove(lastMv);
+    if (lastEv) onMove(lastEv);
   }, []);
 
   return (
     <div
       className="h-8 flex-shrink-0 select-none"
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
     />
   );
 }
