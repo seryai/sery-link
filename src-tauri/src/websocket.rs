@@ -472,6 +472,9 @@ impl WebSocketClient {
             "run_sql" => {
                 Self::handle_run_sql(message, config, write, app).await?;
             }
+            "run_db_sql" => {
+                Self::handle_run_db_sql(message, config, write, app).await?;
+            }
             "schema_change" => {
                 Self::handle_remote_schema_change(message, app);
             }
@@ -747,6 +750,140 @@ impl WebSocketClient {
                 let mut write_guard = write.lock().await;
                 if let Err(e) = write_guard.send(Message::Text(error_response.to_string())).await {
                     eprintln!("Failed to send query error: {}", e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a `run_db_sql` message — execute SQL against a DB source
+    /// (MySQL, PostgreSQL, Snowflake, ClickHouse, MongoDB, Redis) identified
+    /// by `source_id`. The cloud sends this instead of `run_sql` when the
+    /// target dataset lives in a database, not a file on disk.
+    ///
+    /// Message shape:
+    /// ```json
+    /// { "type": "run_db_sql", "query_id": "…", "source_id": "…", "sql": "…" }
+    /// ```
+    async fn handle_run_db_sql<R: Runtime>(
+        message: &Value,
+        config: Arc<RwLock<Config>>,
+        write: WsWriter,
+        app: Option<AppHandle<R>>,
+    ) -> Result<()> {
+        let query_id = message["query_id"]
+            .as_str()
+            .ok_or_else(|| AgentError::WebSocket("Missing query_id".to_string()))?;
+
+        let source_id = message["source_id"]
+            .as_str()
+            .ok_or_else(|| AgentError::WebSocket("Missing source_id".to_string()))?;
+
+        let sql = message["sql"]
+            .as_str()
+            .ok_or_else(|| AgentError::WebSocket("Missing sql".to_string()))?;
+
+        eprintln!("[ws] run_db_sql query_id={query_id} source_id={source_id}");
+
+        if let Some(app) = &app {
+            events::emit_query_started(
+                app,
+                events::QueryStarted {
+                    query_id: query_id.to_string(),
+                    file_path: format!("db://{}", source_id),
+                },
+            );
+        }
+
+        let cfg = config.read().await.clone();
+
+        match crate::db_engine::execute_db_query(sql, source_id, &cfg).await {
+            Ok(result) => {
+                eprintln!(
+                    "[ws] run_db_sql query_id={} completed: {} rows in {}ms",
+                    query_id, result.row_count, result.duration_ms
+                );
+
+                history::record(
+                    Some(query_id.to_string()),
+                    &format!("db://{}", source_id),
+                    sql,
+                    "success",
+                    Some(result.row_count),
+                    result.duration_ms,
+                    None,
+                );
+                let _ = stats::record_query_success(result.duration_ms, Some(result.row_count));
+
+                if let Some(app) = &app {
+                    events::emit_query_completed(
+                        app,
+                        events::QueryCompleted {
+                            query_id: query_id.to_string(),
+                            file_path: format!("db://{}", source_id),
+                            status: "success".to_string(),
+                            row_count: Some(result.row_count),
+                            duration_ms: result.duration_ms,
+                            error: None,
+                        },
+                    );
+                    events::emit_history_updated(app);
+                    events::emit_stats_updated(app);
+                }
+
+                let response = serde_json::json!({
+                    "type": "query_result",
+                    "query_id": query_id,
+                    "columns": result.columns,
+                    "rows": result.rows,
+                    "row_count": result.row_count,
+                    "execution_ms": result.duration_ms
+                });
+                let mut write_guard = write.lock().await;
+                if let Err(e) = write_guard.send(Message::Text(response.to_string())).await {
+                    eprintln!("[ws] Failed to send db query result: {}", e);
+                }
+            }
+            Err(error) => {
+                eprintln!("[ws] run_db_sql query_id={} failed: {}", query_id, error);
+
+                history::record(
+                    Some(query_id.to_string()),
+                    &format!("db://{}", source_id),
+                    sql,
+                    "error",
+                    None,
+                    0,
+                    Some(error.to_string()),
+                );
+                let _ = stats::record_query_failure();
+
+                if let Some(app) = &app {
+                    events::emit_query_completed(
+                        app,
+                        events::QueryCompleted {
+                            query_id: query_id.to_string(),
+                            file_path: format!("db://{}", source_id),
+                            status: "error".to_string(),
+                            row_count: None,
+                            duration_ms: 0,
+                            error: Some(error.to_string()),
+                        },
+                    );
+                    events::emit_history_updated(app);
+                    events::emit_stats_updated(app);
+                }
+
+                let error_response = serde_json::json!({
+                    "type": "query_error",
+                    "query_id": query_id,
+                    "error": error.to_string(),
+                    "suggestion": "Check that the database source is reachable and the SQL is valid"
+                });
+                let mut write_guard = write.lock().await;
+                if let Err(e) = write_guard.send(Message::Text(error_response.to_string())).await {
+                    eprintln!("[ws] Failed to send db query error: {}", e);
                 }
             }
         }
