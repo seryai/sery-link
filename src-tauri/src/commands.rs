@@ -5181,6 +5181,7 @@ pub async fn add_mysql_source(
             port: port.unwrap_or(3306),
             username: username.trim().to_string(),
             database: database.trim().to_string(),
+            password: Some(password.clone()),
         },
         &password,
     )
@@ -5202,6 +5203,7 @@ pub async fn add_postgresql_source(
             port: port.unwrap_or(5432),
             username: username.trim().to_string(),
             database: database.trim().to_string(),
+            password: Some(password.clone()),
         },
         &password,
     )
@@ -5225,6 +5227,7 @@ pub async fn add_snowflake_source(
             warehouse: warehouse.trim().to_string(),
             database: database.trim().to_string(),
             schema: schema.unwrap_or_else(|| "PUBLIC".to_string()),
+            password: Some(password.clone()),
         },
         &password,
     )
@@ -5246,6 +5249,7 @@ pub async fn add_clickhouse_source(
             port: port.unwrap_or(8123),
             username: username.trim().to_string(),
             database: database.trim().to_string(),
+            password: Some(password.clone()),
         },
         &password,
     )
@@ -5269,6 +5273,7 @@ pub async fn add_mongodb_source(
             username: username.trim().to_string(),
             database: database.trim().to_string(),
             auth_db: auth_db.unwrap_or_else(|| "admin".to_string()),
+            password: Some(password.clone()),
         },
         &password,
     )
@@ -5288,6 +5293,7 @@ pub async fn add_redis_source(
             host: host.trim().to_string(),
             port: port.unwrap_or(6379),
             db: db.unwrap_or(0),
+            password: if password.is_empty() { None } else { Some(password.clone()) },
         },
         &password,
     )
@@ -5365,10 +5371,6 @@ async fn add_db_source_inner(
     let returned_id = config.add_source(new_source);
     config.save().map_err(|e| e.to_string())?;
 
-    if returned_id == source_id {
-        crate::db_creds::save(&source_id, password).map_err(|e| e.to_string())?;
-    }
-
     Ok(returned_id)
 }
 
@@ -5388,12 +5390,14 @@ pub async fn test_db_connection(
             port,
             username: username.trim().to_string(),
             database: database.trim().to_string(),
+            password: None,
         },
         "postgresql" => crate::sources::SourceKind::Postgresql {
             host: host.trim().to_string(),
             port,
             username: username.trim().to_string(),
             database: database.trim().to_string(),
+            password: None,
         },
         other => return Err(format!("Unknown DB kind: {other}")),
     };

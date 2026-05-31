@@ -116,6 +116,7 @@ fn build_attach_string(
             port,
             username,
             database,
+            ..
         } => {
             let conn_str = format!(
                 "host={host} port={port} database={database} user={username} password={password}"
@@ -127,6 +128,7 @@ fn build_attach_string(
             port,
             username,
             database,
+            ..
         } => {
             let conn_str = format!(
                 "host={host} port={port} dbname={database} user={username} password={password}"
@@ -139,6 +141,7 @@ fn build_attach_string(
             warehouse,
             database,
             schema,
+            ..
         } => {
             let conn_str = format!(
                 "account={account};user={username};password={password};\
@@ -184,7 +187,11 @@ fn default_schema(_kind: &SourceKind) -> Option<&'static str> {
     }
 }
 
-/// Lookup a DB source in config and load its password from the keychain.
+/// Lookup a DB source in config and resolve its password.
+///
+/// Password priority:
+///   1. Embedded in the SourceKind (new path — stored in config.json)
+///   2. OS keychain entry keyed on source_id (legacy path — migrated users)
 fn resolve_source<'a>(
     source_id: &str,
     config: &'a Config,
@@ -195,12 +202,28 @@ fn resolve_source<'a>(
         .find(|s| s.id == source_id)
         .ok_or_else(|| AgentError::Database(format!("DB source not found: {source_id}")))?;
 
-    let password = crate::db_creds::load(&source.id)?
-        .ok_or_else(|| {
-            AgentError::Database(format!(
-                "No credentials stored for source {source_id} — reconnect the source."
-            ))
-        })?;
+    // Extract inline password from kind (new storage path).
+    let inline_pw = match &source.kind {
+        SourceKind::Mysql { password, .. }
+        | SourceKind::Postgresql { password, .. }
+        | SourceKind::Snowflake { password, .. }
+        | SourceKind::Clickhouse { password, .. }
+        | SourceKind::Mongodb { password, .. }
+        | SourceKind::Redis { password, .. } => password.clone(),
+        _ => None,
+    };
+
+    let password = if let Some(pw) = inline_pw {
+        pw
+    } else {
+        // Fall back to keychain for sources added before this change.
+        crate::db_creds::load(&source.id)?
+            .ok_or_else(|| {
+                AgentError::Database(format!(
+                    "No credentials for source {source_id} — please remove and re-add it."
+                ))
+            })?
+    };
 
     Ok((&source.kind, password))
 }
@@ -220,7 +243,7 @@ pub async fn execute_db_query(
 
     // Dispatch to specialised engines for HTTP / document / key-value sources.
     match kind {
-        SourceKind::Clickhouse { host, port, username, database } => {
+        SourceKind::Clickhouse { host, port, username, database, .. } => {
             let (host, port, username, database) =
                 (host.clone(), *port, username.clone(), database.clone());
             let sql_owned = sql.to_string();
@@ -233,14 +256,14 @@ pub async fn execute_db_query(
                 Err(_) => Err(AgentError::Database(format!("ClickHouse query timed out after {TIMEOUT_SECS}s"))),
             };
         }
-        SourceKind::Mongodb { host, port, username, database, auth_db } => {
+        SourceKind::Mongodb { host, port, username, database, auth_db, .. } => {
             let (host, port, username, database, auth_db) =
                 (host.clone(), *port, username.clone(), database.clone(), auth_db.clone());
             let sql_owned = sql.to_string();
             let pw = password.clone();
             return execute_mongodb_query(&sql_owned, &host, port, &username, &pw, &database, &auth_db).await;
         }
-        SourceKind::Redis { host, port, db } => {
+        SourceKind::Redis { host, port, db, .. } => {
             let (host, port, db) = (host.clone(), *port, *db);
             let sql_owned = sql.to_string();
             let pw = password.clone();
@@ -366,7 +389,7 @@ pub async fn introspect_schema(
     let (kind, password) = resolve_source(source_id, config)?;
 
     match kind {
-        SourceKind::Clickhouse { host, port, username, database } => {
+        SourceKind::Clickhouse { host, port, username, database, .. } => {
             let (host, port, username, database) =
                 (host.clone(), *port, username.clone(), database.clone());
             let pw = password.clone();
@@ -378,7 +401,7 @@ pub async fn introspect_schema(
                 Err(_) => Err(AgentError::Database("ClickHouse introspect timed out".to_string())),
             };
         }
-        SourceKind::Mongodb { host, port, username, database, auth_db } => {
+        SourceKind::Mongodb { host, port, username, database, auth_db, .. } => {
             let (host, port, username, database, auth_db) =
                 (host.clone(), *port, username.clone(), database.clone(), auth_db.clone());
             let pw = password.clone();
@@ -784,7 +807,7 @@ pub fn test_connection_blocking(
     password: &str,
 ) -> Result<()> {
     match kind {
-        SourceKind::Clickhouse { host, port, username, database } => {
+        SourceKind::Clickhouse { host, port, username, database, .. } => {
             return test_clickhouse_connection_blocking(host, *port, username, password, database);
         }
         SourceKind::Mongodb { host, port, username, auth_db, .. } => {
@@ -795,7 +818,7 @@ pub fn test_connection_blocking(
                 .map_err(|e| AgentError::Database(format!("runtime: {e}")))?;
             return rt.block_on(test_mongodb_connection(host, *port, username, password, auth_db));
         }
-        SourceKind::Redis { host, port, db } => {
+        SourceKind::Redis { host, port, db, .. } => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()

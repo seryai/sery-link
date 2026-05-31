@@ -117,30 +117,32 @@ pub enum SourceKind {
         base_path: String,
     },
 
-    /// F52: MySQL database. Connection metadata here; password in the
-    /// keychain via `db_creds`, keyed on source_id. Schema introspected
-    /// via INFORMATION_SCHEMA on first connect. Queries execute via
-    /// DuckDB mysql_scanner extension (READ_ONLY ATTACH).
+    /// F52: MySQL database. Connection metadata + password stored in
+    /// ~/.seryai/config.json. Schema introspected via INFORMATION_SCHEMA
+    /// on first connect. Queries execute via DuckDB mysql_scanner (ATTACH).
     Mysql {
         host: String,
         #[serde(default = "default_mysql_port")]
         port: u16,
         username: String,
         database: String,
+        /// Stored in config.json (plaintext, user-owned file).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
-    /// F52: PostgreSQL database. Same pattern as Mysql above but using
-    /// DuckDB postgres_scanner extension.
+    /// F52: PostgreSQL database. Same pattern as Mysql.
     Postgresql {
         host: String,
         #[serde(default = "default_postgresql_port")]
         port: u16,
         username: String,
         database: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
     /// F53: Snowflake data warehouse via DuckDB community snowflake extension.
-    /// Password lives in the keychain via db_creds, keyed on source_id.
     Snowflake {
         account: String,
         username: String,
@@ -148,19 +150,23 @@ pub enum SourceKind {
         database: String,
         #[serde(default = "default_snowflake_schema")]
         schema: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
-    /// F53: ClickHouse via HTTP interface (port 8123). Password in keychain.
+    /// F53: ClickHouse via HTTP interface (port 8123).
     Clickhouse {
         host: String,
         #[serde(default = "default_clickhouse_http_port")]
         port: u16,
         username: String,
         database: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
-    /// F53: MongoDB. Password in keychain. SQL is executed via DuckDB in-memory
-    /// bridge (collections loaded as temp tables via read_json_auto).
+    /// F53: MongoDB. SQL is executed via DuckDB in-memory bridge
+    /// (collections loaded as temp tables via read_json_auto).
     Mongodb {
         host: String,
         #[serde(default = "default_mongodb_port")]
@@ -169,19 +175,24 @@ pub enum SourceKind {
         database: String,
         #[serde(default = "default_mongodb_auth_db")]
         auth_db: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
-    /// F53: Redis. Password (optional) in keychain. Exposes all keys as a
-    /// virtual `keys` table with columns (key, value, value_type, ttl).
+    /// F53: Redis. Password optional (empty = no auth). Exposes all keys
+    /// as a virtual `keys` table (key, value, value_type, ttl).
     Redis {
         host: String,
         #[serde(default = "default_redis_port")]
         port: u16,
         #[serde(default)]
         db: u8,
+        /// Empty string = no auth.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
     },
 
-    /// F53: SQLite file via DuckDB built-in sqlite extension. No password needed.
+    /// F53: SQLite file via DuckDB built-in sqlite extension. No password.
     Sqlite {
         path: PathBuf,
     },
