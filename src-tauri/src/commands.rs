@@ -5519,37 +5519,61 @@ pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize 
         })
         .unwrap_or_else(|| "database_table".to_string());
 
-    let datasets: Vec<crate::scanner::DatasetMetadata> = tables
-        .iter()
-        .map(|t| {
-            use crate::scanner::DatasetMetadata;
-            use crate::scanner::ColumnSchema;
-            let db_catalog = serde_json::json!({
-                "indexes": t.indexes,
-                "foreign_keys": t.foreign_keys,
-                "size_bytes": t.size_bytes,
-            });
-            DatasetMetadata {
-                relative_path: format!("db/{}/{}", source_id, t.table_name),
-                file_format: db_kind.clone(),
-                size_bytes: t.size_bytes.unwrap_or(0) as u64,
-                row_count_estimate: t.row_count_estimate,
-                schema: t.columns.iter().map(|c| ColumnSchema {
-                    name: c.name.clone(),
-                    col_type: c.data_type.clone(),
-                    nullable: c.nullable,
-                    is_primary_key: c.is_primary_key,
-                    default_value: c.default_value.clone(),
-                }).collect(),
-                last_modified: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-                document_markdown: None,
-                sample_rows: None,
-                samples_redacted: false,
-                source_id: Some(source_id.to_string()),
-                db_catalog: Some(db_catalog),
+    let is_mysql = source.map_or(false, |s| matches!(s.kind, crate::sources::SourceKind::Mysql { .. }));
+
+    let mut datasets: Vec<crate::scanner::DatasetMetadata> = Vec::with_capacity(tables.len());
+    for t in &tables {
+        use crate::scanner::{DatasetMetadata, ColumnSchema};
+        let db_catalog = serde_json::json!({
+            "indexes": t.indexes,
+            "foreign_keys": t.foreign_keys,
+            "size_bytes": t.size_bytes,
+        });
+
+        // Fetch a small sample for dashboard preview. Best-effort — failure just leaves sample_rows None.
+        let sample_rows: Option<Vec<serde_json::Map<String, serde_json::Value>>> = {
+            let sql = if is_mysql {
+                let escaped = t.table_name.replace('`', "``");
+                format!("SELECT * FROM `{escaped}` LIMIT 5")
+            } else {
+                let escaped = t.table_name.replace('"', "\"\"");
+                format!("SELECT * FROM \"{escaped}\" LIMIT 5")
+            };
+            match crate::db_engine::execute_db_query(&sql, source_id, config).await {
+                Ok(result) => {
+                    let rows: Vec<serde_json::Map<String, serde_json::Value>> = result.rows.iter()
+                        .map(|row| {
+                            result.columns.iter().enumerate()
+                                .map(|(i, col)| (col.clone(), row[i].clone()))
+                                .collect()
+                        })
+                        .collect();
+                    Some(rows)
+                }
+                Err(_) => None,
             }
-        })
-        .collect();
+        };
+
+        datasets.push(DatasetMetadata {
+            relative_path: format!("db/{}/{}", source_id, t.table_name),
+            file_format: db_kind.clone(),
+            size_bytes: t.size_bytes.unwrap_or(0) as u64,
+            row_count_estimate: t.row_count_estimate,
+            schema: t.columns.iter().map(|c| ColumnSchema {
+                name: c.name.clone(),
+                col_type: c.data_type.clone(),
+                nullable: c.nullable,
+                is_primary_key: c.is_primary_key,
+                default_value: c.default_value.clone(),
+            }).collect(),
+            last_modified: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            document_markdown: None,
+            sample_rows,
+            samples_redacted: false,
+            source_id: Some(source_id.to_string()),
+            db_catalog: Some(db_catalog),
+        });
+    }
 
     let count = datasets.len();
     let roots = collect_source_roots(config);
