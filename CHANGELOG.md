@@ -5,6 +5,17 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.3] — 2026-06-01
+
+### Fixed
+
+- **CI lib tests failing** — JDBC Rust backend files (`agent_db_creds.rs`,
+  `SourceKind::AgentDb` in `sources.rs`, and related modules) were present in the
+  working tree but never staged, causing `cargo test --lib --no-default-features`
+  to fail on CI with "cannot find `agent_db_creds` in crate".
+
+---
+
 ## [0.12.2] — 2026-06-01
 
 ### Added
