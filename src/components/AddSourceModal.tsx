@@ -2346,7 +2346,6 @@ function DatabaseStage({
   const [database, setDatabase] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [testStatus, setTestStatus] = useState<'idle' | 'ok' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // SSH tunnel state
@@ -2378,8 +2377,6 @@ function DatabaseStage({
     portValid &&
     sshValid;
 
-  const resetTest = () => setTestStatus(null);
-
   const buildSshArgs = () => {
     if (!sshEnabled || sshHost.trim() === '') return {};
     return {
@@ -2390,29 +2387,6 @@ function DatabaseStage({
       sshKeyPath: sshAuthMode === 'key' ? sshKeyPath.trim() : undefined,
       sshKeyPassphrase: sshAuthMode === 'key' && sshKeyPassphrase ? sshKeyPassphrase : undefined,
     };
-  };
-
-  const test = async () => {
-    setError(null);
-    setTestStatus(null);
-    setBusy(true);
-    try {
-      await invoke<void>('test_db_connection', {
-        host: host.trim(),
-        port: portNumber,
-        username: username.trim(),
-        database: database.trim(),
-        password,
-        kind: dbKind,
-        ...buildSshArgs(),
-      });
-      setTestStatus('ok');
-      toast.success('Connection OK');
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
   };
 
   const submit = async () => {
@@ -2444,14 +2418,14 @@ function DatabaseStage({
           <CredField
             label="Host"
             value={host}
-            onChange={(v) => { setHost(v); resetTest(); }}
+            onChange={(v) => { setHost(v); }}
             placeholder={dbKind === 'mysql' ? 'mysql.example.com' : 'pg.example.com'}
           />
         </div>
         <CredField
           label="Port"
           value={port}
-          onChange={(v) => { setPort(v); resetTest(); }}
+          onChange={(v) => { setPort(v); }}
           placeholder={defaultPort}
         />
       </div>
@@ -2460,13 +2434,13 @@ function DatabaseStage({
         <CredField
           label="Database"
           value={database}
-          onChange={(v) => { setDatabase(v); resetTest(); }}
+          onChange={(v) => { setDatabase(v); }}
           placeholder="mydb"
         />
         <CredField
           label="Username"
           value={username}
-          onChange={(v) => { setUsername(v); resetTest(); }}
+          onChange={(v) => { setUsername(v); }}
           placeholder={dbKind === 'mysql' ? 'root' : 'postgres'}
         />
       </div>
@@ -2479,7 +2453,7 @@ function DatabaseStage({
         <CredField
           label="Password"
           value={password}
-          onChange={(v) => { setPassword(v); resetTest(); }}
+          onChange={(v) => { setPassword(v); }}
           type="password"
           placeholder="••••••••"
         />
@@ -2493,7 +2467,7 @@ function DatabaseStage({
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/30">
         <button
           type="button"
-          onClick={() => { setSshEnabled(!sshEnabled); resetTest(); }}
+          onClick={() => { setSshEnabled(!sshEnabled); }}
           className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
         >
           <span>SSH Tunnel</span>
@@ -2509,14 +2483,14 @@ function DatabaseStage({
                 <CredField
                   label="SSH Host"
                   value={sshHost}
-                  onChange={(v) => { setSshHost(v); resetTest(); }}
+                  onChange={(v) => { setSshHost(v); }}
                   placeholder="bastion.example.com"
                 />
               </div>
               <CredField
                 label="SSH Port"
                 value={sshPort}
-                onChange={(v) => { setSshPort(v); resetTest(); }}
+                onChange={(v) => { setSshPort(v); }}
                 placeholder="22"
               />
             </div>
@@ -2524,7 +2498,7 @@ function DatabaseStage({
               <CredField
                 label="SSH Username"
                 value={sshUsername}
-                onChange={(v) => { setSshUsername(v); resetTest(); }}
+                onChange={(v) => { setSshUsername(v); }}
                 placeholder="ubuntu"
               />
             </div>
@@ -2537,7 +2511,7 @@ function DatabaseStage({
                   <input
                     type="radio"
                     checked={sshAuthMode === 'key'}
-                    onChange={() => { setSshAuthMode('key'); resetTest(); }}
+                    onChange={() => { setSshAuthMode('key'); }}
                     className="accent-purple-600"
                   />
                   Private key
@@ -2546,7 +2520,7 @@ function DatabaseStage({
                   <input
                     type="radio"
                     checked={sshAuthMode === 'password'}
-                    onChange={() => { setSshAuthMode('password'); resetTest(); }}
+                    onChange={() => { setSshAuthMode('password'); }}
                     className="accent-purple-600"
                   />
                   Password
@@ -2558,13 +2532,13 @@ function DatabaseStage({
                 <CredField
                   label="Key path"
                   value={sshKeyPath}
-                  onChange={(v) => { setSshKeyPath(v); resetTest(); }}
+                  onChange={(v) => { setSshKeyPath(v); }}
                   placeholder="~/.ssh/id_ed25519"
                 />
                 <CredField
                   label="Key passphrase (optional)"
                   value={sshKeyPassphrase}
-                  onChange={(v) => { setSshKeyPassphrase(v); resetTest(); }}
+                  onChange={(v) => { setSshKeyPassphrase(v); }}
                   type="password"
                   placeholder="leave blank if none"
                 />
@@ -2574,7 +2548,7 @@ function DatabaseStage({
                 <CredField
                   label="SSH Password"
                   value={sshPassword}
-                  onChange={(v) => { setSshPassword(v); resetTest(); }}
+                  onChange={(v) => { setSshPassword(v); }}
                   type="password"
                   placeholder="••••••••"
                 />
@@ -2595,40 +2569,22 @@ function DatabaseStage({
         </div>
       )}
 
-      {testStatus === 'ok' && !error && (
-        <div className="mt-3 rounded-md border border-emerald-300 bg-emerald-50 p-2 text-xs text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
-          Connection OK — ready to save.
-        </div>
-      )}
-
-      <div className="mt-6 flex items-center justify-between gap-2">
+      <div className="mt-6 flex items-center justify-end gap-2">
         <button
-          onClick={test}
-          disabled={!canSubmit}
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          onClick={onCancel}
+          disabled={busy}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
         >
-          {busy && testStatus !== 'ok' && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          )}
-          Test connection
+          Cancel
         </button>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onCancel}
-            disabled={busy}
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={!canSubmit}
-            className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {busy ? 'Testing connection…' : `Add ${label} source`}
-          </button>
-        </div>
+        <button
+          onClick={submit}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {busy ? 'Testing connection…' : `Add ${label} source`}
+        </button>
       </div>
     </>
   );
