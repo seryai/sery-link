@@ -103,16 +103,8 @@ export function Settings() {
     }
   };
 
-  const changeKey = async () => {
-    if (!window.confirm('Disconnect and enter a new workspace key?')) return;
-    try {
-      await invoke('logout');
-      setAuthenticated(false);
-      setAgentInfo(null);
-      setShowConnectModal(true);
-    } catch (err) {
-      toast.error(`Couldn't disconnect: ${err}`);
-    }
+  const changeKey = () => {
+    setShowConnectModal(true);
   };
 
   const exportConfig = async () => {
