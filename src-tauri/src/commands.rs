@@ -2405,10 +2405,9 @@ pub async fn rescan_source_by_id<R: Runtime>(
         | SourceKind::Mongodb { .. }
         | SourceKind::Redis { .. }
         | SourceKind::Sqlite { .. } => {
-            Ok(serde_json::json!({
-                "skipped": true,
-                "reason": "database source — schema is introspected on connect, not file-scanned"
-            }))
+            let config = Config::load().map_err(|e| e.to_string())?;
+            let count = sync_db_source_to_cloud(&source_id, &config).await;
+            Ok(serde_json::json!({ "tables_synced": count }))
         }
     }
 }
@@ -5487,6 +5486,103 @@ pub async fn test_db_connection(
     .map_err(|e| e.to_string())
 }
 
+/// Introspect a DB source and push the catalog to the cloud.
+/// Used by both `introspect_db_schema` (fire-and-forget) and
+/// `rescan_source_by_id` (awaited, so scan-all includes DB sources).
+/// Returns the number of tables synced, or 0 on any error.
+pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize {
+    let token = match crate::keyring_store::get_token() {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+
+    let tables = match crate::db_engine::introspect_schema(source_id, config).await {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+
+    let source = config.sources.iter().find(|s| s.id == source_id);
+    let db_kind = source
+        .map(|s| {
+            use crate::sources::SourceKind;
+            let kind_str = match &s.kind {
+                SourceKind::Postgresql { .. } => "postgresql",
+                SourceKind::Mysql { .. } => "mysql",
+                SourceKind::Snowflake { .. } => "snowflake",
+                SourceKind::Clickhouse { .. } => "clickhouse",
+                SourceKind::Mongodb { .. } => "mongodb",
+                SourceKind::Redis { .. } => "redis",
+                SourceKind::Sqlite { .. } => "sqlite",
+                _ => "database",
+            };
+            format!("{kind_str}_table")
+        })
+        .unwrap_or_else(|| "database_table".to_string());
+
+    let datasets: Vec<crate::scanner::DatasetMetadata> = tables
+        .iter()
+        .map(|t| {
+            use crate::scanner::DatasetMetadata;
+            use crate::scanner::ColumnSchema;
+            let db_catalog = serde_json::json!({
+                "indexes": t.indexes,
+                "foreign_keys": t.foreign_keys,
+                "size_bytes": t.size_bytes,
+            });
+            DatasetMetadata {
+                relative_path: format!("db/{}/{}", source_id, t.table_name),
+                file_format: db_kind.clone(),
+                size_bytes: t.size_bytes.unwrap_or(0) as u64,
+                row_count_estimate: t.row_count_estimate,
+                schema: t.columns.iter().map(|c| ColumnSchema {
+                    name: c.name.clone(),
+                    col_type: c.data_type.clone(),
+                    nullable: c.nullable,
+                    is_primary_key: c.is_primary_key,
+                    default_value: c.default_value.clone(),
+                }).collect(),
+                last_modified: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                document_markdown: None,
+                sample_rows: None,
+                samples_redacted: false,
+                source_id: Some(source_id.to_string()),
+                db_catalog: Some(db_catalog),
+            }
+        })
+        .collect();
+
+    let count = datasets.len();
+    let roots = collect_source_roots(config);
+    let _ = crate::scanner::sync_metadata_to_cloud(
+        &config.cloud.api_url,
+        &token,
+        None,
+        Some(roots),
+        datasets,
+    )
+    .await;
+
+    // Persist scan stats (sidebar "last scanned", table count, etc.)
+    let total_columns: usize = tables.iter().map(|t| t.columns.len()).sum();
+    let total_bytes: u64 = tables.iter().filter_map(|t| t.size_bytes).map(|b| b as u64).sum();
+    if let Ok(mut cfg) = Config::load() {
+        cfg.update_source_scan_stats(
+            source_id,
+            crate::config::ScanStats {
+                datasets: count as u64,
+                columns: total_columns as u64,
+                errors: 0,
+                total_bytes,
+                duration_ms: 0,
+            },
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let _ = cfg.save();
+    }
+
+    count
+}
+
 /// Introspect the schema of an already-registered DB source.
 /// Returns a list of tables with their column names and types, and
 /// asynchronously syncs the catalog to the cloud (best-effort).
@@ -5499,98 +5595,12 @@ pub async fn introspect_db_schema(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Best-effort cloud sync — fire-and-forget, never fail the caller.
-    let tables_clone = tables.clone();
+    // Fire-and-forget cloud sync so the caller gets results immediately.
     let config_clone = config.clone();
     let source_id_clone = source_id.clone();
     tokio::spawn(async move {
-        if let Ok(token) = crate::keyring_store::get_token() {
-            let source = config_clone.sources.iter().find(|s| s.id == source_id_clone);
-            let db_kind = source
-                .map(|s| {
-                    use crate::sources::SourceKind;
-                    let kind_str = match &s.kind {
-                        SourceKind::Postgresql { .. } => "postgresql",
-                        SourceKind::Mysql { .. } => "mysql",
-                        SourceKind::Snowflake { .. } => "snowflake",
-                        SourceKind::Clickhouse { .. } => "clickhouse",
-                        SourceKind::Mongodb { .. } => "mongodb",
-                        SourceKind::Redis { .. } => "redis",
-                        SourceKind::Sqlite { .. } => "sqlite",
-                        _ => "database",
-                    };
-                    format!("{kind_str}_table")
-                })
-                .unwrap_or_else(|| "database_table".to_string());
-
-            let datasets: Vec<crate::scanner::DatasetMetadata> = tables_clone
-                .iter()
-                .map(|t| {
-                    use crate::scanner::DatasetMetadata;
-                    use crate::scanner::ColumnSchema;
-                    let db_catalog = serde_json::json!({
-                        "indexes": t.indexes,
-                        "foreign_keys": t.foreign_keys,
-                        "size_bytes": t.size_bytes,
-                    });
-                    DatasetMetadata {
-                        // relative_path encodes source + table so the cloud
-                        // can distinguish tables from different DB sources.
-                        relative_path: format!("db/{}/{}", source_id_clone, t.table_name),
-                        file_format: db_kind.clone(),
-                        size_bytes: t.size_bytes.unwrap_or(0) as u64,
-                        row_count_estimate: t.row_count_estimate,
-                        schema: t.columns.iter().map(|c| ColumnSchema {
-                            name: c.name.clone(),
-                            col_type: c.data_type.clone(),
-                            nullable: c.nullable,
-                            is_primary_key: c.is_primary_key,
-                            default_value: c.default_value.clone(),
-                        }).collect(),
-                        last_modified: chrono::Utc::now()
-                            .format("%Y-%m-%dT%H:%M:%SZ")
-                            .to_string(),
-                        document_markdown: None,
-                        sample_rows: None,
-                        samples_redacted: false,
-                        source_id: Some(source_id_clone.clone()),
-                        db_catalog: Some(db_catalog),
-                    }
-                })
-                .collect();
-
-            let roots = collect_source_roots(&config_clone);
-            let _ = crate::scanner::sync_metadata_to_cloud(
-                &config_clone.cloud.api_url,
-                &token,
-                None,
-                Some(roots),
-                datasets,
-            )
-            .await;
-        }
+        sync_db_source_to_cloud(&source_id_clone, &config_clone).await;
     });
-
-    // Persist scan stats so the sidebar can show table count, column
-    // count, and "last scanned X ago" for DB sources — the same data
-    // the file scanner writes for local/S3/SFTP sources.
-    let total_tables = tables.len();
-    let total_columns: usize = tables.iter().map(|t| t.columns.len()).sum();
-    let total_bytes: u64 = tables.iter().filter_map(|t| t.size_bytes).map(|b| b as u64).sum();
-    if let Ok(mut cfg) = Config::load() {
-        cfg.update_source_scan_stats(
-            &source_id,
-            crate::config::ScanStats {
-                datasets: total_tables as u64,
-                columns: total_columns as u64,
-                errors: 0,
-                total_bytes,
-                duration_ms: 0,
-            },
-            chrono::Utc::now().to_rfc3339(),
-        );
-        let _ = cfg.save();
-    }
 
     Ok(tables)
 }
