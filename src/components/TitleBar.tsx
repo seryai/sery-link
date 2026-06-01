@@ -41,7 +41,7 @@ export function TitleBar() {
           <button
             onClick={() => status.clickable && setShowConnectModal(true)}
             title={status.label}
-            className={`flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors ${
+            className={`flex items-center gap-1.5 rounded-md p-1.5 transition-colors ${
               status.clickable
                 ? 'hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer'
                 : 'cursor-default'
@@ -50,11 +50,11 @@ export function TitleBar() {
             <span
               className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`}
             />
-            <span className="text-[13px] text-slate-600 dark:text-slate-300">
+            <span className="text-[14px] text-slate-600 dark:text-slate-300">
               {status.label}
             </span>
             {stats && (
-              <span className="text-[13px] text-slate-400 dark:text-slate-500">
+              <span className="text-[14px] text-slate-400 dark:text-slate-500">
                 · {stats.queries_today}{' '}
                 {stats.queries_today === 1 ? 'query' : 'queries'} today
               </span>
