@@ -67,19 +67,19 @@ export function TitleBar() {
 
         {/* Right actions */}
         <div className="flex items-center gap-0.5">
-          <TitleBtn onClick={() => setAddSourceOpen(true)} title="New source">
+          <TitleBtn onClick={() => setAddSourceOpen(true)} label="New source">
             <Plus className="h-4 w-4" />
           </TitleBtn>
           <TitleBtn
             onClick={() => navigate('/history')}
-            title="Query history"
+            label="History"
             active={isActive('/history')}
           >
             <History className="h-4 w-4" />
           </TitleBtn>
           <TitleBtn
             onClick={() => navigate('/notifications')}
-            title="Notifications"
+            label="Notifications"
             active={isActive('/notifications')}
           >
             <div className="relative">
@@ -93,7 +93,7 @@ export function TitleBar() {
           </TitleBtn>
           <TitleBtn
             onClick={() => navigate('/settings')}
-            title="Settings"
+            label="Settings"
             active={isActive('/settings')}
           >
             <Settings className="h-4 w-4" />
@@ -116,26 +116,26 @@ export function TitleBar() {
 
 function TitleBtn({
   onClick,
-  title,
+  label,
   active,
   children,
 }: {
   onClick: () => void;
-  title: string;
+  label: string;
   active?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
-      title={title}
-      className={`rounded-md p-1.5 transition-colors ${
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] transition-colors ${
         active
           ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-200'
           : 'text-slate-500 hover:bg-black/5 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200'
       }`}
     >
       {children}
+      <span>{label}</span>
     </button>
   );
 }
