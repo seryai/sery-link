@@ -304,6 +304,7 @@ pub fn run() {
             commands::add_sqlite_source,
             commands::test_db_connection,
             commands::introspect_db_schema,
+            commands::profile_db_table,
             commands::set_folder_mcp_enabled,
             commands::get_mcp_snippets,
             commands::scan_folder,

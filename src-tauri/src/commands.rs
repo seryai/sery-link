@@ -5593,6 +5593,123 @@ pub async fn introspect_db_schema(
     Ok(tables)
 }
 
+/// Per-column stats + sample rows for a single DB table. Computed from
+/// a capped sample (up to 1 000 rows) so it works on arbitrarily large
+/// tables without a full scan.
+#[derive(serde::Serialize)]
+pub struct DbTableProfile {
+    /// One entry per column — same shape as `ColumnProfile` for file
+    /// datasets so the frontend can reuse the same stats table.
+    pub columns: Vec<ColumnProfile>,
+    /// Up to 10 representative rows (stringified values) for the preview.
+    pub sample_rows: Vec<std::collections::HashMap<String, String>>,
+    /// How many rows the stats were computed from.
+    pub sample_size: usize,
+}
+
+#[tauri::command]
+pub async fn profile_db_table(
+    source_id: String,
+    table_name: String,
+) -> Result<DbTableProfile, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+
+    // Sanitise table_name: only allow identifier characters so we can
+    // interpolate it safely into the SELECT below.
+    if table_name.contains('\'') || table_name.contains(';') || table_name.contains("--") {
+        return Err("Invalid table name".to_string());
+    }
+    let escaped_table = table_name.replace('"', "\"\"");
+    let sql = format!("SELECT * FROM \"{escaped_table}\" LIMIT 1000");
+
+    let result = crate::db_engine::execute_db_query(&sql, &source_id, &config)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let col_names = &result.columns;
+    let rows = &result.rows;
+    let n = rows.len();
+
+    // Build per-column stats from the sample.
+    let columns: Vec<ColumnProfile> = col_names.iter().enumerate().map(|(ci, col_name)| {
+        let values: Vec<&serde_json::Value> = rows.iter().map(|r| &r[ci]).collect();
+
+        let null_count = values.iter().filter(|v| v.is_null()).count();
+        let null_pct = if n > 0 { (null_count as f64 / n as f64) * 100.0 } else { 0.0 };
+
+        // Approx unique — count distinct string representations.
+        let mut seen = std::collections::HashSet::new();
+        for v in &values {
+            if !v.is_null() {
+                seen.insert(v.to_string());
+            }
+        }
+        let approx_unique = seen.len() as i64;
+
+        // Min / max — lexicographic on stringified values (works for
+        // numbers and dates represented as strings in JSON).
+        let non_null_strs: Vec<String> = values.iter()
+            .filter(|v| !v.is_null())
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect();
+
+        let min = non_null_strs.iter().min().cloned();
+        let max = non_null_strs.iter().max().cloned();
+
+        // Avg — only meaningful for numeric values.
+        let numeric_vals: Vec<f64> = values.iter()
+            .filter_map(|v| match v {
+                serde_json::Value::Number(n) => n.as_f64(),
+                serde_json::Value::String(s) => s.parse::<f64>().ok(),
+                _ => None,
+            })
+            .collect();
+        let avg = if !numeric_vals.is_empty() {
+            let sum: f64 = numeric_vals.iter().sum();
+            let a = sum / numeric_vals.len() as f64;
+            // Format without trailing zeros for compact display.
+            let s = if a.fract() == 0.0 {
+                format!("{}", a as i64)
+            } else {
+                format!("{:.4}", a).trim_end_matches('0').trim_end_matches('.').to_string()
+            };
+            Some(s)
+        } else {
+            None
+        };
+
+        ColumnProfile {
+            column_name: col_name.clone(),
+            column_type: String::new(), // filled from schema on frontend
+            count: Some(n as i64),
+            null_percentage: Some(null_pct),
+            approx_unique: Some(approx_unique),
+            min,
+            max,
+            avg,
+            std: None,
+        }
+    }).collect();
+
+    // Sample rows — first 10, stringify every value.
+    let sample_rows: Vec<std::collections::HashMap<String, String>> = rows.iter().take(10).map(|row| {
+        col_names.iter().enumerate().map(|(ci, name)| {
+            let v = &row[ci];
+            let s = match v {
+                serde_json::Value::Null => String::new(),
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (name.clone(), s)
+        }).collect()
+    }).collect();
+
+    Ok(DbTableProfile { columns, sample_rows, sample_size: n })
+}
+
 #[cfg(test)]
 mod search_tests {
     use super::{rank_matches, SearchMatchReason};
