@@ -203,6 +203,39 @@ pub enum SourceKind {
     Sqlite {
         path: PathBuf,
     },
+
+    /// F54: Agent-based JDBC database (Oracle, DB2, SAP HANA, Teradata,
+    /// Vertica, Databricks, Trino, Hive, BigQuery, Cassandra, Neo4j,
+    /// Firebird, Exasol, H2, Informix, Kylin, Dameng, Kingbase, etc.).
+    /// The driver is dispatched by `driver_key` (matches `agent_catalog`
+    /// keys). The password lives in the OS keychain, keyed on
+    /// `source_id` via `agent_db_creds`.
+    AgentDb {
+        /// Catalog key — `oracle`, `db2`, `saphana`, `teradata`, etc.
+        driver_key: String,
+        /// Optional sub-profile (e.g. Oracle thin vs. OCI). UI hint
+        /// only; the agent honors it via the connection_string the
+        /// frontend builds.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        driver_profile: Option<String>,
+        host: String,
+        port: u16,
+        username: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        database: Option<String>,
+        /// Oracle-only: `service_name` or `sid`. Drives the JDBC URL
+        /// shape when `connection_string` isn't supplied.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        oracle_connection_type: Option<String>,
+        /// Pre-built JDBC URL. If present, the agent uses it verbatim
+        /// and host/port/database are ignored for connection (still
+        /// kept for display).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        connection_string: Option<String>,
+        /// Extra URL parameters appended to the JDBC URL.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        url_params: Option<String>,
+    },
 }
 
 fn default_sftp_port() -> u16 {
@@ -236,6 +269,7 @@ impl SourceKind {
                 | SourceKind::Mongodb { .. }
                 | SourceKind::Redis { .. }
                 | SourceKind::Sqlite { .. }
+                | SourceKind::AgentDb { .. }
         )
     }
 }
@@ -411,6 +445,14 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
             .unwrap_or(path.as_os_str())
             .to_string_lossy()
             .to_string(),
+        SourceKind::AgentDb { driver_key, host, port, database, .. } => {
+            let label = db_core::agent_catalog::label_for_key(driver_key)
+                .unwrap_or(driver_key.as_str());
+            match database {
+                Some(db) if !db.is_empty() => format!("{label} · {host}:{port}/{db}"),
+                _ => format!("{label} · {host}:{port}"),
+            }
+        }
         SourceKind::AzureBlob {
             account_url,
             prefix,

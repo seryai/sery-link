@@ -21,7 +21,7 @@ use tauri::Emitter;
 static AGENT_MANAGER: Lazy<Arc<AgentManager>> =
     Lazy::new(|| Arc::new(AgentManager::new()));
 
-fn am() -> Arc<AgentManager> {
+pub fn am() -> Arc<AgentManager> {
     AGENT_MANAGER.clone()
 }
 

@@ -1,4 +1,5 @@
 mod agent_rpc;
+mod agent_db_creds;
 mod analytics;
 mod driver_manager;
 mod cred_store;
@@ -302,6 +303,7 @@ pub fn run() {
             commands::add_mongodb_source,
             commands::add_redis_source,
             commands::add_sqlite_source,
+            commands::add_agent_db_source,
             commands::test_db_connection,
             commands::introspect_db_schema,
             commands::profile_db_table,

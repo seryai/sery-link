@@ -67,3 +67,13 @@ pub async fn spawn_client_for_key(manager: &AgentManager, key: &str) -> Result<A
     client.try_optional_handshake(manager.agent_app_version()).await;
     Ok(client)
 }
+
+/// Spawn a fresh agent client using the JAR + JRE associated with `driver_key`.
+///
+/// Functionally identical to [`spawn_client_for_key`], but exposed under a
+/// name that reflects the intent: callers maintaining their own per-source
+/// daemon cache pass the driver key here, then store the client under a
+/// composite cache key (typically `driver_key:source_id`) of their own.
+pub async fn spawn_client_for_driver(manager: &AgentManager, driver_key: &str) -> Result<AgentDriverClient, String> {
+    spawn_client_for_key(manager, driver_key).await
+}

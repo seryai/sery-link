@@ -14,6 +14,8 @@ use crate::db_creds::{DbConnectionConfig, load_connection};
 use crate::duckdb_engine::QueryResult;
 use crate::error::{AgentError, Result};
 use crate::sources::SourceKind;
+use db_core::agent_runtime::{self, spawn_client_for_driver};
+use db_core::db::agent_driver::{AgentDriverClient, AgentMethod};
 use duckdb::Connection;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -21,21 +23,554 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
-// ─── Agent-based DB types (Oracle, DB2, SAP HANA, Snowflake via JDBC) ────────
+// ─── Agent-based DB types (Oracle, DB2, SAP HANA, Teradata, Vertica, …) ────
 //
 // These database types require a Java JDBC agent that must be installed
-// via Settings → Driver Store before a connection can be opened.
-// The execute_via_agent stub below provides a clear error message when
-// the driver has not been installed yet.
-#[allow(dead_code)]
-pub fn execute_via_agent(_driver_key: &str, _sql: &str) -> Result<QueryResult> {
-    // TODO: route through db_core::agent_runtime::call_daemon when a driver
-    // is installed. For now, surface a useful error pointing users to the
-    // Driver Store.
-    Err(AgentError::Database(
-        "Install the driver via Settings → Driver Store before connecting to this database type.".to_string(),
-    ))
+// via Settings → Driver Store before a connection can be opened. Connect
+// + execute go through `connect_agent_source` / `execute_agent_query`,
+// which spawn the Java agent (one process per `driver_key`) and cache
+// the connected client per `source_id` so multiple sources of the same
+// kind can coexist without trampling each other's connect state.
+
+/// Per-source agent client cache.
+///
+/// Key = source_id (NOT driver_key). Each entry represents an agent
+/// process that has already received `connect` for that specific source.
+/// Sharing one process per driver_key would force every source to share
+/// the same JDBC connection state — incorrect when two Oracle sources
+/// point at different databases. Keying on source_id keeps them
+/// isolated. The process itself is still spawned via
+/// `spawn_client_for_driver(driver_key)` so the JAR lookup uses the
+/// installed driver's path under `~/.seryai/drivers/<driver_key>/`.
+static AGENT_DB_CLIENTS: Lazy<tokio::sync::Mutex<HashMap<String, AgentDriverClient>>> =
+    Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
+/// Build the JDBC connection_string for drivers whose URL shape depends
+/// on metadata only the desktop knows (e.g. Oracle service vs SID, SAP
+/// HANA databaseName). Returns the explicit `connection_string` arg if
+/// the caller already supplied one, otherwise synthesises it. An empty
+/// string means "agent: build it yourself from host/port/database".
+fn build_agent_connection_string(
+    driver_key: &str,
+    host: &str,
+    port: u16,
+    database: Option<&str>,
+    oracle_connection_type: Option<&str>,
+    connection_string: Option<&str>,
+) -> String {
+    if let Some(s) = connection_string.filter(|s| !s.is_empty()) {
+        return s.to_string();
+    }
+
+    if driver_key.starts_with("oracle") {
+        let svc = database.unwrap_or("");
+        // service_name (default, modern Oracle) vs sid (older 10g).
+        let is_sid = oracle_connection_type
+            .map(|t| t.eq_ignore_ascii_case("sid"))
+            .unwrap_or(false);
+        return if is_sid {
+            format!("jdbc:oracle:thin:@{host}:{port}:{svc}")
+        } else {
+            format!("jdbc:oracle:thin:@//{host}:{port}/{svc}")
+        };
+    }
+
+    if driver_key == "saphana" {
+        let db = database.unwrap_or("");
+        return if db.is_empty() {
+            format!("jdbc:sap://{host}:{port}/")
+        } else {
+            format!("jdbc:sap://{host}:{port}/?databaseName={db}")
+        };
+    }
+
+    // For most drivers the agent itself knows how to assemble the URL
+    // from host/port/database, so leave it blank.
+    String::new()
 }
+
+/// Send `connect` to the agent for `source_id`. Spawns the agent
+/// process if one isn't running yet for this source, then caches the
+/// (post-connect) client under the source_id key. Idempotent — calling
+/// twice on the same source_id is a no-op once the first call succeeds.
+pub async fn connect_agent_source(
+    source_id: &str,
+    driver_key: &str,
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    database: Option<&str>,
+    oracle_connection_type: Option<&str>,
+    connection_string: Option<&str>,
+    url_params: Option<&str>,
+    _config: &Config,
+) -> std::result::Result<(), String> {
+    let mut clients = AGENT_DB_CLIENTS.lock().await;
+    if clients.contains_key(source_id) {
+        return Ok(());
+    }
+
+    let mgr = crate::driver_manager::am();
+    let mut client = spawn_client_for_driver(&mgr, driver_key).await?;
+
+    let conn_str = build_agent_connection_string(
+        driver_key,
+        host,
+        port,
+        database,
+        oracle_connection_type,
+        connection_string,
+    );
+
+    let params = serde_json::json!({
+        "host": host,
+        "port": port,
+        "database": database.unwrap_or(""),
+        "username": username,
+        "password": password,
+        "url_params": url_params.unwrap_or(""),
+        "connection_string": conn_str,
+    });
+
+    client
+        .call_method::<serde_json::Value>(AgentMethod::Connect, params)
+        .await?;
+
+    clients.insert(source_id.to_string(), client);
+    Ok(())
+}
+
+/// Execute `sql` against the agent client for `source_id`. If the
+/// client has been evicted (or never opened) we re-load the source
+/// metadata + keychain password and reconnect transparently before
+/// running the query. This mirrors how the native MySQL / PG pools
+/// lazy-reconnect on cache miss.
+pub async fn execute_agent_query(
+    sql: &str,
+    source_id: &str,
+    config: &Config,
+) -> Result<QueryResult> {
+    // Reconnect transparently if the client was never opened (or was
+    // dropped due to e.g. a driver reinstall).
+    let needs_connect = {
+        let clients = AGENT_DB_CLIENTS.lock().await;
+        !clients.contains_key(source_id)
+    };
+    if needs_connect {
+        let source = config
+            .sources
+            .iter()
+            .find(|s| s.id == source_id)
+            .ok_or_else(|| AgentError::Database(format!(
+                "Agent DB source not found: {source_id}"
+            )))?;
+        let (driver_key, host, port, username, database, oracle_ct, conn_str, url_params) =
+            match &source.kind {
+                SourceKind::AgentDb {
+                    driver_key,
+                    host,
+                    port,
+                    username,
+                    database,
+                    oracle_connection_type,
+                    connection_string,
+                    url_params,
+                    ..
+                } => (
+                    driver_key.clone(),
+                    host.clone(),
+                    *port,
+                    username.clone(),
+                    database.clone(),
+                    oracle_connection_type.clone(),
+                    connection_string.clone(),
+                    url_params.clone(),
+                ),
+                _ => return Err(AgentError::Database(format!(
+                    "Source {source_id} is not an AgentDb source"
+                ))),
+            };
+        let password = crate::agent_db_creds::load_password(source_id)
+            .map_err(AgentError::Database)?;
+        connect_agent_source(
+            source_id,
+            &driver_key,
+            &host,
+            port,
+            &username,
+            &password,
+            database.as_deref(),
+            oracle_ct.as_deref(),
+            conn_str.as_deref(),
+            url_params.as_deref(),
+            config,
+        )
+        .await
+        .map_err(AgentError::Database)?;
+    }
+
+    let start = std::time::Instant::now();
+    let params = serde_json::json!({ "sql": sql, "params": [] });
+
+    let mut clients = AGENT_DB_CLIENTS.lock().await;
+    let client = clients.get_mut(source_id).ok_or_else(|| {
+        AgentError::Database(format!("Agent client missing for {source_id}"))
+    })?;
+
+    let result: serde_json::Value = client
+        .call_method::<serde_json::Value>(AgentMethod::ExecuteQuery, params)
+        .await
+        .map_err(AgentError::Database)?;
+
+    // Agent returns { "columns": [String], "rows": [[Value, …], …] }
+    let columns: Vec<String> = result
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    let rows: Vec<Vec<serde_json::Value>> = result
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|r| r.as_array().map(|row| row.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let row_count = rows.len();
+    let truncated = row_count >= MAX_ROWS;
+
+    Ok(QueryResult {
+        columns,
+        row_count,
+        rows,
+        duration_ms: start.elapsed().as_millis() as u64,
+        truncated,
+    })
+}
+
+/// Introspect an Agent DB source's schema: list tables, then fetch
+/// per-table columns + indexes via the agent. Sequential RPC because
+/// the agent holds one connection per source; parallel calls would
+/// race the JDBC connection state.
+pub async fn introspect_agent_schema(
+    source_id: &str,
+    config: &Config,
+) -> Result<Vec<TableSchema>> {
+    let source = config
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .ok_or_else(|| AgentError::Database(format!(
+            "Agent DB source not found: {source_id}"
+        )))?;
+    let (driver_key, host, port, username, database, oracle_ct, conn_str, url_params) =
+        match &source.kind {
+            SourceKind::AgentDb {
+                driver_key,
+                host,
+                port,
+                username,
+                database,
+                oracle_connection_type,
+                connection_string,
+                url_params,
+                ..
+            } => (
+                driver_key.clone(),
+                host.clone(),
+                *port,
+                username.clone(),
+                database.clone(),
+                oracle_connection_type.clone(),
+                connection_string.clone(),
+                url_params.clone(),
+            ),
+            _ => return Err(AgentError::Database(format!(
+                "Source {source_id} is not an AgentDb source"
+            ))),
+        };
+
+    // Ensure we have a connected client.
+    let password = crate::agent_db_creds::load_password(source_id)
+        .map_err(AgentError::Database)?;
+    connect_agent_source(
+        source_id,
+        &driver_key,
+        &host,
+        port,
+        &username,
+        &password,
+        database.as_deref(),
+        oracle_ct.as_deref(),
+        conn_str.as_deref(),
+        url_params.as_deref(),
+        config,
+    )
+    .await
+    .map_err(AgentError::Database)?;
+
+    // list_tables: { "database": "...", "schema": "..." }
+    // For most JDBC drivers the schema is the username (Oracle) or
+    // empty. We pass database + the username as schema and let the
+    // agent fall back if either is empty.
+    let db_arg = database.clone().unwrap_or_default();
+    let schema_arg = username.clone();
+    let tables_params = serde_json::json!({
+        "database": db_arg,
+        "schema": schema_arg,
+    });
+
+    let tables_resp: serde_json::Value = {
+        let mut clients = AGENT_DB_CLIENTS.lock().await;
+        let client = clients.get_mut(source_id).ok_or_else(|| {
+            AgentError::Database(format!("Agent client missing for {source_id}"))
+        })?;
+        client
+            .call_method::<serde_json::Value>(AgentMethod::ListTables, tables_params)
+            .await
+            .map_err(AgentError::Database)?
+    };
+
+    let table_names: Vec<String> = match &tables_resp {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(s.to_string())
+                } else if let Some(obj) = v.as_object() {
+                    obj.get("name")
+                        .or_else(|| obj.get("table_name"))
+                        .or_else(|| obj.get("tableName"))
+                        .and_then(|n| n.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        serde_json::Value::Object(obj) => obj
+            .get("tables")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        if let Some(s) = v.as_str() {
+                            Some(s.to_string())
+                        } else {
+                            v.as_object()
+                                .and_then(|o| {
+                                    o.get("name")
+                                        .or_else(|| o.get("table_name"))
+                                        .or_else(|| o.get("tableName"))
+                                })
+                                .and_then(|n| n.as_str().map(|s| s.to_string()))
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => vec![],
+    };
+
+    let mut tables: Vec<TableSchema> = Vec::with_capacity(table_names.len());
+    for table_name in table_names {
+        // get_columns
+        let cols_params = serde_json::json!({
+            "database": db_arg,
+            "schema": schema_arg,
+            "table": table_name,
+        });
+        let cols_resp: serde_json::Value = {
+            let mut clients = AGENT_DB_CLIENTS.lock().await;
+            let client = match clients.get_mut(source_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            match client
+                .call_method::<serde_json::Value>(AgentMethod::GetColumns, cols_params)
+                .await
+            {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::Null,
+            }
+        };
+        let columns = parse_agent_columns(&cols_resp);
+
+        // list_indexes (best-effort: many drivers don't implement it)
+        let idx_params = serde_json::json!({
+            "database": db_arg,
+            "schema": schema_arg,
+            "table": table_name,
+        });
+        let idx_resp: serde_json::Value = {
+            let mut clients = AGENT_DB_CLIENTS.lock().await;
+            let client = match clients.get_mut(source_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            match client
+                .call_method::<serde_json::Value>(AgentMethod::ListIndexes, idx_params)
+                .await
+            {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::Null,
+            }
+        };
+        let indexes = parse_agent_indexes(&idx_resp);
+
+        tables.push(TableSchema {
+            table_name,
+            columns,
+            row_count_estimate: None,
+            size_bytes: None,
+            indexes,
+            foreign_keys: vec![],
+        });
+    }
+
+    Ok(tables)
+}
+
+fn parse_agent_columns(v: &serde_json::Value) -> Vec<ColumnInfo> {
+    let arr: &Vec<serde_json::Value> = match v {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Object(o) => match o.get("columns").and_then(|c| c.as_array()) {
+            Some(a) => a,
+            None => return vec![],
+        },
+        _ => return vec![],
+    };
+    arr.iter()
+        .filter_map(|c| {
+            let o = c.as_object()?;
+            let name = o
+                .get("name")
+                .or_else(|| o.get("column_name"))
+                .or_else(|| o.get("columnName"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let data_type = o
+                .get("type")
+                .or_else(|| o.get("data_type"))
+                .or_else(|| o.get("dataType"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            let nullable = o
+                .get("nullable")
+                .and_then(|n| n.as_bool())
+                .unwrap_or(true);
+            let is_primary_key = o
+                .get("is_primary_key")
+                .or_else(|| o.get("primaryKey"))
+                .or_else(|| o.get("primary_key"))
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false);
+            let default_value = o
+                .get("default")
+                .or_else(|| o.get("default_value"))
+                .or_else(|| o.get("defaultValue"))
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string());
+            let comment = o
+                .get("comment")
+                .or_else(|| o.get("remarks"))
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string());
+            Some(ColumnInfo {
+                name,
+                data_type,
+                nullable,
+                is_primary_key,
+                default_value,
+                comment,
+            })
+        })
+        .collect()
+}
+
+fn parse_agent_indexes(v: &serde_json::Value) -> Vec<IndexInfo> {
+    let arr: &Vec<serde_json::Value> = match v {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Object(o) => match o.get("indexes").and_then(|c| c.as_array()) {
+            Some(a) => a,
+            None => return vec![],
+        },
+        _ => return vec![],
+    };
+    arr.iter()
+        .filter_map(|i| {
+            let o = i.as_object()?;
+            let name = o
+                .get("name")
+                .or_else(|| o.get("index_name"))
+                .or_else(|| o.get("indexName"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let columns: Vec<String> = o
+                .get("columns")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let unique = o.get("unique").and_then(|u| u.as_bool()).unwrap_or(false);
+            let primary = o.get("primary").and_then(|p| p.as_bool()).unwrap_or(false);
+            Some(IndexInfo {
+                name,
+                columns,
+                unique,
+                primary,
+            })
+        })
+        .collect()
+}
+
+/// Disconnect + drop the cached agent client for `source_id`. Called
+/// when a source is removed. Best-effort — disconnect errors don't
+/// fail the caller; we always evict the client.
+#[allow(dead_code)]
+pub async fn disconnect_agent_source(source_id: &str) {
+    let mut clients = AGENT_DB_CLIENTS.lock().await;
+    if let Some(mut client) = clients.remove(source_id) {
+        let _ = client
+            .call_method::<serde_json::Value>(AgentMethod::Disconnect, serde_json::json!({}))
+            .await;
+    }
+}
+
+/// Legacy entry point. Kept as a thin shim so older call sites that
+/// referenced the v0.5 stub keep working — they now route through
+/// `execute_agent_query`. New code should call `execute_agent_query`
+/// directly.
+#[allow(dead_code)]
+pub async fn execute_via_agent(
+    sql: &str,
+    source_id: &str,
+    config: &Config,
+) -> Result<QueryResult> {
+    execute_agent_query(sql, source_id, config).await
+}
+
+// Reference unused imports for crates we may need later. agent_runtime
+// is re-exported for downstream callers that want call_daemon helpers
+// without taking a separate dependency on db_core.
+#[allow(dead_code)]
+const _AGENT_RUNTIME_USED: fn() = || {
+    let _ = agent_runtime::stop_daemons;
+};
 
 // ─── native connection pool caches ───────────────────────────────────────────
 
@@ -412,6 +947,14 @@ fn resolve_source<'a>(
         return Ok((&source.kind, None));
     }
 
+    // AgentDb: password lives in the dedicated agent keychain, not the
+    // db_creds vault. Skip the vault lookup so we don't error out on
+    // the missing entry — execute / introspect read the password from
+    // `agent_db_creds` directly.
+    if matches!(source.kind, SourceKind::AgentDb { .. }) {
+        return Ok((&source.kind, None));
+    }
+
     let cfg = load_connection(source_id)?;
     Ok((&source.kind, Some(cfg)))
 }
@@ -442,6 +985,18 @@ pub async fn execute_db_query(
             Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
             Err(_) => Err(AgentError::Database(format!("DB query timed out after {TIMEOUT_SECS}s"))),
         };
+    }
+
+    // Agent (JDBC) path — Oracle, DB2, SAP HANA, Teradata, etc.
+    if matches!(kind, SourceKind::AgentDb { .. }) {
+        return tokio::time::timeout(
+            Duration::from_secs(TIMEOUT_SECS),
+            execute_agent_query(sql, source_id, config),
+        )
+        .await
+        .map_err(|_| {
+            AgentError::Database(format!("Agent DB query timed out after {TIMEOUT_SECS}s"))
+        })?;
     }
 
     let cfg = maybe_cfg.ok_or_else(|| {
@@ -627,6 +1182,16 @@ pub async fn introspect_schema(
             Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
             Err(_) => Err(AgentError::Database("Schema introspection timed out".to_string())),
         };
+    }
+
+    // Agent (JDBC) path — Oracle, DB2, SAP HANA, Teradata, etc.
+    if matches!(kind, SourceKind::AgentDb { .. }) {
+        return tokio::time::timeout(
+            Duration::from_secs(120),
+            introspect_agent_schema(source_id, config),
+        )
+        .await
+        .map_err(|_| AgentError::Database("Agent schema introspection timed out".to_string()))?;
     }
 
     let cfg = maybe_cfg.ok_or_else(|| {

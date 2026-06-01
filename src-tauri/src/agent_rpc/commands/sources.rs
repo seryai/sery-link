@@ -21,6 +21,7 @@ fn kind_str(kind: &SourceKind) -> &'static str {
         SourceKind::Mongodb { .. }     => "mongodb",
         SourceKind::Redis { .. }       => "redis",
         SourceKind::Sqlite { .. }      => "sqlite",
+        SourceKind::AgentDb { .. }     => "agent_db",
     }
 }
 

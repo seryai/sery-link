@@ -427,6 +427,9 @@ impl Config {
             | SourceKind::Mongodb { host, .. }
             | SourceKind::Redis { host, .. } => !host.is_empty(),
             SourceKind::Snowflake { account, .. } => !account.is_empty(),
+            SourceKind::AgentDb { host, driver_key, .. } => {
+                !host.is_empty() && !driver_key.is_empty()
+            }
             _ => true,
         });
 
@@ -560,6 +563,7 @@ impl Config {
                 SourceKind::Mongodb { .. } => None,
                 SourceKind::Redis { .. } => None,
                 SourceKind::Sqlite { .. } => None,
+                SourceKind::AgentDb { .. } => None,
             })
             .collect();
 
@@ -817,7 +821,8 @@ impl Config {
             | SourceKind::Snowflake { .. }
             | SourceKind::Clickhouse { .. }
             | SourceKind::Mongodb { .. }
-            | SourceKind::Redis { .. } => None,
+            | SourceKind::Redis { .. }
+            | SourceKind::AgentDb { .. } => None,
             SourceKind::Sqlite { path } => {
                 Some(path.to_string_lossy().to_string())
             }
@@ -852,7 +857,8 @@ impl Config {
                 | SourceKind::Snowflake { .. }
                 | SourceKind::Clickhouse { .. }
                 | SourceKind::Mongodb { .. }
-                | SourceKind::Redis { .. } => false,
+                | SourceKind::Redis { .. }
+                | SourceKind::AgentDb { .. } => false,
                 SourceKind::Sqlite { path } => {
                     path.to_string_lossy().as_ref() == p.as_str()
                 }
@@ -952,6 +958,7 @@ impl Config {
             SourceKind::Mongodb { .. } => None,
             SourceKind::Redis { .. } => None,
             SourceKind::Sqlite { .. } => None,
+            SourceKind::AgentDb { .. } => None,
         };
         if let Some(p) = mirror_path {
             self.watched_folders.retain(|wf| wf.path != p);
