@@ -20,8 +20,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-
-  ChevronRight,
+  ArrowDown,
+  ArrowUpDown,
   Database,
   FileText,
   Loader2,
@@ -446,24 +446,6 @@ export function FolderDetail() {
               {label}
             </FilterChip>
           ))}
-          <span className="ml-3 text-[11px] uppercase tracking-wide text-slate-400 dark:text-slate-500">
-            Sort
-          </span>
-          {(
-            [
-              ['name', 'Name'],
-              ['modified-desc', 'Newest'],
-              ['size-desc', 'Largest'],
-            ] as Array<[FolderSort, string]>
-          ).map(([value, label]) => (
-            <FilterChip
-              key={value}
-              active={sort === value}
-              onClick={() => setSort(value)}
-            >
-              {label}
-            </FilterChip>
-          ))}
         </div>
 
         {(search || formatFilter !== 'all' || recencyFilter !== 'any') &&
@@ -512,28 +494,32 @@ export function FolderDetail() {
         scanRunning={scanState.kind !== 'idle'}
         search={search}
         folderPath={folderPath}
+        sort={sort}
+        setSort={setSort}
       />
     </div>
   );
 }
 
-// ─── Virtualized list ─────────────────────────────────────────────────────
+// ─── Datagrid ─────────────────────────────────────────────────────────────
 
-// The virtualizer (@tanstack/react-virtual) only mounts the rows
-// currently in view plus an overscan, so folders with thousands of
-// files still scroll smoothly. Each row is a link to FileDetail —
-// the drill-down content (schema, samples, markdown) lives on the
-// dedicated file page now instead of an inline expansion.
+// Columns: Name (flex) · Format · Rows · Cols · Size · Modified
+const GRID_COLS = 'grid-cols-[1fr_4.5rem_5.5rem_3.5rem_5rem_6.5rem]';
+
 function VirtualizedDatasetList({
   filtered,
   scanRunning,
   search,
   folderPath,
+  sort,
+  setSort,
 }: {
   filtered: DatasetMetadata[];
   scanRunning: boolean;
   search: string;
   folderPath: string;
+  sort: FolderSort;
+  setSort: (v: FolderSort) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -541,10 +527,8 @@ function VirtualizedDatasetList({
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 72,
-    overscan: 8,
-    // Keying by relative_path keeps row identity stable when the
-    // dataset list reshuffles during a live scan.
+    estimateSize: () => 36,
+    overscan: 12,
     getItemKey: (index) => filtered[index]?.relative_path ?? index,
   });
 
@@ -556,33 +540,69 @@ function VirtualizedDatasetList({
     );
   };
 
-  return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
-      {!scanRunning && filtered.length === 0 && search === '' && (
+  const SortIcon = ({ col }: { col: FolderSort }) =>
+    sort === col ? (
+      <ArrowDown className="h-3 w-3" />
+    ) : col === 'name' && sort !== 'name' ? (
+      <ArrowUpDown className="h-3 w-3 opacity-30" />
+    ) : (
+      <ArrowUpDown className="h-3 w-3 opacity-30" />
+    );
+
+  // Column headers with sort controls
+  const headerCell = (label: string, col: FolderSort | null, align: 'left' | 'right' = 'left') => {
+    const base = `flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide select-none ${align === 'right' ? 'justify-end' : ''}`;
+    if (!col) return <span className={`${base} text-slate-400 dark:text-slate-500`}>{label}</span>;
+    return (
+      <button
+        onClick={() => setSort(col)}
+        className={`${base} ${sort === col ? 'text-purple-600 dark:text-purple-400' : 'text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300'}`}
+      >
+        {align === 'right' && <SortIcon col={col} />}
+        {label}
+        {align === 'left' && <SortIcon col={col} />}
+      </button>
+    );
+  };
+
+  if (!scanRunning && filtered.length === 0 && search === '') {
+    return (
+      <div className="flex-1 overflow-y-auto px-6 py-4">
         <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            No indexable files found in this folder.
-          </p>
+          <p className="text-sm text-slate-600 dark:text-slate-400">No indexable files found in this folder.</p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Sery indexes parquet, csv, xlsx, xls, docx, pptx, pdf, html, and ipynb.
           </p>
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {filtered.length === 0 && search !== '' && (
+  if (filtered.length === 0 && search !== '') {
+    return (
+      <div className="flex-1 overflow-y-auto px-6 py-4">
         <div className="rounded-lg border-2 border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
           No files match <span className="font-mono">{search}</span>.
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {filtered.length > 0 && (
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: 'relative',
-            width: '100%',
-          }}
-        >
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Sticky column headers */}
+      <div className={`grid ${GRID_COLS} border-b border-slate-200 bg-white px-6 py-2 dark:border-slate-800 dark:bg-slate-900`}>
+        {headerCell('Name', 'name')}
+        {headerCell('Format', null)}
+        {headerCell('Rows', null, 'right')}
+        {headerCell('Cols', null, 'right')}
+        {headerCell('Size', 'size-desc', 'right')}
+        {headerCell('Modified', 'modified-desc', 'right')}
+      </div>
+
+      {/* Virtualized rows */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
           {items.map((virtualRow) => {
             const d = filtered[virtualRow.index];
             if (!d) return null;
@@ -591,84 +611,51 @@ function VirtualizedDatasetList({
                 key={virtualRow.key}
                 data-index={virtualRow.index}
                 ref={virtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualRow.start}px)`,
-                  paddingBottom: '8px',
-                }}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
               >
-                <DatasetRow
-                  dataset={d}
-                  onOpen={() => openFile(d.relative_path)}
-                />
+                <DatasetRow dataset={d} onOpen={() => openFile(d.relative_path)} />
               </div>
             );
           })}
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-// ─── Row ──────────────────────────────────────────────────────────────────
+// ─── Grid row ─────────────────────────────────────────────────────────────
 
-function DatasetRow({
-  dataset,
-  onOpen,
-}: {
-  dataset: DatasetMetadata;
-  onOpen: () => void;
-}) {
+function DatasetRow({ dataset, onOpen }: { dataset: DatasetMetadata; onOpen: () => void }) {
   const isDoc = isDocumentFormat(dataset.file_format);
-  const icon = isDoc ? (
-    <FileText className="h-4 w-4 text-slate-500 dark:text-slate-400" />
-  ) : (
-    <Database className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-  );
-
   return (
     <button
       onClick={onOpen}
-      className="group block w-full rounded-lg border border-slate-200 bg-white text-left transition-all hover:border-purple-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-700"
+      className={`group grid w-full ${GRID_COLS} items-center border-b border-slate-100 px-6 py-2 text-left transition-colors hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50`}
     >
-      <div className="flex items-center gap-3 px-4 py-3">
-        {icon}
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-            {dataset.relative_path}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span className="uppercase">{dataset.file_format}</span>
-            {dataset.row_count_estimate !== null && (
-              <>
-                <span>·</span>
-                <span>{dataset.row_count_estimate.toLocaleString()} rows</span>
-              </>
-            )}
-            {!isDoc && dataset.schema.length > 0 && (
-              <>
-                <span>·</span>
-                <span>
-                  {dataset.schema.length} {dataset.schema.length === 1 ? 'col' : 'cols'}
-                </span>
-              </>
-            )}
-            <span>·</span>
-            <span>{formatBytes(dataset.size_bytes)}</span>
-            <span>·</span>
-            <span title={dataset.last_modified}>
-              {formatRelativeTime(dataset.last_modified)}
-            </span>
-          </div>
-        </div>
-        <ChevronRight
-          className="h-4 w-4 flex-shrink-0 text-slate-300 transition group-hover:text-purple-500 dark:text-slate-600"
-          strokeWidth={1.5}
-        />
+      <div className="flex min-w-0 items-center gap-2">
+        {isDoc
+          ? <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
+          : <Database className="h-3.5 w-3.5 shrink-0 text-purple-500 dark:text-purple-400" />
+        }
+        <span className="truncate text-sm text-slate-800 dark:text-slate-100">
+          {dataset.relative_path}
+        </span>
       </div>
+      <span className="truncate text-right font-mono text-xs uppercase text-slate-500 dark:text-slate-400">
+        {dataset.file_format}
+      </span>
+      <span className="text-right text-xs tabular-nums text-slate-500 dark:text-slate-400">
+        {dataset.row_count_estimate !== null ? dataset.row_count_estimate.toLocaleString() : '—'}
+      </span>
+      <span className="text-right text-xs tabular-nums text-slate-500 dark:text-slate-400">
+        {!isDoc && dataset.schema.length > 0 ? dataset.schema.length : '—'}
+      </span>
+      <span className="text-right text-xs tabular-nums text-slate-500 dark:text-slate-400">
+        {formatBytes(dataset.size_bytes)}
+      </span>
+      <span className="text-right text-xs text-slate-400 dark:text-slate-500" title={dataset.last_modified}>
+        {formatRelativeTime(dataset.last_modified)}
+      </span>
     </button>
   );
 }
