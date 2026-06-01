@@ -32,12 +32,6 @@ type Props = {
    */
   onConnected?: (token: AgentToken) => void;
   /**
-   * Pre-populated machine name. The user is rarely interested in
-   * typing this — we default to the hostname-derived "My MacBook"
-   * style string but let them override.
-   */
-  defaultDisplayName?: string;
-  /**
    * Pre-populated workspace key. Set by the deep-link pairing flow
    * (`seryai://pair?key=...`) so users who clicked an invite link in
    * email/chat don't have to copy-paste. Still requires explicit
@@ -49,23 +43,18 @@ type Props = {
 export function ConnectModal({
   onClose,
   onConnected,
-  defaultDisplayName,
   defaultKey,
 }: Props) {
   const [key, setKey] = useState(defaultKey ?? '');
-  const [displayName, setDisplayName] = useState(
-    defaultDisplayName ?? defaultMachineName(),
-  );
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: 'key' });
-  const { setAgentInfo, setAuthenticated } = useAgentStore();
+  const { setAgentInfo, setAuthenticated, config } = useAgentStore();
   const toast = useToast();
 
   const canSubmit =
     key.trim().startsWith('sery_k_') &&
     key.trim().length >= 16 &&
-    displayName.trim().length > 0 &&
     !submitting;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -74,9 +63,10 @@ export function ConnectModal({
     setSubmitting(true);
     setErrorMsg(null);
     try {
+      const machineName = config?.agent?.name?.trim() || defaultMachineName();
       const token = await invoke<AgentToken>('auth_with_key', {
         key: key.trim(),
-        displayName: displayName.trim(),
+        displayName: machineName,
       });
       setAgentInfo(token);
       setAuthenticated(true);
@@ -159,8 +149,7 @@ export function ConnectModal({
 
         {defaultKey && (
           <div className="mb-3 rounded-md border border-purple-200 bg-purple-50/60 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
-            This key arrived via an invite link. Confirm the machine
-            name below and click <strong>Connect</strong>.
+            This key arrived via an invite link. Click <strong>Connect</strong> to join the workspace.
           </div>
         )}
 
@@ -186,22 +175,6 @@ export function ConnectModal({
           </span>
         </label>
 
-        <label className="mt-4 block">
-          <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-            Name this machine
-          </span>
-          <input
-            type="text"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
-            placeholder="e.g. Home Desktop"
-            maxLength={64}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
-          />
-        </label>
 
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-800/50">
           <p className="text-slate-600 dark:text-slate-300">
