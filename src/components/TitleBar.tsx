@@ -22,12 +22,12 @@ export function TitleBar() {
   const isActive = (path: string) => location.pathname.startsWith(path);
 
   const status = !authenticated
-    ? { dot: 'bg-slate-400', label: 'Local only', action: () => setShowConnectModal(true) }
+    ? { dot: 'bg-slate-400', label: 'Local only', clickable: true }
     : connectionStatus === 'online'
-    ? { dot: 'bg-emerald-500', label: 'Connected', action: () => navigate('/settings') }
+    ? { dot: 'bg-emerald-500', label: 'Connected', clickable: false }
     : connectionStatus === 'error'
-    ? { dot: 'bg-rose-500', label: 'Error', action: () => navigate('/settings') }
-    : { dot: 'bg-amber-500 animate-pulse', label: 'Connecting…', action: () => navigate('/settings') };
+    ? { dot: 'bg-rose-500', label: 'Error', clickable: false }
+    : { dot: 'bg-amber-500 animate-pulse', label: 'Connecting…', clickable: false };
 
   return (
     <>
@@ -37,22 +37,31 @@ export function TitleBar() {
       >
         {/* Left: pl-[72px] clears macOS traffic lights */}
         <div className="flex items-center gap-2 pl-[72px]" data-tauri-drag-region>
-          <button
-            onClick={status.action}
-            title={authenticated ? 'Manage workspace in Settings' : 'Connect to workspace'}
-            className="flex items-center gap-1.5 rounded-md p-1.5 transition-colors hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-          >
-            <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`} />
-            <span className="text-[13px] text-slate-600 dark:text-slate-300">
-              {status.label}
-            </span>
-            {stats && (
-              <span className="text-[13px] text-slate-400 dark:text-slate-500">
-                · {stats.queries_today}{' '}
-                {stats.queries_today === 1 ? 'query' : 'queries'} today
+          {status.clickable ? (
+            <button
+              onClick={() => setShowConnectModal(true)}
+              title="Connect to workspace"
+              className="flex items-center gap-1.5 rounded-md p-1.5 transition-colors hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`} />
+              <span className="text-[13px] text-slate-600 dark:text-slate-300">
+                {status.label}
               </span>
-            )}
-          </button>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 p-1.5">
+              <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`} />
+              <span className="text-[13px] text-slate-600 dark:text-slate-300">
+                {status.label}
+              </span>
+              {stats && (
+                <span className="text-[13px] text-slate-400 dark:text-slate-500">
+                  · {stats.queries_today}{' '}
+                  {stats.queries_today === 1 ? 'query' : 'queries'} today
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Center drag spacer */}
