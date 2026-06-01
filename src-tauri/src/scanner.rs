@@ -62,7 +62,10 @@ pub struct DatasetMetadata {
 }
 
 /// File extensions classified as document (non-tabular) types.
-const DOCUMENT_EXTENSIONS: &[&str] = &["docx", "pptx", "html", "htm", "ipynb", "pdf"];
+const DOCUMENT_EXTENSIONS: &[&str] = &[
+    "docx", "pptx", "html", "htm", "ipynb", "pdf",
+    "odt", "odp", "ppt", "rtf",
+];
 
 /// Plain-text and source-code extensions whose content can be read directly as UTF-8.
 /// Excludes `json` and `csv` — those are handled as tabular formats separately.
@@ -105,9 +108,9 @@ pub enum ScanTier {
 /// won't waste time trying to parse it.
 fn default_tier_for(ext: &str) -> ScanTier {
     match ext {
-        "parquet" | "csv" | "xlsx" => ScanTier::Full,
-        "docx" | "pptx" | "pdf" => ScanTier::Content,
-        "html" | "htm" | "ipynb" => ScanTier::Shallow,
+        "parquet" | "csv" | "xlsx" | "ods" | "json" => ScanTier::Full,
+        "docx" | "pptx" | "pdf" | "odt" | "odp" | "ppt" | "rtf" => ScanTier::Content,
+        "html" | "htm" | "ipynb" | "xml" => ScanTier::Shallow,
         _ => ScanTier::Shallow,
     }
 }
@@ -1214,8 +1217,9 @@ fn is_supported(path: &Path) -> bool {
 pub fn is_supported_ext(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "parquet" | "csv" | "xlsx" | "xls"
-        | "docx" | "pptx" | "html" | "htm" | "ipynb" | "pdf"
+        "parquet" | "csv" | "xlsx" | "xls" | "ods" | "json"
+        | "docx" | "pptx" | "odt" | "odp" | "ppt" | "rtf"
+        | "html" | "htm" | "ipynb" | "pdf" | "xml"
     )
 }
 
@@ -1575,6 +1579,10 @@ fn extract_schema(
         "csv" => (
             "read_csv_auto",
             format!("SELECT COUNT(*) FROM read_csv_auto('{}')", path_str),
+        ),
+        "json" => (
+            "read_json_auto",
+            format!("SELECT COUNT(*) FROM read_json_auto('{}')", path_str),
         ),
         _ => {
             return Err(AgentError::Database(format!("Unsupported format: {}", ext)))
@@ -1982,7 +1990,9 @@ mod filter_tests {
     #[test]
     fn is_supported_covers_all_indexable_formats() {
         for ext in [
-            "parquet", "csv", "xlsx", "xls", "docx", "pptx", "html", "htm", "ipynb", "pdf",
+            "parquet", "csv", "xlsx", "xls", "ods", "json",
+            "docx", "pptx", "odt", "odp", "ppt", "rtf",
+            "html", "htm", "ipynb", "pdf", "xml",
         ] {
             let p = PathBuf::from(format!("/tmp/file.{ext}"));
             assert!(is_supported(&p), "{ext} should be supported");
@@ -2119,6 +2129,7 @@ fn extract_sample_rows(
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
         "csv" => "read_csv_auto",
+        "json" => "read_json_auto",
         other => {
             return Err(AgentError::Database(format!(
                 "extract_sample_rows: unsupported format {}",
