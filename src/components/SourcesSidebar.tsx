@@ -48,23 +48,6 @@ const DB_KINDS = new Set([
   'mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis', 'sqlite',
 ]);
 
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-  const val = bytes / Math.pow(k, i);
-  return `${i === 0 ? val : val.toFixed(1)} ${sizes[i]}`;
-}
-
-function timeAgo(iso: string): string {
-  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (secs < 60) return 'just now';
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  if (secs < 86400 * 30) return `${Math.floor(secs / 86400)}d ago`;
-  return `${Math.floor(secs / (86400 * 30))}mo ago`;
-}
 
 function sourceEndpoint(source: DataSource): string {
   const k = source.kind;
@@ -746,23 +729,8 @@ function SourceRow({
   const legacyKind = legacyKindStringOf(source);
   const s3Preset =
     source.kind.kind === 's3' ? s3PresetOf(source.kind.url) : null;
-  const stats = source.last_scan_stats;
-  const isDb = DB_KINDS.has(source.kind.kind);
   const openable = !!onOpen && !editing;
   const endpoint = sourceEndpoint(source);
-
-  // Stats chips — only rendered after at least one successful scan.
-  const datasetLabel = stats && stats.datasets > 0
-    ? `${stats.datasets.toLocaleString()} ${isDb ? 'tables' : 'files'}`
-    : null;
-  const colLabel = stats && stats.columns > 0
-    ? `${stats.columns.toLocaleString()} col`
-    : null;
-  const sizeLabel = stats && stats.total_bytes > 0
-    ? formatBytes(stats.total_bytes)
-    : null;
-  const timeLabel = source.last_scan_at ? timeAgo(source.last_scan_at) : null;
-  const hasStats = datasetLabel || colLabel || sizeLabel || timeLabel;
 
   return (
     <div
@@ -809,27 +777,11 @@ function SourceRow({
           <span className="text-slate-300 dark:text-slate-600">·</span>
           <span className="truncate">{endpoint}</span>
         </div>
-        {/* Stats row — only after first scan */}
-        {hasStats && (
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-400 dark:text-slate-500">
-            {datasetLabel && <span>{datasetLabel}</span>}
-            {colLabel && <><span className="text-slate-300 dark:text-slate-600">·</span><span>{colLabel}</span></>}
-            {sizeLabel && <><span className="text-slate-300 dark:text-slate-600">·</span><span>{sizeLabel}</span></>}
-            {timeLabel && <><span className="text-slate-300 dark:text-slate-600">·</span><span>{timeLabel}</span></>}
-            {source.mcp_enabled && (
-              <span className="ml-0.5 rounded-full bg-purple-100 px-1.5 py-px text-[10px] font-semibold leading-none text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-                MCP
-              </span>
-            )}
-          </div>
-        )}
-        {/* MCP badge alone when no stats yet */}
-        {!hasStats && source.mcp_enabled && (
-          <div className="mt-0.5">
-            <span className="rounded-full bg-purple-100 px-1.5 py-px text-[10px] font-semibold leading-none text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-              MCP
-            </span>
-          </div>
+        {/* MCP badge — shown inline when enabled */}
+        {source.mcp_enabled && (
+          <span className="mt-0.5 inline-block rounded-full bg-purple-100 px-1.5 py-px text-[10px] font-semibold leading-none text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+            MCP
+          </span>
         )}
       </div>
       <button
