@@ -16,13 +16,8 @@ const CLOUD_KINDS = new Set([
   'https',
 ]);
 const DB_KINDS = new Set([
-  'mysql',
-  'postgresql',
-  'snowflake',
-  'clickhouse',
-  'mongodb',
-  'redis',
-  'sqlite',
+  'mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis', 'sqlite',
+  'agent_db',
 ]);
 
 // ── helpers ────────────────────────────────────────────────────────────────

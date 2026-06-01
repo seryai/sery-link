@@ -45,6 +45,7 @@ type SourceStatus = 'scanning' | 'online' | 'pending';
 
 const DB_KINDS = new Set([
   'mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis', 'sqlite',
+  'agent_db',
 ]);
 
 
@@ -67,6 +68,7 @@ function sourceEndpoint(source: DataSource): string {
     case 'redis':       return `${k.host}:${k.port}/db${k.db}`;
     case 'snowflake':   return `${k.account}/${k.database}.${k.schema}`;
     case 'sqlite':      return k.path;
+    case 'agent_db':    return `${k.username}@${k.host}:${k.port}${k.database ? '/' + k.database : ''}`;
   }
 }
 

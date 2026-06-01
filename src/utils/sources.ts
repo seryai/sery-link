@@ -164,6 +164,21 @@ export function sourceKindLabel(source: DataSource): string {
       return 'Redis';
     case 'sqlite':
       return 'SQLite';
+    case 'agent_db': {
+      const labels: Record<string, string> = {
+        oracle: 'Oracle', 'oracle-legacy': 'Oracle Legacy', 'oracle-10g': 'Oracle 10g',
+        db2: 'IBM DB2', informix: 'IBM Informix', saphana: 'SAP HANA',
+        teradata: 'Teradata', vertica: 'Vertica', databricks: 'Databricks SQL',
+        trino: 'Trino (Presto)', hive: 'Apache Hive', bigquery: 'Google BigQuery',
+        cassandra: 'Apache Cassandra', neo4j: 'Neo4j', firebird: 'Firebird',
+        exasol: 'Exasol', h2: 'H2', kylin: 'Apache Kylin', access: 'Microsoft Access',
+        dameng: 'Dameng DM8', kingbase: 'KingbaseES', highgo: 'HighGo',
+        vastbase: 'Vastbase', goldendb: 'GoldenDB', 'oceanbase-oracle': 'OceanBase Oracle',
+        gbase: 'GBase', sundb: 'SunDB', yashandb: 'YashanDB', tdengine: 'TDengine',
+        xugu: 'XuguDB', 'mongodb-jdbc': 'MongoDB (Legacy)',
+      };
+      return labels[source.kind.driver_key] ?? source.kind.driver_key;
+    }
   }
 }
 
@@ -211,7 +226,8 @@ export function legacyKindStringOf(
   | 'mongodb'
   | 'sqlite'
   | 'snowflake'
-  | 'clickhouse' {
+  | 'clickhouse'
+  | string {
   switch (source.kind.kind) {
     case 'local':
       return 'local';
@@ -245,6 +261,8 @@ export function legacyKindStringOf(
       return 'snowflake';
     case 'clickhouse':
       return 'clickhouse';
+    case 'agent_db':
+      return source.kind.driver_key;
     default:
       return 'local';
   }
@@ -293,6 +311,25 @@ export function scanKeyOf(source: DataSource): string | null {
     case 'mongodb':
     case 'redis':
     case 'sqlite':
+    case 'agent_db':
       return null;
   }
+}
+
+export interface AgentDbArgs {
+  driverKey: string;
+  driverProfile?: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database?: string;
+  oracleConnectionType?: string;
+  connectionString?: string;
+  urlParams?: string;
+  [key: string]: unknown;
+}
+
+export function addAgentDbSource(args: AgentDbArgs): Promise<string> {
+  return invoke<string>('add_agent_db_source', args);
 }

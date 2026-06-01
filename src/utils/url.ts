@@ -42,7 +42,15 @@ export type SourceKind =
   | 'mongodb'
   | 'sqlite'
   | 'snowflake'
-  | 'clickhouse';
+  | 'clickhouse'
+  // JDBC agent-based databases — driver_key values from agent_catalog.rs
+  | 'oracle' | 'oracle-legacy' | 'oracle-10g'
+  | 'db2' | 'informix' | 'saphana' | 'teradata' | 'vertica'
+  | 'databricks' | 'trino' | 'hive' | 'bigquery'
+  | 'cassandra' | 'neo4j' | 'firebird' | 'exasol' | 'h2'
+  | 'kylin' | 'access' | 'dameng' | 'kingbase' | 'highgo'
+  | 'vastbase' | 'goldendb' | 'oceanbase-oracle' | 'gbase'
+  | 'sundb' | 'yashandb' | 'tdengine' | 'xugu' | 'mongodb-jdbc';
 
 export function classifySource(path: string): SourceKind {
   const lower = path.trim().toLowerCase();
@@ -95,6 +103,37 @@ export function sourceKindLabel(kind: SourceKind): string {
       return 'Snowflake';
     case 'clickhouse':
       return 'ClickHouse';
+    case 'oracle': return 'Oracle';
+    case 'oracle-legacy': return 'Oracle Legacy';
+    case 'oracle-10g': return 'Oracle 10g';
+    case 'db2': return 'IBM DB2';
+    case 'informix': return 'IBM Informix';
+    case 'saphana': return 'SAP HANA';
+    case 'teradata': return 'Teradata';
+    case 'vertica': return 'Vertica';
+    case 'databricks': return 'Databricks SQL';
+    case 'trino': return 'Trino (Presto)';
+    case 'hive': return 'Apache Hive';
+    case 'bigquery': return 'Google BigQuery';
+    case 'cassandra': return 'Apache Cassandra';
+    case 'neo4j': return 'Neo4j';
+    case 'firebird': return 'Firebird';
+    case 'exasol': return 'Exasol';
+    case 'h2': return 'H2';
+    case 'kylin': return 'Apache Kylin';
+    case 'access': return 'Microsoft Access';
+    case 'dameng': return 'Dameng DM8';
+    case 'kingbase': return 'KingbaseES';
+    case 'highgo': return 'HighGo';
+    case 'vastbase': return 'Vastbase';
+    case 'goldendb': return 'GoldenDB';
+    case 'oceanbase-oracle': return 'OceanBase Oracle';
+    case 'gbase': return 'GBase';
+    case 'sundb': return 'SunDB';
+    case 'yashandb': return 'YashanDB';
+    case 'tdengine': return 'TDengine';
+    case 'xugu': return 'XuguDB';
+    case 'mongodb-jdbc': return 'MongoDB (Legacy)';
   }
 }
 

@@ -77,7 +77,8 @@ type ImplementedKind =
   | 'clickhouse'
   | 'mongodb'
   | 'redis'
-  | 'sqlite';
+  | 'sqlite'
+  | 'agent_db';
 type S3CompatibleKind = 'b2' | 'wasabi' | 'r2' | 'gcs';
 // All "coming soon" tiles have shipped — leaving this as a never
 // type would prevent the COMING_SOON array from being typed; use
@@ -108,6 +109,7 @@ const IMPLEMENTED: ProtocolTile[] = [
   { kind: 'mongodb', label: 'MongoDB', description: 'Host · port · credentials' },
   { kind: 'redis', label: 'Redis', description: 'Host · port · optional password' },
   { kind: 'sqlite', label: 'SQLite', description: 'Local .db or .sqlite file' },
+  { kind: 'agent_db', label: 'Enterprise DB', description: 'Oracle, DB2, SAP HANA, Teradata…' },
 ];
 
 // F45: S3-compatible providers route to the URL stage with the
@@ -141,7 +143,7 @@ const CATEGORIES: { label: string; kinds: AnyKind[] }[] = [
   },
   {
     label: 'Databases',
-    kinds: ['mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis'],
+    kinds: ['mysql', 'postgresql', 'snowflake', 'clickhouse', 'mongodb', 'redis', 'agent_db'],
   },
 ];
 
@@ -199,7 +201,8 @@ type Stage =
   | { kind: 'clickhouse' }
   | { kind: 'mongodb' }
   | { kind: 'redis' }
-  | { kind: 'sqlite' };
+  | { kind: 'sqlite' }
+  | { kind: 'agent_db' };
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
@@ -321,6 +324,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickMongodb={onPickMongodb}
               onPickRedis={onPickRedis}
               onPickSqlite={onPickSqlite}
+              onPickAgentDb={() => setStage({ kind: 'agent_db' })}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -415,6 +419,12 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onCancel={() => setStage({ kind: 'picker' })}
             />
           )}
+          {stage.kind === 'agent_db' && (
+            <AgentDbStage
+              onAdded={() => { onAdded(); closeAll(); }}
+              onCancel={() => setStage({ kind: 'picker' })}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -463,7 +473,9 @@ function ModalHeader({
                             ? 'Add a MongoDB source'
                             : stage.kind === 'redis'
                               ? 'Add a Redis source'
-                              : 'Connect Google Drive';
+                              : stage.kind === 'agent_db'
+                                ? 'Add an Enterprise DB source'
+                                : 'Connect Google Drive';
   const subtitle =
     stage.kind === 'picker'
       ? "Bookmark any place where your data lives. We never copy or upload anything you haven't asked us to."
@@ -491,7 +503,9 @@ function ModalHeader({
                           ? 'Documents are fetched per-collection and queried via DuckDB in-memory tables. Password stored in your OS keychain.'
                           : stage.kind === 'redis'
                             ? 'Keys are scanned and exposed as a SQL table. Optional password stored in your OS keychain.'
-                            : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
+                            : stage.kind === 'agent_db'
+                              ? 'Connects via a local JDBC agent process. Password stored in your OS keychain. Queries run locally — raw data never leaves your machine.'
+                              : 'Sign in once via Google OAuth. Drive files are cached locally; nothing is uploaded.';
   return (
     <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4 dark:border-white/[0.08]">
       <div className="flex items-start gap-3">
@@ -545,6 +559,7 @@ function PickerStage({
   onPickMongodb,
   onPickRedis,
   onPickSqlite,
+  onPickAgentDb,
   onPickS3Compatible,
 }: {
   busy: boolean;
@@ -565,6 +580,7 @@ function PickerStage({
   onPickMongodb: () => void;
   onPickRedis: () => void;
   onPickSqlite: () => void;
+  onPickAgentDb: () => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   const cat = CATEGORIES[activeTab];
@@ -588,6 +604,7 @@ function PickerStage({
       case 'mongodb': onPickMongodb(); break;
       case 'redis': onPickRedis(); break;
       case 'sqlite': onPickSqlite(); break;
+      case 'agent_db': onPickAgentDb(); break;
       case 'b2':
       case 'wasabi':
       case 'r2':
@@ -2304,6 +2321,8 @@ function legacyIconKindForTile(
       return 'azure';
     case 'onedrive':
       return 'onedrive';
+    case 'agent_db':
+      return 'oracle';
     default:
       return null;
   }
@@ -2903,6 +2922,197 @@ function RedisStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () =
         <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {busy ? 'Testing connection…' : 'Add Redis source'}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── Stage B — Enterprise DB (JDBC agent) form ─────────────────────
+
+const AGENT_DRIVERS = [
+  { key: 'oracle',           label: 'Oracle',              defaultPort: 1521,  hasDatabase: true,  hasOracleConnType: true },
+  { key: 'oracle-legacy',    label: 'Oracle Legacy',       defaultPort: 1521,  hasDatabase: true,  hasOracleConnType: true },
+  { key: 'oracle-10g',       label: 'Oracle 10g',          defaultPort: 1521,  hasDatabase: true,  hasOracleConnType: true },
+  { key: 'db2',              label: 'IBM DB2',             defaultPort: 50000, hasDatabase: true,  hasOracleConnType: false },
+  { key: 'informix',         label: 'IBM Informix',        defaultPort: 9088,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'saphana',          label: 'SAP HANA',            defaultPort: 39015, hasDatabase: true,  hasOracleConnType: false },
+  { key: 'teradata',         label: 'Teradata',            defaultPort: 1025,  hasDatabase: false, hasOracleConnType: false },
+  { key: 'vertica',          label: 'Vertica',             defaultPort: 5433,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'databricks',       label: 'Databricks SQL',      defaultPort: 443,   hasDatabase: true,  hasOracleConnType: false },
+  { key: 'trino',            label: 'Trino (Presto)',      defaultPort: 8080,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'hive',             label: 'Apache Hive',         defaultPort: 10000, hasDatabase: true,  hasOracleConnType: false },
+  { key: 'bigquery',         label: 'Google BigQuery',     defaultPort: 443,   hasDatabase: true,  hasOracleConnType: false },
+  { key: 'cassandra',        label: 'Apache Cassandra',    defaultPort: 9042,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'neo4j',            label: 'Neo4j',               defaultPort: 7687,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'firebird',         label: 'Firebird',            defaultPort: 3050,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'exasol',           label: 'Exasol',              defaultPort: 8563,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'h2',               label: 'H2',                  defaultPort: 9092,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'kylin',            label: 'Apache Kylin',        defaultPort: 7070,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'access',           label: 'Microsoft Access',    defaultPort: 0,     hasDatabase: true,  hasOracleConnType: false },
+  { key: 'dameng',           label: 'Dameng DM8',          defaultPort: 5236,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'kingbase',         label: 'KingbaseES',          defaultPort: 54321, hasDatabase: true,  hasOracleConnType: false },
+  { key: 'highgo',           label: 'HighGo',              defaultPort: 5866,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'vastbase',         label: 'Vastbase',            defaultPort: 5432,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'goldendb',         label: 'GoldenDB',            defaultPort: 5258,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'oceanbase-oracle', label: 'OceanBase Oracle',    defaultPort: 2881,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'gbase',            label: 'GBase',               defaultPort: 5258,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'sundb',            label: 'SunDB',               defaultPort: 12000, hasDatabase: true,  hasOracleConnType: false },
+  { key: 'yashandb',         label: 'YashanDB',            defaultPort: 1688,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'tdengine',         label: 'TDengine',            defaultPort: 6041,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'xugu',             label: 'XuguDB',              defaultPort: 5138,  hasDatabase: true,  hasOracleConnType: false },
+  { key: 'mongodb-jdbc',     label: 'MongoDB (Legacy)',    defaultPort: 27017, hasDatabase: true,  hasOracleConnType: false },
+] as const;
+
+function AgentDbStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+  const toast = useToast();
+  const [driverKey, setDriverKey] = useState('oracle');
+  const [displayName, _setDisplayName] = useState('');
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('1521');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [database, setDatabase] = useState('');
+  const [oracleConnType, setOracleConnType] = useState<'sid' | 'service_name' | 'tns'>('service_name');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const driver = AGENT_DRIVERS.find(d => d.key === driverKey) ?? AGENT_DRIVERS[0];
+
+  const handleDriverChange = (key: string) => {
+    const d = AGENT_DRIVERS.find(x => x.key === key);
+    if (d) {
+      setDriverKey(key);
+      setPort(String(d.defaultPort));
+    }
+  };
+
+  const canSubmit = host.trim().length > 0 && username.trim().length > 0 && !busy;
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    const portNumber = parseInt(port, 10);
+    if (isNaN(portNumber) || portNumber < 1 || portNumber > 65535) {
+      setError('Port must be between 1 and 65535.');
+      setBusy(false);
+      return;
+    }
+    try {
+      await invoke<string>('add_agent_db_source', {
+        driverKey,
+        driverProfile: undefined,
+        displayName: displayName.trim() || undefined,
+        host: host.trim(),
+        port: portNumber,
+        username: username.trim(),
+        password,
+        database: database.trim() || undefined,
+        oracleConnectionType: driver.hasOracleConnType ? oracleConnType : undefined,
+        connectionString: undefined,
+        urlParams: undefined,
+      });
+      toast.success(`${driver.label} source added`);
+      onAdded();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-3">
+        <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
+          Database type
+        </label>
+        <select
+          value={driverKey}
+          onChange={(e) => handleDriverChange(e.target.value)}
+          className="w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+        >
+          {AGENT_DRIVERS.map(d => (
+            <option key={d.key} value={d.key}>{d.label}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <CredField label="Host" value={host} onChange={setHost} placeholder="db.example.com" />
+        </div>
+        <CredField label="Port" value={port} onChange={setPort} placeholder={String(driver.defaultPort)} />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {driver.hasDatabase && (
+          <CredField
+            label="Database / SID / Service"
+            value={database}
+            onChange={setDatabase}
+            placeholder={driver.key.startsWith('oracle') ? 'ORCL' : 'mydb'}
+          />
+        )}
+        <CredField label="Username" value={username} onChange={setUsername} placeholder="admin" />
+      </div>
+
+      {driver.hasOracleConnType && (
+        <div className="mt-3">
+          <label className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
+            Connection type
+          </label>
+          <div className="flex gap-3">
+            {(['service_name', 'sid', 'tns'] as const).map(t => (
+              <label key={t} className="flex cursor-pointer items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300">
+                <input
+                  type="radio"
+                  name="oracle_conn_type"
+                  value={t}
+                  checked={oracleConnType === t}
+                  onChange={() => setOracleConnType(t)}
+                  className="accent-purple-600"
+                />
+                {t === 'service_name' ? 'Service name' : t === 'sid' ? 'SID' : 'TNS'}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3">
+        <CredField
+          label="Password"
+          value={password}
+          onChange={setPassword}
+          placeholder="••••••••"
+          type="password"
+        />
+      </div>
+
+      {error && (
+        <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{error}</p>
+      )}
+
+      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400">
+        Requires the {driver.label} JDBC driver to be installed via the Driver Store (Settings → Storage → Drivers).
+      </div>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          disabled={busy}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={!canSubmit}
+          className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {busy ? 'Testing connection…' : `Add ${driver.label} source`}
         </button>
       </div>
     </>

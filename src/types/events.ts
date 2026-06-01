@@ -367,6 +367,23 @@ export type SourceKind =
       // F53: Local SQLite database file.
       kind: 'sqlite';
       path: string;
+    }
+  | {
+      // JDBC agent-based databases (Oracle, DB2, SAP HANA, Teradata,
+      // Vertica, Databricks, Trino, Hive, BigQuery, Cassandra, Neo4j,
+      // Firebird, Exasol, H2, Informix, and all domestic Chinese DBs).
+      // The JDBC agent process runs locally; password in keychain via
+      // agent_db_creds module. Raw data never leaves the machine.
+      kind: 'agent_db';
+      driver_key: string;
+      driver_profile?: string | null;
+      host: string;
+      port: number;
+      username: string;
+      database?: string | null;
+      oracle_connection_type?: string | null;
+      connection_string?: string | null;
+      url_params?: string | null;
     };
 
 /** One bookmarked source in the Sources sidebar. */
