@@ -2,8 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Database, FolderOpen, HardDrive, Cloud } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { SourceIcon } from './SourceIcon';
-import { legacyKindStringOf, scanKeyOf } from '../utils/sources';
-import type { DataSource } from '../types/events';
+import { legacyKindStringOf } from '../utils/sources';
 
 const CLOUD_KINDS = new Set([
   's3',
@@ -30,13 +29,6 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function timeAgo(iso: string): string {
-  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (secs < 60) return 'just now';
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
-}
 
 function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -47,32 +39,10 @@ function fileBasename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
 }
 
-type SourceHealth = 'scanning' | 'ok' | 'stale' | 'error' | 'never';
-
-function sourceHealth(
-  source: DataSource,
-  scanning: boolean,
-): SourceHealth {
-  if (scanning) return 'scanning';
-  if ((source.last_scan_stats?.errors ?? 0) > 0) return 'error';
-  if (!source.last_scan_at) return 'never';
-  const age = Date.now() - new Date(source.last_scan_at).getTime();
-  if (age > 24 * 60 * 60 * 1000) return 'stale';
-  return 'ok';
-}
-
-const HEALTH_DOT: Record<SourceHealth, string> = {
-  scanning: 'bg-blue-400 animate-pulse',
-  ok:       'bg-emerald-400',
-  stale:    'bg-amber-400',
-  error:    'bg-rose-500',
-  never:    'bg-slate-300 dark:bg-slate-600',
-};
-
 // ── component ──────────────────────────────────────────────────────────────
 
 export function Dashboard() {
-  const { config, stats, history, scansInFlight } = useAgentStore();
+  const { config, stats, history } = useAgentStore();
   const navigate = useNavigate();
   const sources = config?.sources ?? [];
 
@@ -102,15 +72,6 @@ export function Dashboard() {
             successfulHistory.length,
         )
       : null;
-
-  function openSource(source: DataSource) {
-    if (DB_KINDS.has(source.kind.kind)) {
-      navigate(`/db/${encodeURIComponent(source.id)}`);
-    } else {
-      const key = scanKeyOf(source);
-      if (key) navigate(`/folders/${encodeURIComponent(key)}`);
-    }
-  }
 
   return (
     <div className="p-6 space-y-8">
@@ -190,61 +151,50 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* ── Source health ── */}
-      {sources.length > 0 && (
+      {/* ── Disk usage ── */}
+      {totalBytes > 0 && (
         <div>
           <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
-            Sources
+            Disk usage
           </h2>
-          <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden divide-y divide-slate-100 dark:divide-slate-700/60">
-            {sources.map((source) => {
-              const scanning =
-                source.id in scansInFlight ||
-                (scanKeyOf(source) ?? '') in scansInFlight;
-              const health  = sourceHealth(source, scanning);
-              const datasets = source.last_scan_stats?.datasets ?? 0;
-              const errors   = source.last_scan_stats?.errors   ?? 0;
-
-              return (
-                <button
-                  key={source.id}
-                  onClick={() => openSource(source)}
-                  className="w-full flex items-center gap-3 px-4 py-3 bg-white dark:bg-slate-800/40 hover:bg-slate-50 dark:hover:bg-slate-700/40 text-left transition-colors"
-                >
-                  <SourceIcon kind={legacyKindStringOf(source)} size="sm" />
-
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-medium text-slate-800 dark:text-slate-100 truncate">
-                      {source.name}
-                    </span>
-                    <span className="block text-xs text-slate-400 dark:text-slate-500 truncate">
-                      {datasets > 0
-                        ? `${datasets.toLocaleString()} ${DB_KINDS.has(source.kind.kind) ? 'tables' : 'datasets'}`
-                        : 'No datasets yet'}
-                      {errors > 0 && (
-                        <span className="ml-2 text-rose-500">
-                          · {errors} error{errors !== 1 ? 's' : ''}
+          <div className="space-y-2">
+            {[...sources]
+              .filter((s) => (s.last_scan_stats?.total_bytes ?? 0) > 0)
+              .sort((a, b) => (b.last_scan_stats?.total_bytes ?? 0) - (a.last_scan_stats?.total_bytes ?? 0))
+              .map((source) => {
+                const bytes = source.last_scan_stats?.total_bytes ?? 0;
+                const pct = totalBytes > 0 ? (bytes / totalBytes) * 100 : 0;
+                return (
+                  <div key={source.id} className="flex items-center gap-3">
+                    <SourceIcon kind={legacyKindStringOf(source)} size="sm" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">
+                          {source.name}
                         </span>
-                      )}
+                        <span className="text-xs text-slate-400 dark:text-slate-500 ml-2 flex-shrink-0">
+                          {fmtBytes(bytes)}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800">
+                        <div
+                          className="h-1.5 rounded-full bg-purple-500 dark:bg-purple-400"
+                          style={{ width: `${Math.max(pct, 0.5)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500 w-8 text-right flex-shrink-0">
+                      {pct < 1 ? '<1' : Math.round(pct)}%
                     </span>
-                  </span>
-
-                  <span className="flex items-center gap-1.5 flex-shrink-0">
-                    <span
-                      className={`h-2 w-2 rounded-full ${HEALTH_DOT[health]}`}
-                    />
-                    <span className="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                      {health === 'scanning'
-                        ? 'Scanning…'
-                        : health === 'never'
-                          ? 'Never scanned'
-                          : timeAgo(source.last_scan_at!)}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
+                  </div>
+                );
+              })}
           </div>
+          {totalBytes > 0 && (
+            <p className="mt-2 text-right text-xs text-slate-400 dark:text-slate-500">
+              {fmtBytes(totalBytes)} total
+            </p>
+          )}
         </div>
       )}
 
