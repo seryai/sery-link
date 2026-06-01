@@ -5,6 +5,46 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.2] — 2026-06-01
+
+### Added
+
+- **Enterprise DB sources (JDBC)** — Oracle, DB2, SAP HANA, Teradata, Vertica, Databricks,
+  Trino, Hive, BigQuery, Cassandra, Neo4j, Firebird, Exasol, H2, and 15+ domestic Chinese
+  databases (DM, KingBase, HighGo, OceanBase, GBase, YashanDB, TDengine, etc.) can now be
+  added as sources via the Driver Store. Installed drivers appear as branded tiles in the
+  Add Source → Databases tab.
+- **Overview: Needs Attention section** — sources with scan errors, never-scanned sources,
+  or sources not scanned in over 24 hours are surfaced in an amber-bordered list on the
+  Overview page with one-click navigation to the source detail.
+- **Overview: 7-day query activity chart** — bar chart showing query counts per day for
+  the past week, with today highlighted, success rate, and average duration in the header.
+
+### Changed
+
+- **Add Source Databases tab** — installed JDBC driver tiles replace the generic
+  "Enterprise DB" placeholder; Snowflake and MongoDB are excluded from the driver list
+  (they have native implementations).
+- **Source detail header icon** — source icon in folder and database detail page headers
+  shrunk to `sm` size; the previous `lg` size was visually oversized.
+- **Connect modal** — removed the redundant "Name this machine" input; the machine name
+  from Settings → General is used automatically.
+- **Rescan / Refresh** — after a database source rescan completes, stats are now synced
+  to the cloud automatically.
+- **Driver Store** — driver list rows now show the database brand icon instead of a
+  two-letter text placeholder.
+- **Overview page** — removed the redundant sources list (already visible in the sidebar);
+  replaced with the Needs Attention and activity chart sections.
+
+### Fixed
+
+- **Local folder sources showed "Never scanned" on Overview** — `update_folder_scan_stats`
+  only wrote to the legacy `watched_folders` array; the Dashboard reads `config.sources`,
+  so local sources always appeared unseen. Now `update_source_scan_stats` is also called
+  for the matching `DataSource` entry after each successful folder scan.
+
+---
+
 ## [0.12.1] — 2026-05-31
 
 ### Added
