@@ -7,7 +7,7 @@
 //   4. Background: wire useAgentEvents, useTheme, and the ReAuthModal.
 //   5. Providers: ToastProvider wraps everything so all components can show toasts.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -204,10 +204,10 @@ function AppInner() {
       <StatusBar headless />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: persistent sources list */}
-        <aside className="flex w-64 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-slate-50 dark:bg-slate-900/60 overflow-hidden">
+        {/* Left: resizable sources sidebar */}
+        <ResizableSidebar>
           <SourcesSidebar />
-        </aside>
+        </ResizableSidebar>
 
         {/* Right: main content */}
         <main className="flex-1 overflow-auto bg-white/85 dark:bg-[#1c1c1e]/90">
@@ -246,6 +246,53 @@ function AppInner() {
         }}
       />
     </div>
+  );
+}
+
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 256;
+
+function ResizableSidebar({ children }: { children: React.ReactNode }) {
+  const [width, setWidth] = useState(SIDEBAR_DEFAULT);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    startW.current = width;
+    e.preventDefault();
+  }, [width]);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = e.clientX - startX.current;
+      setWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW.current + delta)));
+    };
+    const onUp = () => { dragging.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
+  return (
+    <aside
+      style={{ width }}
+      className="relative flex flex-shrink-0 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-slate-50 dark:bg-slate-900/60 overflow-hidden"
+    >
+      {children}
+      {/* Drag handle */}
+      <div
+        onMouseDown={onMouseDown}
+        className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-purple-400/40 active:bg-purple-500/50 transition-colors"
+      />
+    </aside>
   );
 }
 
