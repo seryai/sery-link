@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { confirm, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getVersion } from '@tauri-apps/api/app';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import {
@@ -92,7 +92,11 @@ export function Settings() {
   };
 
   const logout = async () => {
-    if (!window.confirm('Sign out of Sery on this device?')) return;
+    const ok = await confirm(
+      'Sign out of Sery on this device? Your data stays put — you can sign back in any time.',
+      { title: 'Sign out', kind: 'warning' },
+    );
+    if (!ok) return;
     try {
       await invoke('logout');
       setAuthenticated(false);
