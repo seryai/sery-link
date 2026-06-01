@@ -162,7 +162,7 @@ export function DatabaseDetail() {
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-start justify-between gap-3">
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-            <SourceIcon kind={iconKind} size="lg" />
+            <SourceIcon kind={iconKind} size="sm" />
             <span className="truncate">{source.name}</span>
           </h1>
           <button

@@ -330,7 +330,7 @@ export function FolderDetail() {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-              <SourceIcon kind={classifySource(folderPath)} size="lg" />
+              <SourceIcon kind={classifySource(folderPath)} size="sm" />
               <span className="truncate">
                 {classifySource(folderPath) === 'gdrive'
                   ? 'My Drive'
