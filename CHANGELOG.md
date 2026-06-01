@@ -5,6 +5,34 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] — 2026-05-31
+
+### Added
+
+- **DB table sample rows** — during metadata sync, Sery Link now fetches up to 5
+  sample rows per database table (`SELECT * … LIMIT 5`) and includes them in the
+  cloud dataset payload so the dashboard can display a preview without a live query.
+- **DB sources in scan-all** — database sources are now included when "Scan all" is
+  triggered; previously they were silently skipped with a "skipped" status.
+
+### Changed
+
+- **`ColumnSchema` extended** — `is_primary_key: bool` and `default_value: Option<String>`
+  added to the struct and serialised to the cloud payload so dashboards can render
+  accurate PK and default indicators alongside column definitions.
+
+### Fixed
+
+- **Storage icon backgrounds removed** — all 13 storage SVGs (S3, GDrive, Dropbox,
+  Azure, OneDrive, B2, Wasabi, R2, GCS, local, SFTP, WebDAV, HTTPS) were rewritten
+  to use brand-colored paths on a transparent background, matching the style of the
+  database icons.
+- **DB icons appeared smaller than storage icons** — database icon SVGs carry ~15–20 %
+  built-in viewBox padding; a `transform: scale(1.25)` is now applied via inline
+  style so their visual weight matches the storage icons at every size.
+
+---
+
 ## [0.10.2] — 2026-05-27
 
 ### Added
