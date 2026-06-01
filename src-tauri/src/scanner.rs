@@ -127,12 +127,16 @@ fn tier_for(ext: &str, overrides: &std::collections::HashMap<String, String>) ->
     default_tier_for(ext)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ColumnSchema {
     pub name: String,
     #[serde(rename = "type")]
     pub col_type: String,
     pub nullable: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub is_primary_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_value: Option<String>,
 }
 
 /// Per-file callback for pass-2 (content extraction) progress. Matches the
@@ -1599,6 +1603,7 @@ fn extract_schema(
                 name,
                 col_type,
                 nullable: true,
+                ..Default::default()
             });
         }
     }
@@ -1686,6 +1691,7 @@ fn tabkit_extract(
             name: c.name.clone(),
             col_type: tabkit_type_to_duckdb_string(c.data_type),
             nullable: c.nullable,
+            ..Default::default()
         })
         .collect();
 

@@ -352,6 +352,7 @@ mod tests {
                 name: "id".to_string(),
                 col_type: "BIGINT".to_string(),
                 nullable: false,
+                ..Default::default()
             }],
             last_modified: "2026-01-01T00:00:00Z".to_string(),
             document_markdown: None,

@@ -417,6 +417,7 @@ fn extract_remote_schema(
                 name,
                 col_type,
                 nullable: true,
+                ..Default::default()
             });
         }
     }

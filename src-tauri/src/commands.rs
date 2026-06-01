@@ -5544,6 +5544,8 @@ pub async fn introspect_db_schema(
                             name: c.name.clone(),
                             col_type: c.data_type.clone(),
                             nullable: c.nullable,
+                            is_primary_key: c.is_primary_key,
+                            default_value: c.default_value.clone(),
                         }).collect(),
                         last_modified: chrono::Utc::now()
                             .format("%Y-%m-%dT%H:%M:%SZ")
@@ -5740,6 +5742,7 @@ mod search_tests {
                         name: n.to_string(),
                         col_type: t.to_string(),
                         nullable: true,
+                        ..Default::default()
                     })
                     .collect(),
                 last_modified: "2026-01-01T00:00:00Z".to_string(),
