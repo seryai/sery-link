@@ -609,6 +609,9 @@ export function SourcesSidebar() {
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
             placeholder="Filter sources…"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             className="w-full rounded-md border border-slate-200 bg-white py-1 pl-7 pr-6 text-xs text-slate-700 placeholder-slate-400 focus:border-purple-400 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:placeholder-slate-500"
           />
           {filterText && (
