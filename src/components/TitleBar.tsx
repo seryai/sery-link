@@ -50,11 +50,11 @@ export function TitleBar() {
             <span
               className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`}
             />
-            <span className="text-[14px] text-slate-600 dark:text-slate-300">
+            <span className="text-[13px] text-slate-600 dark:text-slate-300">
               {status.label}
             </span>
             {stats && (
-              <span className="text-[14px] text-slate-400 dark:text-slate-500">
+              <span className="text-[13px] text-slate-400 dark:text-slate-500">
                 · {stats.queries_today}{' '}
                 {stats.queries_today === 1 ? 'query' : 'queries'} today
               </span>
