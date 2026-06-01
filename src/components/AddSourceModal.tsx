@@ -202,13 +202,28 @@ type Stage =
   | { kind: 'mongodb' }
   | { kind: 'redis' }
   | { kind: 'sqlite' }
-  | { kind: 'agent_db' };
+  | { kind: 'agent_db'; driverKey?: string };
+
+interface DriverStatus {
+  db_type: string;
+  label: string;
+  installed: boolean;
+  jre_installed: boolean;
+}
 
 export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) {
   const toast = useToast();
   const [stage, setStage] = useState<Stage>({ kind: 'picker' });
   const [pickerTab, setPickerTab] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [installedDrivers, setInstalledDrivers] = useState<DriverStatus[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    invoke<DriverStatus[]>('list_drivers_local')
+      .then(drivers => setInstalledDrivers(drivers.filter(d => d.installed)))
+      .catch(() => {/* driver store not available in this build */});
+  }, [open]);
 
   if (!open) return null;
 
@@ -309,6 +324,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               busy={busy}
               activeTab={pickerTab}
               onTabChange={setPickerTab}
+              installedDrivers={installedDrivers}
               onPickLocal={onPickLocal}
               onPickUrl={() => setStage({ kind: 'url' })}
               onPickGdrive={() => setStage({ kind: 'gdrive' })}
@@ -324,7 +340,9 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
               onPickMongodb={onPickMongodb}
               onPickRedis={onPickRedis}
               onPickSqlite={onPickSqlite}
-              onPickAgentDb={() => setStage({ kind: 'agent_db' })}
+              onPickAgentDb={(driverKey) => {
+                setStage({ kind: 'agent_db', driverKey });
+              }}
               onPickS3Compatible={(preset) =>
                 setStage({ kind: 'url', initial: PRESETS[preset] })
               }
@@ -421,6 +439,7 @@ export function AddSourceModal({ open, onClose, onAdded }: AddSourceModalProps) 
           )}
           {stage.kind === 'agent_db' && (
             <AgentDbStage
+              initialDriverKey={stage.driverKey}
               onAdded={() => { onAdded(); closeAll(); }}
               onCancel={() => setStage({ kind: 'picker' })}
             />
@@ -544,6 +563,7 @@ function PickerStage({
   busy,
   activeTab,
   onTabChange,
+  installedDrivers,
   onPickLocal,
   onPickUrl,
   onPickGdrive,
@@ -565,6 +585,7 @@ function PickerStage({
   busy: boolean;
   activeTab: number;
   onTabChange: (i: number) => void;
+  installedDrivers: DriverStatus[];
   onPickLocal: () => void;
   onPickUrl: () => void;
   onPickGdrive: () => void;
@@ -580,7 +601,7 @@ function PickerStage({
   onPickMongodb: () => void;
   onPickRedis: () => void;
   onPickSqlite: () => void;
-  onPickAgentDb: () => void;
+  onPickAgentDb: (driverKey: string) => void;
   onPickS3Compatible: (kind: S3CompatibleKind) => void;
 }) {
   const cat = CATEGORIES[activeTab];
@@ -604,7 +625,7 @@ function PickerStage({
       case 'mongodb': onPickMongodb(); break;
       case 'redis': onPickRedis(); break;
       case 'sqlite': onPickSqlite(); break;
-      case 'agent_db': onPickAgentDb(); break;
+      case 'agent_db': onPickAgentDb('oracle'); break;
       case 'b2':
       case 'wasabi':
       case 'r2':
@@ -635,13 +656,34 @@ function PickerStage({
 
       {/* Tile grid — fixed height, no scroll */}
       <div className="grid grid-cols-3 gap-2 min-h-[360px] content-start">
-        {tiles.map((tile) => (
-          <ProtocolCard
-            key={tile.kind}
-            tile={tile}
+        {tiles
+          // Hide the generic "Enterprise DB" tile when specific installed driver tiles
+          // are shown — it becomes redundant once the user has real JDBC drivers installed.
+          .filter(tile => !(tile.kind === 'agent_db' && cat.label === 'Databases' && installedDrivers.length > 0))
+          .map((tile) => (
+            <ProtocolCard
+              key={tile.kind}
+              tile={tile}
+              disabled={busy}
+              onClick={() => handleTile(tile.kind as AnyKind)}
+            />
+          ))}
+        {/* Installed JDBC driver tiles — only shown in Databases tab */}
+        {cat.label === 'Databases' && installedDrivers.map(d => (
+          <button
+            key={`agent_db:${d.db_type}`}
             disabled={busy}
-            onClick={() => handleTile(tile.kind as AnyKind)}
-          />
+            onClick={() => onPickAgentDb(d.db_type)}
+            className="flex flex-col items-start gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-left shadow-sm transition-all hover:border-purple-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <SourceIcon kind={d.db_type} size="md" />
+            <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 leading-tight">
+              {d.label}
+            </span>
+            <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight">
+              JDBC driver
+            </span>
+          </button>
         ))}
       </div>
     </div>
@@ -2964,9 +3006,17 @@ const AGENT_DRIVERS = [
   { key: 'mongodb-jdbc',     label: 'MongoDB (Legacy)',    defaultPort: 27017, hasDatabase: true,  hasOracleConnType: false },
 ] as const;
 
-function AgentDbStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+function AgentDbStage({
+  initialDriverKey,
+  onAdded,
+  onCancel,
+}: {
+  initialDriverKey?: string;
+  onAdded: () => void;
+  onCancel: () => void;
+}) {
   const toast = useToast();
-  const [driverKey, setDriverKey] = useState('oracle');
+  const [driverKey, setDriverKey] = useState(initialDriverKey ?? 'oracle');
   const [displayName, _setDisplayName] = useState('');
   const [host, setHost] = useState('');
   const [port, setPort] = useState('1521');
