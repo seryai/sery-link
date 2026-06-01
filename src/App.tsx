@@ -205,7 +205,7 @@ function AppInner() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left: persistent sources list */}
-        <aside className="flex w-56 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-black/[0.03] dark:bg-white/[0.04] overflow-hidden">
+        <aside className="flex w-64 flex-col border-r border-black/[0.07] dark:border-white/[0.08] bg-slate-50 dark:bg-slate-900/60 overflow-hidden">
           <SourcesSidebar />
         </aside>
 

@@ -16,29 +16,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  GripVertical,
   Loader2,
   MoreVertical,
   Plus,
   RefreshCw,
+  Search,
+  X,
 } from 'lucide-react';
-import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCorners,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
 import { AddSourceModal } from './AddSourceModal';
@@ -52,7 +36,6 @@ import {
   removeSource,
   renameSource,
   s3PresetOf,
-  reorderSources,
   scanKeyOf,
   setSourceGroup,
   sourceKindLabel,
@@ -192,6 +175,7 @@ export function SourcesSidebar() {
   const [menu, setMenu] = useState<RowMenuState | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [filterText, setFilterText] = useState('');
   const [groupPickerSourceId, setGroupPickerSourceId] = useState<string | null>(
     null,
   );
@@ -232,7 +216,11 @@ export function SourcesSidebar() {
   };
 
   const sources = config?.sources ?? [];
-  const groups = groupSources(sources);
+  const q = filterText.trim().toLowerCase();
+  const filteredSources = q
+    ? sources.filter((s) => s.name.toLowerCase().includes(q))
+    : sources;
+  const groups = groupSources(filteredSources);
   // Render top-level (ungrouped) first, then named groups in
   // alphabetical order — deterministic without forcing the user to
   // think about group ordering.
@@ -538,213 +526,28 @@ export function SourcesSidebar() {
     }
   };
 
-  const renderRow = (source: DataSource, sortable: boolean) => {
-    // Drill-down currently works only for path-keyed kinds (Local /
-    // HTTPS / S3) where scanKeyOf returns a non-null URL/path the
-    // legacy FolderDetail page resolves via watched_folders. The 5
-    // cache-and-scan kinds + Drive don't have a detail surface yet
-    // (a follow-up needs to add a Tauri command that resolves
-    // source_id → cache_dir so FolderDetail can render their files).
-    // Until that ships, those rows render with a tooltip and no
-    // navigation.
+  const renderRow = (source: DataSource) => {
     const scanKey = scanKeyOf(source);
     const onOpen = DB_KINDS.has(source.kind.kind)
       ? () => navigate(`/db/${encodeURIComponent(source.id)}`)
       : scanKey
         ? () => navigate(`/folders/${encodeURIComponent(scanKey)}`)
         : undefined;
-    const props: SourceRowProps = {
-      source,
-      status: statusOf(source, scansInFlight),
-      editing: editingSourceId === source.id,
-      onCommitRename: (name) => commitRename(source, name),
-      onCancelRename: () => setEditingSourceId(null),
-      onContextMenu: (e) => {
-        e.preventDefault();
-        setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
-      },
-      onOpen,
-    };
-    return sortable ? (
-      <SortableSourceRow key={source.id} {...props} />
-    ) : (
-      <SourceRow key={source.id} {...props} />
+    return (
+      <SourceRow
+        key={source.id}
+        source={source}
+        status={statusOf(source, scansInFlight)}
+        editing={editingSourceId === source.id}
+        onCommitRename={(name) => commitRename(source, name)}
+        onCancelRename={() => setEditingSourceId(null)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ sourceId: source.id, x: e.clientX, y: e.clientY });
+        }}
+        onOpen={onOpen}
+      />
     );
-  };
-
-  // ─── Drag-reorder (within + across buckets) ────────────────────
-  // Single outer DndContext spans all buckets so cross-bucket
-  // drops work: a drag from "Personal" to a row in "Work" both
-  // changes the source's `group` AND inserts it at the drop
-  // position. closestCorners is the recommended collision
-  // strategy for multi-container @dnd-kit setups. Within-bucket
-  // drag still works exactly as before — the same handler detects
-  // the same/different-bucket case and dispatches accordingly.
-  const dndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
-
-  /** Locate which bucket a source-id belongs to in the current
-   *  visual layout. Returns the bucket key + the array, or null
-   *  when the id isn't in any bucket (shouldn't happen with our
-   *  drag scaffolding but defensive). The bucket key is "" for
-   *  ungrouped, otherwise the named-group string. */
-  const findBucket = (
-    id: string,
-  ): { key: string; bucket: DataSource[] } | null => {
-    if (ungrouped.some((s) => s.id === id)) {
-      return { key: '', bucket: ungrouped };
-    }
-    for (const [name, members] of namedGroups) {
-      if (members.some((s) => s.id === id)) {
-        return { key: name, bucket: members };
-      }
-    }
-    return null;
-  };
-
-  const onDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const activeId = String(active.id);
-    const overId = String(over.id);
-
-    const fromBucket = findBucket(activeId);
-    const toBucket = findBucket(overId);
-    if (!fromBucket || !toBucket) return;
-
-    if (fromBucket.key === toBucket.key) {
-      // Same bucket — pure reorder.
-      const oldIndex = fromBucket.bucket.findIndex((s) => s.id === activeId);
-      const newIndex = fromBucket.bucket.findIndex((s) => s.id === overId);
-      if (oldIndex < 0 || newIndex < 0) return;
-      await reorderWithinBucket(fromBucket.bucket, oldIndex, newIndex);
-      return;
-    }
-
-    // Cross-bucket: move active into target bucket at over's
-    // position, change its group, persist both.
-    await moveAcrossBuckets(activeId, fromBucket, toBucket, overId);
-  };
-
-  const reorderWithinBucket = async (
-    bucket: DataSource[],
-    oldIndex: number,
-    newIndex: number,
-  ) => {
-    const newBucketOrder = arrayMove(bucket, oldIndex, newIndex);
-    // Detect which visual bucket was reordered (the ungrouped section
-    // or one specific named group) by reference identity against the
-    // already-grouped state.
-    const isUngrouped =
-      bucket.length === ungrouped.length &&
-      bucket.every((s, i) => s.id === ungrouped[i].id);
-
-    // Rebuild the full sources list in the same visual order:
-    // ungrouped first, then each named group alphabetical. The
-    // bucket whose drag fired gets its new in-order list; the other
-    // buckets are passed through untouched.
-    const newUngrouped = isUngrouped ? newBucketOrder : ungrouped;
-    const newNamed = namedGroups.map(([_gname, members]) => {
-      const isThisGroup =
-        !isUngrouped &&
-        bucket.length === members.length &&
-        bucket.every((s, i) => s.id === members[i].id);
-      return isThisGroup ? newBucketOrder : members;
-    });
-    const finalSources = [...newUngrouped, ...newNamed.flatMap((m) => m)];
-
-    // Optimistic local re-stamp so the UI doesn't snap during the
-    // round-trip. The Rust side is authoritative; a failed commit
-    // triggers reloadConfig which snaps to truth.
-    if (config) {
-      const stamped = finalSources.map((s, i) => ({
-        ...s,
-        sort_order: i,
-      }));
-      setConfig({ ...config, sources: stamped });
-    }
-
-    // Persist the full ID order. The Rust impl rewrites sort_order
-    // based on this list; matching shape means the post-reload is a
-    // no-op when the call succeeds.
-    try {
-      await reorderSources(finalSources.map((s) => s.id));
-    } catch (err) {
-      toast.error(`Couldn't save new order: ${err}`);
-      await reloadConfig();
-    }
-  };
-
-  /** Cross-bucket move: pull `activeId` out of `fromBucket`, insert
-   *  it at the position of `overId` in `toBucket`, change its group
-   *  field, and persist both setSourceGroup + reorderSources. */
-  const moveAcrossBuckets = async (
-    activeId: string,
-    fromBucket: { key: string; bucket: DataSource[] },
-    toBucket: { key: string; bucket: DataSource[] },
-    overId: string,
-  ) => {
-    const moved = fromBucket.bucket.find((s) => s.id === activeId);
-    if (!moved) return;
-
-    const newGroup = toBucket.key === '' ? null : toBucket.key;
-
-    // Compute the new ordering for both buckets. The active source
-    // gets removed from its old bucket and inserted before overId
-    // in the new bucket.
-    const newFrom = fromBucket.bucket.filter((s) => s.id !== activeId);
-    const overIndex = toBucket.bucket.findIndex((s) => s.id === overId);
-    const newTo = [
-      ...toBucket.bucket.slice(0, overIndex),
-      { ...moved, group: newGroup },
-      ...toBucket.bucket.slice(overIndex),
-    ];
-
-    // Rebuild the full sources list in visual order, swapping in
-    // the new bucket arrangements where applicable.
-    const isFromUngrouped = fromBucket.key === '';
-    const isToUngrouped = toBucket.key === '';
-    const newUngrouped = isFromUngrouped
-      ? newFrom
-      : isToUngrouped
-        ? newTo
-        : ungrouped;
-    const newNamed = namedGroups.map(([gname, members]) => {
-      if (gname === fromBucket.key) return newFrom;
-      if (gname === toBucket.key) return newTo;
-      return members;
-    });
-    const finalSources = [...newUngrouped, ...newNamed.flatMap((m) => m)];
-
-    // Optimistic local re-stamp.
-    if (config) {
-      const stamped = finalSources.map((s, i) => ({
-        ...s,
-        sort_order: i,
-        group: s.id === activeId ? newGroup : s.group,
-      }));
-      setConfig({ ...config, sources: stamped });
-    }
-
-    // Two backend calls: change the group first (so the post-load
-    // grouping computation lands in the right bucket), then push
-    // the new global order. On any failure, snap back via reload.
-    try {
-      await setSourceGroup(activeId, newGroup);
-      await reorderSources(finalSources.map((s) => s.id));
-      toast.success(
-        newGroup === null
-          ? `Moved "${moved.name}" to top level`
-          : `Moved "${moved.name}" to "${newGroup}"`,
-      );
-    } catch (err) {
-      toast.error(`Couldn't move: ${err}`);
-      await reloadConfig();
-    }
   };
 
   if (sources.length === 0) {
@@ -780,64 +583,66 @@ export function SourcesSidebar() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
-            Sources
-          </h1>
-          {busy && (
-            <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
+      <div className="border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center justify-between px-3 pt-3 pb-2">
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              Sources
+            </h1>
+            {busy && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
+            )}
+          </div>
           <button
             onClick={onScanAll}
             title="Rescan every source"
-            className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Scan all
           </button>
         </div>
-      </div>
-      <div className="flex-1 overflow-y-auto p-3">
-        {/* Single outer DndContext covers ALL buckets so drops
-            across groups work. Each bucket still has its own
-            SortableContext (required by @dnd-kit for the
-            within-list reorder mechanics). closestCorners is the
-            recommended collision strategy for multi-container
-            sortable layouts. */}
-        <DndContext
-          sensors={dndSensors}
-          collisionDetection={closestCorners}
-          onDragEnd={onDragEnd}
-        >
-          {/* Ungrouped section. */}
-          {ungrouped.length > 0 && (
-            <SortableContext
-              items={ungrouped.map((s) => s.id)}
-              strategy={verticalListSortingStrategy}
+        {/* Filter input — shown whenever there are sources */}
+        <div className="relative px-3 pb-2">
+          <Search className="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            placeholder="Filter sources…"
+            className="w-full rounded-md border border-slate-200 bg-white py-1 pl-7 pr-6 text-xs text-slate-700 placeholder-slate-400 focus:border-purple-400 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:placeholder-slate-500"
+          />
+          {filterText && (
+            <button
+              onClick={() => setFilterText('')}
+              className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
             >
-              <div className="space-y-1">
-                {ungrouped.map((s) => renderRow(s, true))}
-              </div>
-            </SortableContext>
+              <X className="h-3 w-3" />
+            </button>
           )}
-          {/* Named groups — each is its own SortableContext but
-              shares the outer DndContext, so dragging from one
-              group to another (or to the ungrouped section above)
-              fires onDragEnd with active+over in different
-              buckets. The handler detects that and triggers
-              setSourceGroup + reorderSources. */}
-          {namedGroups.map(([groupName, members]) => (
-            <SourceGroupSection
-              key={groupName}
-              groupName={groupName}
-              sources={members}
-              renderRow={(s) => renderRow(s, true)}
-            />
-          ))}
-        </DndContext>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        {ungrouped.length === 0 && namedGroups.length === 0 && filterText ? (
+          <p className="px-2 py-4 text-center text-xs text-slate-400 dark:text-slate-500">
+            No sources match "{filterText}"
+          </p>
+        ) : (
+          <>
+            {ungrouped.length > 0 && (
+              <div className="space-y-0.5">
+                {ungrouped.map((s) => renderRow(s))}
+              </div>
+            )}
+            {namedGroups.map(([groupName, members]) => (
+              <SourceGroupSection
+                key={groupName}
+                groupName={groupName}
+                sources={members}
+                renderRow={renderRow}
+              />
+            ))}
+          </>
+        )}
       </div>
       {menu && (
         <ContextMenu
@@ -924,10 +729,6 @@ interface SourceRowProps {
    *  detail surface (FolderDetail) can't yet resolve the source —
    *  the row stays non-navigable and the cursor reflects that. */
   onOpen?: () => void;
-  /** Optional drag-handle slot. Rendered to the left of the icon when
-   *  the row is sortable; otherwise omitted so non-draggable rows
-   *  (those inside a group section) keep their existing layout. */
-  dragHandle?: React.ReactNode;
 }
 
 function SourceRow({
@@ -938,7 +739,6 @@ function SourceRow({
   onCancelRename,
   onContextMenu,
   onOpen,
-  dragHandle,
 }: SourceRowProps) {
   const legacyKind = legacyKindStringOf(source);
   const s3Preset =
@@ -974,7 +774,6 @@ function SourceRow({
         openable ? 'cursor-pointer' : 'cursor-default'
       }`}
     >
-      {dragHandle}
       <div
         className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md ${sourceIconBgClass(
           legacyKind,
@@ -1065,27 +864,16 @@ function SourceGroupSection({
 }: SourceGroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false);
   return (
-    <div className="mt-4">
+    <div className="mt-3">
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="mb-1 flex w-full items-center justify-between rounded px-2 py-1 text-xs font-semibold uppercase tracking-wide text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+        className="mb-0.5 flex w-full items-center justify-between rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 hover:bg-slate-100 dark:text-slate-500 dark:hover:bg-slate-800"
       >
         <span>{groupName}</span>
-        <span className="text-slate-400">
-          {collapsed ? '+' : '−'} {sources.length}
-        </span>
+        <span>{collapsed ? '+' : '−'} {sources.length}</span>
       </button>
       {!collapsed && (
-        // SortableContext only — the DndContext is one level up in
-        // SourcesSidebar so cross-bucket drops work. The SortableContext
-        // here just defines this group's local item list for
-        // within-group reorder mechanics.
-        <SortableContext
-          items={sources.map((s) => s.id)}
-          strategy={verticalListSortingStrategy}
-        >
-          <div className="space-y-1">{sources.map(renderRow)}</div>
-        </SortableContext>
+        <div className="space-y-0.5">{sources.map(renderRow)}</div>
       )}
     </div>
   );
@@ -1185,35 +973,6 @@ function ContextMenu({
       <MenuItem onClick={() => onRemove(source)} variant="danger">
         Remove source
       </MenuItem>
-    </div>
-  );
-}
-
-/** Sortable wrapper around <SourceRow>. Used only inside the
- *  ungrouped (top-level) section's <SortableContext>; rows inside
- *  named groups stay non-sortable for v0.7.0. */
-function SortableSourceRow(props: SourceRowProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: props.source.id });
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  };
-  const handle = (
-    <button
-      {...attributes}
-      {...listeners}
-      onClick={(e) => e.stopPropagation()}
-      className="flex h-6 w-4 cursor-grab items-center justify-center text-slate-400 opacity-0 transition-opacity hover:text-slate-600 group-hover:opacity-100 active:cursor-grabbing dark:hover:text-slate-200"
-      aria-label="Reorder source"
-    >
-      <GripVertical className="h-4 w-4" />
-    </button>
-  );
-  return (
-    <div ref={setNodeRef} style={style}>
-      <SourceRow {...props} dragHandle={handle} />
     </div>
   );
 }
