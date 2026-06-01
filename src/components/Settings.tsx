@@ -14,6 +14,7 @@ import {
   Download,
   FileText,
   Info,
+  KeyRound,
   LogOut,
   Monitor,
   Moon,
@@ -38,7 +39,7 @@ import type { AgentConfig } from '../types/events';
 type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'storage' | 'drivers' | 'about';
 
 export function Settings() {
-  const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo } =
+  const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo, setShowConnectModal } =
     useAgentStore();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>('general');
@@ -99,6 +100,17 @@ export function Settings() {
       toast.info('Signed out');
     } catch (err) {
       toast.error(`Couldn't sign out: ${err}`);
+    }
+  };
+
+  const changeKey = async () => {
+    try {
+      await invoke('logout');
+      setAuthenticated(false);
+      setAgentInfo(null);
+      setShowConnectModal(true);
+    } catch (err) {
+      toast.error(`Couldn't disconnect: ${err}`);
     }
   };
 
@@ -265,6 +277,7 @@ export function Settings() {
             agentId={agentInfo?.agent_id}
             workspaceId={agentInfo?.workspace_id}
             onLogout={logout}
+            onChangeKey={changeKey}
             onExport={exportConfig}
             onImport={importConfig}
           />
@@ -690,6 +703,7 @@ function AboutPanel({
   agentId,
   workspaceId,
   onLogout,
+  onChangeKey,
   onExport,
   onImport,
 }: {
@@ -697,6 +711,7 @@ function AboutPanel({
   agentId: string | undefined;
   workspaceId: string | undefined;
   onLogout: () => void;
+  onChangeKey: () => void;
   onExport: () => void;
   onImport: () => void;
 }) {
@@ -740,13 +755,22 @@ function AboutPanel({
         </button>
       </div>
 
-      <button
-        onClick={onLogout}
-        className="flex items-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-300 dark:hover:bg-rose-950/40"
-      >
-        <LogOut className="h-4 w-4" />
-        Sign out
-      </button>
+      <div className="flex gap-3">
+        <button
+          onClick={onChangeKey}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <KeyRound className="h-4 w-4" />
+          Change workspace key
+        </button>
+        <button
+          onClick={onLogout}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition-colors hover:bg-rose-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-300 dark:hover:bg-rose-950/40"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </button>
+      </div>
     </Panel>
   );
 }

@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { invoke } from '@tauri-apps/api/core';
-import { Bell, History, KeyRound, LayoutGrid, LogOut, Plus, Settings } from 'lucide-react';
+import { Bell, History, LayoutGrid, Plus, Settings } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
 
@@ -17,60 +15,19 @@ export function TitleBar() {
     setShowConnectModal,
     connectDefaultKey,
     setConnectDefaultKey,
-    setAuthenticated,
-    setAgentInfo,
     stats,
   } = useAgentStore();
-
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   const unread = schemaNotifications.filter((n) => !n.read).length;
   const isActive = (path: string) => location.pathname.startsWith(path);
 
-  // Status indicator config
   const status = !authenticated
-    ? { dot: 'bg-slate-400', label: 'Local only', kind: 'local' as const }
+    ? { dot: 'bg-slate-400', label: 'Local only', action: () => setShowConnectModal(true) }
     : connectionStatus === 'online'
-    ? { dot: 'bg-emerald-500', label: 'Connected', kind: 'connected' as const }
+    ? { dot: 'bg-emerald-500', label: 'Connected', action: () => navigate('/settings') }
     : connectionStatus === 'error'
-    ? { dot: 'bg-rose-500', label: 'Error', kind: 'connected' as const }
-    : { dot: 'bg-amber-500 animate-pulse', label: 'Connecting…', kind: 'connected' as const };
-
-  // Close menu on outside click
-  useEffect(() => {
-    if (!accountMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setAccountMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [accountMenuOpen]);
-
-  async function handleDisconnect() {
-    setAccountMenuOpen(false);
-    await invoke('logout').catch(() => {});
-    setAuthenticated(false);
-    setAgentInfo(null);
-  }
-
-  async function handleChangeKey() {
-    setAccountMenuOpen(false);
-    await invoke('logout').catch(() => {});
-    setAuthenticated(false);
-    setAgentInfo(null);
-    setShowConnectModal(true);
-  }
-
-  function handleStatusClick() {
-    if (status.kind === 'local') {
-      setShowConnectModal(true);
-    } else {
-      setAccountMenuOpen((v) => !v);
-    }
-  }
+    ? { dot: 'bg-rose-500', label: 'Error', action: () => navigate('/settings') }
+    : { dot: 'bg-amber-500 animate-pulse', label: 'Connecting…', action: () => navigate('/settings') };
 
   return (
     <>
@@ -79,10 +36,10 @@ export function TitleBar() {
         className="h-10 flex-shrink-0 flex items-center border-b border-black/[0.07] dark:border-white/[0.08] bg-slate-50 dark:bg-slate-900/60 px-3"
       >
         {/* Left: pl-[72px] clears macOS traffic lights */}
-        <div className="relative flex items-center gap-2 pl-[72px]" data-tauri-drag-region>
+        <div className="flex items-center gap-2 pl-[72px]" data-tauri-drag-region>
           <button
-            onClick={handleStatusClick}
-            title={status.kind === 'connected' ? 'Workspace options' : 'Connect to workspace'}
+            onClick={status.action}
+            title={authenticated ? 'Manage workspace in Settings' : 'Connect to workspace'}
             className="flex items-center gap-1.5 rounded-md p-1.5 transition-colors hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
           >
             <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${status.dot}`} />
@@ -96,26 +53,6 @@ export function TitleBar() {
               </span>
             )}
           </button>
-
-          {/* Account dropdown */}
-          {accountMenuOpen && (
-            <div
-              ref={menuRef}
-              className="absolute left-0 top-full mt-1 z-50 w-48 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg py-1"
-            >
-              <DropdownItem
-                icon={<KeyRound className="h-3.5 w-3.5" />}
-                label="Change workspace key"
-                onClick={handleChangeKey}
-              />
-              <DropdownItem
-                icon={<LogOut className="h-3.5 w-3.5" />}
-                label="Disconnect"
-                onClick={handleDisconnect}
-                danger
-              />
-            </div>
-          )}
         </div>
 
         {/* Center drag spacer */}
@@ -199,32 +136,6 @@ function TitleBtn({
     >
       {children}
       <span>{label}</span>
-    </button>
-  );
-}
-
-function DropdownItem({
-  icon,
-  label,
-  onClick,
-  danger,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] transition-colors ${
-        danger
-          ? 'text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20'
-          : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50'
-      }`}
-    >
-      {icon}
-      {label}
     </button>
   );
 }
