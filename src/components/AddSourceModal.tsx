@@ -853,7 +853,7 @@ function UrlStage({
           className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Add source
+          {busy && isS3 ? 'Testing connection…' : 'Add source'}
         </button>
       </div>
     </>

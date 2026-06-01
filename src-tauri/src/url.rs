@@ -267,9 +267,19 @@ pub fn validate_url(raw: &str) -> UrlValidation {
 
     // Canonicalise by lower-casing the scheme but preserving path/query
     // case — S3 keys and many HTTP paths are case-sensitive.
-    let mut normalised = String::with_capacity(trimmed.len());
+    let mut normalised = String::with_capacity(trimmed.len() + 1);
     normalised.push_str(&lower[..scheme_end]);
     normalised.push_str(&trimmed[scheme_end..]);
+
+    // s3://bucket (no slash after the bucket name) is a bare bucket URL.
+    // Normalise it to s3://bucket/ so it's treated as a listing everywhere:
+    // is_s3_listing, the pre-flight probe, and the scanner all key on the
+    // trailing slash. Without it the test is silently skipped and the scan
+    // later fails with DuckDB's "URL needs a '/' after the host" error.
+    if lower.starts_with("s3://") && !after_scheme.contains('/') {
+        normalised.push('/');
+    }
+
     UrlValidation::Ok {
         normalised,
         insecure,
@@ -475,6 +485,27 @@ mod tests {
                 UrlValidation::Invalid { .. } => {}
                 other => panic!("should have rejected: {:?} → {:?}", bad, other),
             }
+        }
+    }
+
+    #[test]
+    fn validate_url_normalises_bare_bucket_to_listing() {
+        // s3://bucket (no trailing slash) must become s3://bucket/ so the
+        // pre-flight test and scanner treat it as a listing, not a file probe
+        // that would be silently skipped and later fail with DuckDB's
+        // "URL needs a '/' after the host" error.
+        match validate_url("s3://sery-demo") {
+            UrlValidation::Ok { normalised, .. } => {
+                assert_eq!(normalised, "s3://sery-demo/");
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
+        // A bucket with a path already present must not get a double slash.
+        match validate_url("s3://my-bucket/prefix/") {
+            UrlValidation::Ok { normalised, .. } => {
+                assert_eq!(normalised, "s3://my-bucket/prefix/");
+            }
+            other => panic!("expected Ok, got {:?}", other),
         }
     }
 
