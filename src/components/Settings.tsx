@@ -36,7 +36,7 @@ import { StoragePanel } from './settings/StoragePanel';
 import { DriverStoreDialog } from './DriverStoreDialog';
 import type { AgentConfig } from '../types/events';
 
-type Tab = 'general' | 'sync' | 'app' | 'mcp' | 'storage' | 'drivers' | 'about';
+type Tab = 'general' | 'sync' | 'mcp' | 'storage' | 'about';
 
 export function Settings() {
   const { config, setConfig, agentInfo, setAuthenticated, setAgentInfo, setShowConnectModal } =
@@ -242,17 +242,11 @@ export function Settings() {
           <TabButton active={tab === 'sync'} onClick={() => setTab('sync')}>
             Sync
           </TabButton>
-          <TabButton active={tab === 'app'} onClick={() => setTab('app')}>
-            App
-          </TabButton>
           <TabButton active={tab === 'mcp'} onClick={() => setTab('mcp')}>
             MCP
           </TabButton>
           <TabButton active={tab === 'storage'} onClick={() => setTab('storage')}>
             Storage
-          </TabButton>
-          <TabButton active={tab === 'drivers'} onClick={() => setTab('drivers')}>
-            Drivers
           </TabButton>
           <TabButton active={tab === 'about'} onClick={() => setTab('about')}>
             About
@@ -264,10 +258,13 @@ export function Settings() {
           <GeneralPanel draft={draft} setDraft={setDraft} />
         )}
         {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
-        {tab === 'app' && <AppPanel draft={draft} setDraft={setDraft} />}
         {tab === 'mcp' && <McpPanel draft={draft} setDraft={setDraft} />}
-        {tab === 'storage' && <StoragePanel />}
-        {tab === 'drivers' && <DriverStoreDialog open={true} onClose={() => setTab('general')} embedded />}
+        {tab === 'storage' && (
+          <>
+            <StoragePanel />
+            <DriverStoreDialog open={true} onClose={() => {}} embedded />
+          </>
+        )}
         {tab === 'about' && (
           <AboutPanel
             draft={draft}
@@ -368,6 +365,36 @@ function GeneralPanel({
           />
         </div>
       </Field>
+
+      <Toggle
+        icon={<Power className="h-5 w-5" />}
+        label="Launch at login"
+        hint="Start the agent automatically when you sign in."
+        checked={draft.app.launch_at_login}
+        onChange={(v) =>
+          setDraft({ ...draft, app: { ...draft.app, launch_at_login: v } })
+        }
+      />
+
+      <Toggle
+        icon={<Bell className="h-5 w-5" />}
+        label="Notifications"
+        hint="Show system notifications when syncs complete or fail."
+        checked={draft.app.notifications_enabled}
+        onChange={(v) =>
+          setDraft({ ...draft, app: { ...draft.app, notifications_enabled: v } })
+        }
+      />
+
+      <Toggle
+        icon={<Sparkles className="h-5 w-5" />}
+        label="Schema-change toasts"
+        hint="Pop a toast when a scan detects a new, removed, or changed column. The Notifications tab and Machines badge still update either way."
+        checked={draft.app.schema_change_toasts_enabled}
+        onChange={(v) =>
+          setDraft({ ...draft, app: { ...draft.app, schema_change_toasts_enabled: v } })
+        }
+      />
     </Panel>
   );
 }
@@ -643,56 +670,6 @@ function NetworkModeToggle() {
   );
 }
 
-// ─── App ────────────────────────────────────────────────────────────────────
-
-function AppPanel({
-  draft,
-  setDraft,
-}: {
-  draft: AgentConfig;
-  setDraft: (c: AgentConfig) => void;
-}) {
-  return (
-    <Panel>
-      <Toggle
-        icon={<Power className="h-5 w-5" />}
-        label="Launch at login"
-        hint="Start the agent automatically when you sign in."
-        checked={draft.app.launch_at_login}
-        onChange={(v) =>
-          setDraft({ ...draft, app: { ...draft.app, launch_at_login: v } })
-        }
-      />
-
-      <Toggle
-        icon={<Bell className="h-5 w-5" />}
-        label="Notifications"
-        hint="Show system notifications when syncs complete or fail."
-        checked={draft.app.notifications_enabled}
-        onChange={(v) =>
-          setDraft({
-            ...draft,
-            app: { ...draft.app, notifications_enabled: v },
-          })
-        }
-      />
-
-      <Toggle
-        icon={<Bell className="h-5 w-5" />}
-        label="Schema-change toasts"
-        hint="Pop a toast when a scan detects a new, removed, or changed column. The Notifications tab and Machines badge still update either way."
-        checked={draft.app.schema_change_toasts_enabled}
-        onChange={(v) =>
-          setDraft({
-            ...draft,
-            app: { ...draft.app, schema_change_toasts_enabled: v },
-          })
-        }
-      />
-    </Panel>
-  );
-}
-
 // ─── About ──────────────────────────────────────────────────────────────────
 
 function AboutPanel({
@@ -714,42 +691,10 @@ function AboutPanel({
 }) {
   return (
     <Panel>
+      {/* Account */}
       <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-900">
-        <VersionRow />
-        <Row label="Agent ID" value={agentId ?? '—'} mono />
         <Row label="Workspace" value={workspaceId ?? '—'} mono />
-        <Row label="Platform" value={draft.agent.platform} />
-        <Row label="Hostname" value={draft.agent.hostname} />
-
-      </div>
-
-      <OAuthProvidersSection />
-
-      <UpdaterSection />
-
-      <div className="flex items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <span>
-          Signing out removes the stored token from this device. Your data
-          stays put, and you can sign back in at any time.
-        </span>
-      </div>
-
-      <div className="flex gap-3">
-        <button
-          onClick={onExport}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-        >
-          <Download className="h-4 w-4" />
-          Export Configuration
-        </button>
-        <button
-          onClick={onImport}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
-        >
-          <Upload className="h-4 w-4" />
-          Import Configuration
-        </button>
+        <Row label="Agent ID" value={agentId ?? '—'} mono />
       </div>
 
       <div className="flex gap-3">
@@ -766,6 +711,35 @@ function AboutPanel({
         >
           <LogOut className="h-4 w-4" />
           Sign out
+        </button>
+      </div>
+
+      {/* System info */}
+      <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-900">
+        <VersionRow />
+        <Row label="Platform" value={draft.agent.platform} />
+        <Row label="Hostname" value={draft.agent.hostname} />
+      </div>
+
+      <OAuthProvidersSection />
+
+      <UpdaterSection />
+
+      {/* Config backup */}
+      <div className="flex gap-3">
+        <button
+          onClick={onExport}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <Download className="h-4 w-4" />
+          Export config
+        </button>
+        <button
+          onClick={onImport}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
+          <Upload className="h-4 w-4" />
+          Import config
         </button>
       </div>
     </Panel>
