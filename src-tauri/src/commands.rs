@@ -2404,7 +2404,8 @@ pub async fn rescan_source_by_id<R: Runtime>(
         | SourceKind::Clickhouse { .. }
         | SourceKind::Mongodb { .. }
         | SourceKind::Redis { .. }
-        | SourceKind::Sqlite { .. } => {
+        | SourceKind::Sqlite { .. }
+        | SourceKind::AgentDb { .. } => {
             let config = Config::load().map_err(|e| e.to_string())?;
             let count = sync_db_source_to_cloud(&source_id, &config).await;
             Ok(serde_json::json!({ "tables_synced": count }))
@@ -2697,17 +2698,23 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
     // this point, regardless of any cloud round-trip — local-first means
     // we commit the result without waiting on the server.
     if let Ok(mut config) = Config::load() {
-        config.update_folder_scan_stats(
-            &folder_path,
-            crate::config::ScanStats {
-                datasets: dataset_count,
-                columns: column_count,
-                errors: 0,
-                total_bytes,
-                duration_ms,
-            },
-            chrono::Utc::now().to_rfc3339(),
-        );
+        let when = chrono::Utc::now().to_rfc3339();
+        let scan_stats = crate::config::ScanStats {
+            datasets: dataset_count,
+            columns: column_count,
+            errors: 0,
+            total_bytes,
+            duration_ms,
+        };
+        config.update_folder_scan_stats(&folder_path, scan_stats.clone(), when.clone());
+        // Also update the matching DataSource entry so the Dashboard
+        // (which reads config.sources) sees an up-to-date last_scan_at.
+        use crate::sources::SourceKind;
+        if let Some(source_id) = config.sources.iter().find(|s| {
+            matches!(&s.kind, SourceKind::Local { path, .. } if path.to_string_lossy() == folder_path)
+        }).map(|s| s.id.clone()) {
+            config.update_source_scan_stats(&source_id, scan_stats, when);
+        }
         let _ = config.save();
     }
 
@@ -3821,6 +3828,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
             crate::sources::SourceKind::Mongodb { .. } => None,
             crate::sources::SourceKind::Redis { .. } => None,
             crate::sources::SourceKind::Sqlite { .. } => None,
+            crate::sources::SourceKind::AgentDb { .. } => None,
         });
 
     // Pull the source_id-keyed SFTP / WebDAV keychain entries out
@@ -3860,6 +3868,7 @@ pub async fn remove_source(id: String) -> Result<(), String> {
         | Some(crate::sources::SourceKind::Mongodb { .. })
         | Some(crate::sources::SourceKind::Redis { .. })
         | Some(crate::sources::SourceKind::Sqlite { .. })
+        | Some(crate::sources::SourceKind::AgentDb { .. })
     );
 
     config.remove_source(&id).map_err(|e| e.to_string())?;
@@ -5397,6 +5406,110 @@ pub async fn add_sqlite_source(
     Ok(returned_id)
 }
 
+/// Add an agent-based JDBC database source (Oracle, DB2, SAP HANA,
+/// Teradata, Vertica, Databricks, Trino, Hive, BigQuery, Cassandra,
+/// Neo4j, Firebird, Exasol, H2, Informix, Kylin, Dameng, Kingbase, …).
+///
+/// Stores the password in the OS keychain via `agent_db_creds`, persists
+/// the non-secret metadata in `config.json` as a `SourceKind::AgentDb`
+/// entry, then kicks off an initial scan so the sidebar's status dot
+/// turns green without waiting for the next auto-scan tick.
+#[tauri::command]
+pub async fn add_agent_db_source(
+    driver_key: String,
+    driver_profile: Option<String>,
+    display_name: String,
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    database: Option<String>,
+    oracle_connection_type: Option<String>,
+    connection_string: Option<String>,
+    url_params: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<crate::sources::DataSource, String> {
+    let driver_key = driver_key.trim().to_string();
+    if driver_key.is_empty() {
+        return Err("driver_key is required".to_string());
+    }
+    if host.trim().is_empty() {
+        return Err("host is required".to_string());
+    }
+
+    let mut config = Config::load().map_err(|e| e.to_string())?;
+    let source_id = uuid::Uuid::new_v4().to_string();
+
+    // Persist the password BEFORE creating the source so that even if
+    // the config write fails we don't leak a credential-less source.
+    crate::agent_db_creds::store_password(&source_id, &password)?;
+
+    let name = display_name.trim().to_string();
+    let final_name = if name.is_empty() {
+        let label = db_core::agent_catalog::label_for_key(&driver_key).unwrap_or(&driver_key);
+        match &database {
+            Some(db) if !db.is_empty() => format!("{label} · {}:{}/{}", host.trim(), port, db),
+            _ => format!("{label} · {}:{}", host.trim(), port),
+        }
+    } else {
+        name
+    };
+
+    let kind = crate::sources::SourceKind::AgentDb {
+        driver_key: driver_key.clone(),
+        driver_profile: driver_profile.filter(|s| !s.is_empty()),
+        host: host.trim().to_string(),
+        port,
+        username: username.trim().to_string(),
+        database: database.filter(|s| !s.is_empty()),
+        oracle_connection_type: oracle_connection_type.filter(|s| !s.is_empty()),
+        connection_string: connection_string.filter(|s| !s.is_empty()),
+        url_params: url_params.filter(|s| !s.is_empty()),
+    };
+
+    let new_source = crate::sources::DataSource {
+        id: source_id.clone(),
+        name: final_name,
+        kind,
+        mcp_enabled: false,
+        last_scan_at: None,
+        last_scan_stats: None,
+        sort_order: 0,
+        group: None,
+    };
+
+    let returned_id = config.add_source(new_source.clone());
+    config.save().map_err(|e| {
+        // Roll back the keychain entry if we can't persist the source
+        // — leaves the user in the pre-add state.
+        let _ = crate::agent_db_creds::delete_password(&source_id);
+        e.to_string()
+    })?;
+
+    // Locate the persisted source (its id may equal `returned_id` which
+    // can differ from `source_id` if dedup kicked in — though that
+    // currently never happens for AgentDb because the dedup path
+    // returns None for this variant).
+    let stored = config
+        .sources
+        .iter()
+        .find(|s| s.id == returned_id)
+        .cloned()
+        .unwrap_or(new_source);
+
+    // Best-effort cloud sync of the source list — same pattern as
+    // add_mysql_source / add_postgresql_source.
+    crate::websocket::send_sources_updated().await;
+
+    let app_clone = app.clone();
+    let id_clone = returned_id.clone();
+    tokio::spawn(async move {
+        let _ = rescan_source_by_id(app_clone, id_clone).await;
+    });
+
+    Ok(stored)
+}
+
 async fn add_db_source_inner(
     kind: crate::sources::SourceKind,
     cfg: crate::db_creds::DbConnectionConfig,
@@ -5513,6 +5626,11 @@ pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize 
                 SourceKind::Mongodb { .. } => "mongodb",
                 SourceKind::Redis { .. } => "redis",
                 SourceKind::Sqlite { .. } => "sqlite",
+                SourceKind::AgentDb { driver_key, .. } => {
+                    // Embed the driver key so the dashboard can render
+                    // the right icon (e.g. "oracle_table", "db2_table").
+                    return format!("{driver_key}_table");
+                }
                 _ => "database",
             };
             format!("{kind_str}_table")
@@ -5520,6 +5638,16 @@ pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize 
         .unwrap_or_else(|| "database_table".to_string());
 
     let is_mysql = source.map_or(false, |s| matches!(s.kind, crate::sources::SourceKind::Mysql { .. }));
+    // Oracle and similar legacy JDBC drivers use FETCH FIRST n ROWS ONLY
+    // (or ROWNUM). DB2, SAP HANA, Teradata accept FETCH FIRST too. To
+    // keep this simple, we use FETCH FIRST for every Oracle-family
+    // driver and LIMIT for the rest — the agent surfaces a syntax error
+    // for the unlucky driver that disagrees, and the sample is
+    // best-effort anyway (None on error).
+    let is_oracle_family = source.map_or(false, |s| matches!(
+        &s.kind,
+        crate::sources::SourceKind::AgentDb { driver_key, .. } if driver_key.starts_with("oracle")
+    ));
 
     let mut datasets: Vec<crate::scanner::DatasetMetadata> = Vec::with_capacity(tables.len());
     for t in &tables {
@@ -5535,6 +5663,9 @@ pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize 
             let sql = if is_mysql {
                 let escaped = t.table_name.replace('`', "``");
                 format!("SELECT * FROM `{escaped}` LIMIT 5")
+            } else if is_oracle_family {
+                let escaped = t.table_name.replace('"', "\"\"");
+                format!("SELECT * FROM \"{escaped}\" FETCH FIRST 5 ROWS ONLY")
             } else {
                 let escaped = t.table_name.replace('"', "\"\"");
                 format!("SELECT * FROM \"{escaped}\" LIMIT 5")
