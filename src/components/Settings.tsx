@@ -104,6 +104,7 @@ export function Settings() {
   };
 
   const changeKey = async () => {
+    if (!window.confirm('Disconnect and enter a new workspace key?')) return;
     try {
       await invoke('logout');
       setAuthenticated(false);
