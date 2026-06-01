@@ -13,7 +13,7 @@ const DRIVER_CATALOG: &[DriverCatalogEntry] = &[
     DriverCatalogEntry { key: "oracle", label: "Oracle", store_visible: true },
     DriverCatalogEntry { key: "oracle-legacy", label: "Oracle Legacy", store_visible: true },
     DriverCatalogEntry { key: "oracle-10g", label: "Oracle 10g", store_visible: true },
-    DriverCatalogEntry { key: "snowflake", label: "Snowflake", store_visible: true },
+    DriverCatalogEntry { key: "snowflake", label: "Snowflake", store_visible: false },
     DriverCatalogEntry { key: "db2", label: "IBM DB2", store_visible: true },
     DriverCatalogEntry { key: "informix", label: "IBM Informix", store_visible: true },
     DriverCatalogEntry { key: "saphana", label: "SAP HANA", store_visible: true },
@@ -41,7 +41,7 @@ const DRIVER_CATALOG: &[DriverCatalogEntry] = &[
     DriverCatalogEntry { key: "yashandb", label: "YashanDB", store_visible: true },
     DriverCatalogEntry { key: "tdengine", label: "TDengine", store_visible: true },
     DriverCatalogEntry { key: "xugu", label: "XuguDB", store_visible: true },
-    DriverCatalogEntry { key: "mongodb", label: "MongoDB (Legacy)", store_visible: true },
+    DriverCatalogEntry { key: "mongodb", label: "MongoDB (Legacy)", store_visible: false },
     DriverCatalogEntry { key: "iris", label: "InterSystems IRIS", store_visible: false },
 ];
 
@@ -75,7 +75,9 @@ mod tests {
     #[test]
     fn driver_store_entries_excludes_hidden() {
         let visible: Vec<&str> = driver_store_entries().map(|(k, _)| k).collect();
-        assert!(!visible.contains(&"iris")); // store_visible: false
+        assert!(!visible.contains(&"iris"));      // store_visible: false
+        assert!(!visible.contains(&"snowflake")); // native implementation exists
+        assert!(!visible.contains(&"mongodb"));   // native implementation exists
         assert!(visible.contains(&"oracle"));
     }
 
