@@ -34,16 +34,10 @@ export function TitleBar() {
     <>
       <div
         data-tauri-drag-region
-        className="h-10 flex-shrink-0 flex items-center border-b border-black/[0.07] dark:border-white/[0.08] px-3"
+        className="h-10 flex-shrink-0 flex items-center border-b border-black/[0.07] dark:border-white/[0.08] bg-slate-50 dark:bg-slate-900/60 px-3"
       >
         {/* Left: pl-[72px] clears macOS traffic lights */}
         <div className="flex items-center gap-2 pl-[72px]" data-tauri-drag-region>
-          <span
-            data-tauri-drag-region
-            className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 pointer-events-none"
-          >
-            Sery Link
-          </span>
           <button
             onClick={() => status.clickable && setShowConnectModal(true)}
             title={status.label}
