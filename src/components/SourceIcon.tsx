@@ -11,6 +11,10 @@ const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
   lg: 'h-10 w-10',
 };
 
+// DB icons from the icon library have ~15-20% built-in padding in their viewBox.
+// Scale them up so their visual weight matches the tight storage icons.
+const DB_KINDS = new Set<SourceKind>(['mysql', 'postgresql', 'redis', 'mongodb', 'sqlite', 'snowflake', 'clickhouse']);
+
 const ICON_SRC: Record<SourceKind, string> = {
   local:      '/icons/storage/local.svg',
   s3:         '/icons/storage/s3.svg',
@@ -55,7 +59,8 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
     <img
       src={ICON_SRC[kind]}
       alt={ICON_ALT[kind]}
-      className={`${cls} flex-shrink-0 rounded-md object-contain`}
+      className={`${cls} flex-shrink-0 object-contain`}
+      style={DB_KINDS.has(kind) ? { transform: 'scale(1.25)' } : undefined}
     />
   );
 }
@@ -76,7 +81,7 @@ export function PresetSourceIcon({
     gcs:       ['/icons/storage/gcs.svg',     'Google Cloud Storage'],
   };
   const [src, alt] = map[preset];
-  return <img src={src} alt={alt} className={`${cls} flex-shrink-0 rounded-md object-contain`} />;
+  return <img src={src} alt={alt} className={`${cls} flex-shrink-0 object-contain`} />;
 }
 
 /** Background tint for the icon's containing chip. All icons now carry
