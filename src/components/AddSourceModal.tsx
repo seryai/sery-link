@@ -2224,6 +2224,7 @@ function ProtocolCard({
   const iconKind = legacyIconKindForTile(tile.kind);
   const presetKind = s3CompatiblePreset(tile.kind);
   const isComingSoon = onClick === undefined;
+  const isDbKind = ['mysql','postgresql','snowflake','clickhouse','mongodb','redis','sqlite'].includes(tile.kind);
   return (
     <button
       type="button"
@@ -2240,15 +2241,17 @@ function ProtocolCard({
     >
       <div
         className={`flex h-10 w-10 items-center justify-center rounded-md ${
-          isComingSoon
-            ? 'bg-slate-100 dark:bg-slate-800'
-            : 'bg-slate-100 dark:bg-slate-700'
+          isDbKind
+            ? ''
+            : isComingSoon
+              ? 'bg-slate-100 dark:bg-slate-800'
+              : 'bg-slate-100 dark:bg-slate-700'
         }`}
       >
         {presetKind ? (
           <PresetSourceIcon preset={presetKind} size="md" />
         ) : iconKind ? (
-          <SourceIcon kind={iconKind} size="md" />
+          <SourceIcon kind={iconKind} size="lg" />
         ) : (
           <PlaceholderIcon />
         )}
@@ -2275,17 +2278,7 @@ function s3CompatiblePreset(
 
 function legacyIconKindForTile(
   kind: ImplementedKind | S3CompatibleKind | ComingSoonKind,
-):
-  | 'local'
-  | 'http'
-  | 's3'
-  | 'gdrive'
-  | 'sftp'
-  | 'webdav'
-  | 'dropbox'
-  | 'azure'
-  | 'onedrive'
-  | null {
+): import('../utils/url').SourceKind | null {
   switch (kind) {
     case 'mysql':
     case 'postgresql':
@@ -2294,7 +2287,7 @@ function legacyIconKindForTile(
     case 'mongodb':
     case 'redis':
     case 'sqlite':
-      return null; // uses PlaceholderIcon until DB-specific icons ship
+      return kind;
     case 'local':
       return 'local';
     case 'https':
