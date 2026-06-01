@@ -2626,7 +2626,7 @@ function DatabaseStage({
             className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Add {label} source
+            {busy ? 'Testing connection…' : `Add ${label} source`}
           </button>
         </div>
       </div>
@@ -2729,7 +2729,7 @@ function SnowflakeStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: 
         <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
         <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Add Snowflake source
+          {busy ? 'Testing connection…' : 'Add Snowflake source'}
         </button>
       </div>
     </>
@@ -2804,7 +2804,7 @@ function ClickhouseStage({ onAdded, onCancel }: { onAdded: () => void; onCancel:
         <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
         <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Add ClickHouse source
+          {busy ? 'Testing connection…' : 'Add ClickHouse source'}
         </button>
       </div>
     </>
@@ -2887,7 +2887,7 @@ function MongodbStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: ()
         <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
         <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Add MongoDB source
+          {busy ? 'Testing connection…' : 'Add MongoDB source'}
         </button>
       </div>
     </>
@@ -2962,7 +2962,7 @@ function RedisStage({ onAdded, onCancel }: { onAdded: () => void; onCancel: () =
         <button onClick={onCancel} disabled={busy} className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">Cancel</button>
         <button onClick={submit} disabled={!canSubmit} className="inline-flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60">
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Add Redis source
+          {busy ? 'Testing connection…' : 'Add Redis source'}
         </button>
       </div>
     </>
