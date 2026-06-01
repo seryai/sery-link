@@ -288,6 +288,9 @@ export function CommandPalette({
           <Search className="h-5 w-5 text-slate-400" />
           <input
             type="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Type a command or search..."

@@ -406,6 +406,9 @@ export function FolderDetail() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Filter files by name…"

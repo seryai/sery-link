@@ -1120,6 +1120,9 @@ function GroupPickerDialog({
               <input
                 autoFocus
                 type="text"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 value={newGroup}
                 onChange={(e) => setNewGroup(e.target.value)}
                 onKeyDown={(e) => {

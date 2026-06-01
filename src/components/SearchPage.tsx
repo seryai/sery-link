@@ -239,6 +239,9 @@ function SearchHeader({
         <input
           autoFocus
           type="text"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Filename, column name, or text inside a document…"

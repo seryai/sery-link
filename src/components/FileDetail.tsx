@@ -929,6 +929,9 @@ function DataPreview({
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder={`Filter rows (across ${data.columns.length} column${data.columns.length === 1 ? '' : 's'})…`}

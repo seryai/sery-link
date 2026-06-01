@@ -316,6 +316,9 @@ function GeneralPanel({
       <Field label="Machine name" hint="Shown in the Sery dashboard and on this device.">
         <input
           type="text"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           value={draft.agent.name}
           onChange={(e) =>
             setDraft({

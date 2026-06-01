@@ -434,6 +434,9 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
                 {javaConfig.mode === 'custom' && (
                   <input
                     type="text"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     value={customPath}
                     onChange={(e) => setCustomPath(e.target.value)}
                     placeholder="/usr/local/opt/openjdk@21/bin/java"

@@ -932,6 +932,9 @@ function Field({
         onChange={(e) => onChange?.(e.target.value)}
         placeholder={placeholder}
         readOnly={readonly}
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
         className={`w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500 ${
           readonly ? 'opacity-60' : ''
         }`}

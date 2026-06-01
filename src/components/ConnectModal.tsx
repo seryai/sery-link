@@ -170,12 +170,14 @@ export function ConnectModal({
           </span>
           <input
             type="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={key}
             onChange={e => setKey(e.target.value)}
             placeholder="sery_k_XXXXXXXXXXXXXXXXXXXX"
             autoFocus
             autoComplete="off"
-            spellCheck={false}
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
           />
           <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
@@ -190,6 +192,9 @@ export function ConnectModal({
           </span>
           <input
             type="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={displayName}
             onChange={e => setDisplayName(e.target.value)}
             placeholder="e.g. Home Desktop"
