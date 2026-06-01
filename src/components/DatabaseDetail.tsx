@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronRight, Database, Loader2, Key, Link, List } from 'lucide-react';
+import { ChevronRight, Database, Loader2, Key, Link, List, RefreshCw } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { legacyKindStringOf } from '../utils/sources';
 import { SourceIcon } from './SourceIcon';
@@ -76,6 +76,7 @@ export function DatabaseDetail() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [samples, setSamples] = useState<Map<string, SampleState>>(new Map());
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     if (!decodedId) return;
@@ -97,6 +98,20 @@ export function DatabaseDetail() {
 
     return () => { cancelled = true; };
   }, [decodedId]);
+
+  const syncToCloud = async () => {
+    setSyncing(true);
+    try {
+      await invoke('rescan_source_by_id', { sourceId: decodedId });
+      // Re-introspect so the UI reflects any schema changes.
+      const tables = await invoke<TableSchema[]>('introspect_db_schema', { sourceId: decodedId });
+      setState({ kind: 'ok', tables });
+    } catch (err) {
+      setState({ kind: 'error', message: String(err) });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const loadSample = (tableName: string) => {
     setSamples((prev) => {
@@ -145,10 +160,21 @@ export function DatabaseDetail() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-          <SourceIcon kind={iconKind} size="lg" />
-          <span className="truncate">{source.name}</span>
-        </h1>
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+            <SourceIcon kind={iconKind} size="lg" />
+            <span className="truncate">{source.name}</span>
+          </h1>
+          <button
+            onClick={syncToCloud}
+            disabled={syncing}
+            title="Re-introspect schema and sync to cloud"
+            className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync'}
+          </button>
+        </div>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           <span className="font-medium capitalize text-slate-600 dark:text-slate-300">{source.kind.kind}</span>
           {state.kind === 'ok' && (

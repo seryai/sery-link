@@ -312,7 +312,7 @@ export function SourcesSidebar() {
       }
       return;
     }
-    // Database sources introspect schema on connect — no file scan needed.
+    // Database sources: re-introspect schema and sync to cloud.
     if (
       source.kind.kind === 'mysql' ||
       source.kind.kind === 'postgresql' ||
@@ -320,9 +320,18 @@ export function SourcesSidebar() {
       source.kind.kind === 'clickhouse' ||
       source.kind.kind === 'mongodb' ||
       source.kind.kind === 'redis' ||
-      source.kind.kind === 'sqlite'
+      source.kind.kind === 'sqlite' ||
+      source.kind.kind === 'agent_db'
     ) {
-      toast.success(`"${source.name}" schema is refreshed automatically on connect.`);
+      setBusy(true);
+      try {
+        await invoke('rescan_source_by_id', { sourceId: source.id });
+        toast.success(`"${source.name}" synced`);
+      } catch (err) {
+        toast.error(`Sync failed: ${err}`);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     if (source.kind.kind === 'google_drive') {
