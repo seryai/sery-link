@@ -217,7 +217,12 @@ fn db_core_table_info_to_schema(t: db_core::types::TableInfo) -> TableSchema {
         }).collect(),
         row_count_estimate: t.row_count_estimate.map(|v| v as i64),
         size_bytes: t.size_bytes.map(|v| v as i64),
-        indexes: vec![],
+        indexes: t.indexes.into_iter().map(|i| IndexInfo {
+            name: i.name,
+            columns: i.columns,
+            unique: i.unique,
+            primary: i.primary,
+        }).collect(),
         foreign_keys: vec![],
     }
 }

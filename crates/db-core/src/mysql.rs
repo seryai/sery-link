@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::ssh_tunnel::SshTunnelConfig;
-use crate::types::{ColumnInfo, QueryResult, TableInfo};
+use crate::types::{ColumnInfo, IndexInfo, QueryResult, TableInfo};
 
 pub type MySqlPool = mysql_async::Pool;
 
@@ -918,12 +918,40 @@ pub async fn introspect_schema(pool: &MySqlPool, database: &str) -> Result<Vec<T
         }
     }
 
+    // Indexes
+    let index_sql = format!(
+        "SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX \
+         FROM information_schema.STATISTICS \
+         WHERE TABLE_SCHEMA = {} \
+         ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX",
+        quote_value(database),
+    );
+    let result = conn.query_iter(&index_sql).await.map_err(|e| e.to_string())?;
+    let index_rows: Vec<mysql_async::Row> = result.collect_and_drop().await.map_err(|e| e.to_string())?;
+
+    let mut index_map: std::collections::HashMap<String, std::collections::BTreeMap<String, (bool, bool, Vec<String>)>> =
+        std::collections::HashMap::new();
+    for row in &index_rows {
+        let tbl = get_str(row, 0);
+        let idx_name = get_str(row, 1);
+        let col = get_str(row, 2);
+        let non_unique: i64 = row.get_opt::<i64, _>(3).and_then(|r| r.ok()).unwrap_or(1);
+        let unique = non_unique == 0;
+        let primary = idx_name == "PRIMARY";
+        let entry = index_map.entry(tbl).or_default().entry(idx_name).or_insert((unique, primary, vec![]));
+        entry.2.push(col);
+    }
+
     Ok(tables
         .into_iter()
         .map(|(table_name, columns)| {
             let row_count_estimate = row_counts.get(&table_name).copied();
             let size_bytes = size_bytes_map.get(&table_name).copied();
-            TableInfo { table_name, columns, row_count_estimate, size_bytes }
+            let indexes = index_map.remove(&table_name).unwrap_or_default()
+                .into_iter()
+                .map(|(name, (unique, primary, columns))| IndexInfo { name, columns, unique, primary })
+                .collect();
+            TableInfo { table_name, columns, row_count_estimate, size_bytes, indexes }
         })
         .collect())
 }

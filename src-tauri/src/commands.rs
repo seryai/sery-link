@@ -5625,10 +5625,10 @@ pub async fn profile_db_table(
     });
     let sql = if is_mysql {
         let escaped = table_name.replace('`', "``");
-        format!("SELECT * FROM `{escaped}` LIMIT 1000")
+        format!("SELECT * FROM `{escaped}` LIMIT 100")
     } else {
         let escaped = table_name.replace('"', "\"\"");
-        format!("SELECT * FROM \"{escaped}\" LIMIT 1000")
+        format!("SELECT * FROM \"{escaped}\" LIMIT 100")
     };
 
     let result = crate::db_engine::execute_db_query(&sql, &source_id, &config)

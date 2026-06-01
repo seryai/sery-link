@@ -18,7 +18,7 @@ use tokio_postgres::types::{FromSql, Type};
 use tokio_postgres::{Row, SimpleQueryMessage};
 
 use crate::ssh_tunnel::SshTunnelConfig;
-use crate::types::{ColumnInfo, QueryResult, TableInfo};
+use crate::types::{ColumnInfo, IndexInfo, QueryResult, TableInfo};
 
 pub type PgPool = Pool;
 
@@ -895,12 +895,49 @@ pub async fn introspect_schema(pool: &PgPool, schema: &str) -> Result<Vec<TableI
         }
     }
 
+    // Indexes
+    let idx_stmt = client
+        .prepare_cached(
+            "SELECT c.relname AS table_name, \
+             i.relname AS index_name, \
+             a.attname AS column_name, \
+             ix.indisunique AS is_unique, \
+             ix.indisprimary AS is_primary \
+             FROM pg_index ix \
+             JOIN pg_class c ON c.oid = ix.indrelid \
+             JOIN pg_class i ON i.oid = ix.indexrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(ix.indkey) \
+             WHERE n.nspname = $1 AND c.relkind = 'r' \
+             ORDER BY c.relname, i.relname, a.attnum",
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let idx_rows = client.query(&idx_stmt, &[&schema]).await.map_err(|e| e.to_string())?;
+
+    let mut index_map: std::collections::HashMap<String, std::collections::BTreeMap<String, (bool, bool, Vec<String>)>> =
+        std::collections::HashMap::new();
+    for row in &idx_rows {
+        let tbl: String = row.try_get::<_, String>(0).unwrap_or_default();
+        let idx_name: String = row.try_get::<_, String>(1).unwrap_or_default();
+        let col: String = row.try_get::<_, String>(2).unwrap_or_default();
+        let unique: bool = row.try_get::<_, bool>(3).unwrap_or(false);
+        let primary: bool = row.try_get::<_, bool>(4).unwrap_or(false);
+        let entry = index_map.entry(tbl).or_default().entry(idx_name).or_insert((unique, primary, vec![]));
+        entry.2.push(col);
+    }
+
     Ok(tables
         .into_iter()
         .map(|(table_name, columns)| {
             let row_count_estimate = row_counts.get(&table_name).copied();
             let size_bytes = size_bytes_map.get(&table_name).copied();
-            TableInfo { table_name, columns, row_count_estimate, size_bytes }
+            let indexes = index_map.remove(&table_name).unwrap_or_default()
+                .into_iter()
+                .map(|(name, (unique, primary, columns))| IndexInfo { name, columns, unique, primary })
+                .collect();
+            TableInfo { table_name, columns, row_count_estimate, size_bytes, indexes }
         })
         .collect())
 }
