@@ -18,13 +18,6 @@ import {
   SiWasabi,
   SiCloudflare,
   SiGooglecloudstorage,
-  SiMysql,
-  SiPostgresql,
-  SiRedis,
-  SiMongodb,
-  SiSqlite,
-  SiSnowflake,
-  SiClickhouse,
 } from '@icons-pack/react-simple-icons';
 import type { SourceKind } from '../utils/url';
 
@@ -53,17 +46,11 @@ const DB_CHIP_CLASS: Record<NonNullable<Props['size']>, string> = {
   md: 'h-8 w-8',
   lg: 'h-10 w-10',
 };
-const DB_INNER_PX: Record<NonNullable<Props['size']>, number> = {
-  sm: 20,
-  md: 20,
-  lg: 28,
-};
 
 export function SourceIcon({ kind, size = 'md' }: Props) {
   const px = SIZE_PX[size];
   const cls = SIZE_CLASS[size];
   const dbCls = DB_CHIP_CLASS[size];
-  const dbPx  = DB_INNER_PX[size];
 
   switch (kind) {
     case 'gdrive':
@@ -84,35 +71,33 @@ export function SourceIcon({ kind, size = 'md' }: Props) {
       return <KeyRound className={`${cls} text-slate-700 dark:text-slate-300`} />;
     case 'webdav':
       return <WebDavMark className={cls} />;
-    // Database types: solid brand-color chip, white icon — self-contained app-icon style.
+    // Database types: real brand icons from /icons/db/
     case 'mysql':
-      return <DbChip cls={dbCls} bg="#4479A1"><SiMysql size={dbPx} color="#ffffff" title="MySQL" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/mysql.svg" alt="MySQL" />;
     case 'postgresql':
-      return <DbChip cls={dbCls} bg="#336791"><SiPostgresql size={dbPx} color="#ffffff" title="PostgreSQL" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/postgres.svg" alt="PostgreSQL" />;
     case 'redis':
-      return <DbChip cls={dbCls} bg="#DC382D"><SiRedis size={dbPx} color="#ffffff" title="Redis" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/redis.svg" alt="Redis" />;
     case 'mongodb':
-      return <DbChip cls={dbCls} bg="#47A248"><SiMongodb size={dbPx} color="#ffffff" title="MongoDB" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/mongodb.svg" alt="MongoDB" />;
     case 'sqlite':
-      return <DbChip cls={dbCls} bg="#003B57"><SiSqlite size={dbPx} color="#ffffff" title="SQLite" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/sqlite.svg" alt="SQLite" />;
     case 'snowflake':
-      return <DbChip cls={dbCls} bg="#29B5E8"><SiSnowflake size={dbPx} color="#ffffff" title="Snowflake" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/snowflake.svg" alt="Snowflake" />;
     case 'clickhouse':
-      return <DbChip cls={dbCls} bg="#FFCC01"><SiClickhouse size={dbPx} color="#1a1a1a" title="ClickHouse" /></DbChip>;
+      return <DbIconImg cls={dbCls} src="/icons/db/clickhouse.svg" alt="ClickHouse" />;
     default:
       return <FolderIcon className={`${cls} text-slate-400 dark:text-slate-500`} />;
   }
 }
 
-/** Solid colored rounded chip that makes thin simple-icons legible at small sizes. */
-function DbChip({ cls, bg, children }: { cls: string; bg: string; children: React.ReactNode }) {
+function DbIconImg({ cls, src, alt }: { cls: string; src: string; alt: string }) {
   return (
-    <div
-      className={`${cls} flex flex-shrink-0 items-center justify-center rounded-md`}
-      style={{ backgroundColor: bg }}
-    >
-      {children}
-    </div>
+    <img
+      src={src}
+      alt={alt}
+      className={`${cls} flex-shrink-0 rounded-md object-contain`}
+    />
   );
 }
 
