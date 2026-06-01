@@ -20,7 +20,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  ArrowLeft,
+
   ChevronRight,
   Database,
   FileText,
@@ -66,7 +66,6 @@ type ScanState =
 
 export function FolderDetail() {
   const { folderId } = useParams<{ folderId: string }>();
-  const navigate = useNavigate();
   const toast = useToast();
   const { config } = useAgentStore();
   // Per-folder filter input lifted to the store so it survives
@@ -310,14 +309,6 @@ export function FolderDetail() {
   if (!folder) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-          <button
-            onClick={() => navigate('/sources')}
-            className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-          >
-            <ArrowLeft className="h-4 w-4" /> Back to sources
-          </button>
-        </div>
         <div className="flex-1 overflow-y-auto p-6">
           <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
             <p className="text-sm text-slate-600 dark:text-slate-400">
@@ -336,12 +327,6 @@ export function FolderDetail() {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-        <button
-          onClick={() => navigate('/sources')}
-          className="mb-3 inline-flex items-center gap-2 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> All sources
-        </button>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">

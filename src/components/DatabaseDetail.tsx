@@ -1,9 +1,9 @@
 // Database source detail page — /db/:sourceId
 
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { ArrowLeft, ChevronRight, Database, Loader2, Key, Link, List } from 'lucide-react';
+import { ChevronRight, Database, Loader2, Key, Link, List } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { legacyKindStringOf } from '../utils/sources';
 import { SourceIcon } from './SourceIcon';
@@ -55,7 +55,7 @@ function formatBytes(bytes: number): string {
 
 export function DatabaseDetail() {
   const { sourceId } = useParams<{ sourceId: string }>();
-  const navigate = useNavigate();
+
   const { config, setConfig } = useAgentStore();
 
   const decodedId = sourceId ? decodeURIComponent(sourceId) : '';
@@ -99,14 +99,6 @@ export function DatabaseDetail() {
   if (!source) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-          <button
-            onClick={() => navigate('/sources')}
-            className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-          >
-            <ArrowLeft className="h-4 w-4" /> Back to sources
-          </button>
-        </div>
         <div className="flex-1 overflow-y-auto p-6">
           <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
             <p className="text-sm text-slate-600 dark:text-slate-400">This source isn't connected.</p>
@@ -127,12 +119,6 @@ export function DatabaseDetail() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-        <button
-          onClick={() => navigate('/sources')}
-          className="mb-3 inline-flex items-center gap-2 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> All sources
-        </button>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
