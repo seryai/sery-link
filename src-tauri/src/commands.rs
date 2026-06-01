@@ -5614,13 +5614,22 @@ pub async fn profile_db_table(
 ) -> Result<DbTableProfile, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
 
-    // Sanitise table_name: only allow identifier characters so we can
-    // interpolate it safely into the SELECT below.
+    // Sanitise table_name before interpolation.
     if table_name.contains('\'') || table_name.contains(';') || table_name.contains("--") {
         return Err("Invalid table name".to_string());
     }
-    let escaped_table = table_name.replace('"', "\"\"");
-    let sql = format!("SELECT * FROM \"{escaped_table}\" LIMIT 1000");
+
+    // MySQL requires backtick quoting; every other dialect uses double-quotes.
+    let is_mysql = config.sources.iter().any(|s| {
+        s.id == source_id && matches!(s.kind, crate::sources::SourceKind::Mysql { .. })
+    });
+    let sql = if is_mysql {
+        let escaped = table_name.replace('`', "``");
+        format!("SELECT * FROM `{escaped}` LIMIT 1000")
+    } else {
+        let escaped = table_name.replace('"', "\"\"");
+        format!("SELECT * FROM \"{escaped}\" LIMIT 1000")
+    };
 
     let result = crate::db_engine::execute_db_query(&sql, &source_id, &config)
         .await
