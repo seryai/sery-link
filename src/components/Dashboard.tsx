@@ -90,11 +90,6 @@ export function Dashboard() {
   const maxCount  = Math.max(...dayCounts.map((d) => d.count), 1);
   const totalActivity = dayCounts.reduce((n, d) => n + d.count, 0);
 
-  // ── disk usage ────────────────────────────────────────────────────────────
-  const sourcesWithBytes = [...sources]
-    .filter((s) => (s.last_scan_stats?.total_bytes ?? 0) > 0)
-    .sort((a, b) => (b.last_scan_stats?.total_bytes ?? 0) - (a.last_scan_stats?.total_bytes ?? 0));
-
   // ── query stats ───────────────────────────────────────────────────────────
   const successRate =
     stats && stats.total_queries > 0
@@ -245,48 +240,6 @@ export function Dashboard() {
               })}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ── Disk usage ── */}
-      {sourcesWithBytes.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">
-            Disk usage
-          </h2>
-          <div className="space-y-2.5">
-            {sourcesWithBytes.map((source) => {
-              const bytes = source.last_scan_stats?.total_bytes ?? 0;
-              const pct   = totalBytes > 0 ? (bytes / totalBytes) * 100 : 0;
-              return (
-                <div key={source.id} className="flex items-center gap-3">
-                  <SourceIcon kind={legacyKindStringOf(source)} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">
-                        {source.name}
-                      </span>
-                      <span className="text-xs text-slate-400 dark:text-slate-500 ml-2 flex-shrink-0">
-                        {fmtBytes(bytes)}
-                      </span>
-                    </div>
-                    <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800">
-                      <div
-                        className="h-1.5 rounded-full bg-purple-400 dark:bg-purple-500"
-                        style={{ width: `${Math.max(pct, 0.5)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className="text-[11px] text-slate-400 dark:text-slate-500 w-8 text-right flex-shrink-0">
-                    {pct < 1 ? '<1' : Math.round(pct)}%
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <p className="mt-2 text-right text-xs text-slate-400 dark:text-slate-500">
-            {fmtBytes(totalBytes)} total
-          </p>
         </div>
       )}
 
