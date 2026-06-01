@@ -24,4 +24,5 @@ pub struct ColumnInfo {
     pub nullable: bool,
     pub is_primary_key: bool,
     pub default_value: Option<String>,
+    pub comment: Option<String>,
 }

@@ -825,7 +825,8 @@ pub async fn introspect_schema(pool: &PgPool, schema: &str) -> Result<Vec<TableI
                WHERE co.conrelid = a.attrelid AND co.contype = 'p' \
                AND a.attnum = ANY(i.indkey) \
              ) AS is_pk, \
-             (quote_ident(n.nspname) || '.' || quote_ident(c.relname)) AS table_fqn \
+             (quote_ident(n.nspname) || '.' || quote_ident(c.relname)) AS table_fqn, \
+             col_description(a.attrelid, a.attnum) AS column_comment \
              FROM pg_attribute a \
              JOIN pg_class c ON c.oid = a.attrelid \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
@@ -861,6 +862,7 @@ pub async fn introspect_schema(pool: &PgPool, schema: &str) -> Result<Vec<TableI
             nullable: row.try_get::<_, bool>(2).unwrap_or(true),
             default_value: row.try_get::<_, Option<String>>(3).ok().flatten(),
             is_primary_key: row.try_get::<_, bool>(4).unwrap_or(false),
+            comment: row.try_get::<_, Option<String>>(6).ok().flatten(),
         };
         tables.entry(table_name).or_default().push(col);
     }

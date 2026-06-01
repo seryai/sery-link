@@ -15,6 +15,7 @@ interface ColumnInfo {
   nullable: boolean;
   is_primary_key: boolean;
   default_value?: string;
+  comment?: string;
 }
 
 interface IndexInfo {
@@ -40,22 +41,13 @@ interface TableSchema {
   foreign_keys?: ForeignKeyInfo[];
 }
 
-interface ColumnProfile {
-  column_name: string;
-  null_percentage: number | null;
-  approx_unique: number | null;
-  min: string | null;
-  max: string | null;
-  avg: string | null;
-}
-
 interface DbTableProfile {
-  columns: ColumnProfile[];
+  columns: unknown[];
   sample_rows: Record<string, string>[];
   sample_size: number;
 }
 
-type ProfileState =
+type SampleState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'ok'; data: DbTableProfile }
@@ -74,26 +66,8 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function formatPercent(v: number | null): string {
-  if (v === null || v === undefined) return '—';
-  return `${v.toFixed(v < 1 ? 2 : 1)}%`;
-}
-
-function nullPctColor(v: number | null): string {
-  if (v === null) return 'text-slate-400 dark:text-slate-500';
-  if (v === 0) return 'text-emerald-600 dark:text-emerald-400';
-  if (v < 5) return 'text-amber-600 dark:text-amber-400';
-  return 'text-rose-600 dark:text-rose-400';
-}
-
-function truncate(s: string | null | undefined, max: number): string | null {
-  if (!s) return null;
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
 export function DatabaseDetail() {
   const { sourceId } = useParams<{ sourceId: string }>();
-
   const { config, setConfig } = useAgentStore();
 
   const decodedId = sourceId ? decodeURIComponent(sourceId) : '';
@@ -101,8 +75,7 @@ export function DatabaseDetail() {
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Profile data keyed by table_name — loaded lazily on first expand.
-  const [profiles, setProfiles] = useState<Map<string, ProfileState>>(new Map());
+  const [samples, setSamples] = useState<Map<string, SampleState>>(new Map());
 
   useEffect(() => {
     if (!decodedId) return;
@@ -125,29 +98,17 @@ export function DatabaseDetail() {
     return () => { cancelled = true; };
   }, [decodedId]);
 
-  const loadProfile = (tableName: string) => {
-    setProfiles((prev) => {
+  const loadSample = (tableName: string) => {
+    setSamples((prev) => {
       const existing = prev.get(tableName);
-      if (existing && existing.kind !== 'idle') return prev; // already loading or loaded
+      if (existing && existing.kind !== 'idle') return prev;
       const next = new Map(prev);
       next.set(tableName, { kind: 'loading' });
       return next;
     });
     invoke<DbTableProfile>('profile_db_table', { sourceId: decodedId, tableName })
-      .then((data) => {
-        setProfiles((prev) => {
-          const next = new Map(prev);
-          next.set(tableName, { kind: 'ok', data });
-          return next;
-        });
-      })
-      .catch((err) => {
-        setProfiles((prev) => {
-          const next = new Map(prev);
-          next.set(tableName, { kind: 'error', message: String(err) });
-          return next;
-        });
-      });
+      .then((data) => setSamples((prev) => { const m = new Map(prev); m.set(tableName, { kind: 'ok', data }); return m; }))
+      .catch((err) => setSamples((prev) => { const m = new Map(prev); m.set(tableName, { kind: 'error', message: String(err) }); return m; }));
   };
 
   const toggleTable = (tableName: string) => {
@@ -157,7 +118,7 @@ export function DatabaseDetail() {
         next.delete(tableName);
       } else {
         next.add(tableName);
-        loadProfile(tableName);
+        loadSample(tableName);
       }
       return next;
     });
@@ -177,37 +138,26 @@ export function DatabaseDetail() {
   }
 
   const iconKind = legacyKindStringOf(source);
-
-  const totalSize =
-    state.kind === 'ok'
-      ? state.tables.reduce((sum, t) => sum + (t.size_bytes ?? 0), 0)
-      : 0;
+  const totalSize = state.kind === 'ok'
+    ? state.tables.reduce((sum, t) => sum + (t.size_bytes ?? 0), 0)
+    : 0;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
-              <SourceIcon kind={iconKind} size="lg" />
-              <span className="truncate">{source.name}</span>
-            </h1>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              <span className="font-medium capitalize text-slate-600 dark:text-slate-300">
-                {source.kind.kind}
-              </span>
-              {state.kind === 'ok' && (
-                <span>
-                  {' '}&middot; {state.tables.length}{' '}
-                  {state.tables.length === 1 ? 'table' : 'tables'}
-                  {totalSize > 0 && (
-                    <> &middot; {formatBytes(totalSize)}</>
-                  )}
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
+        <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900 dark:text-slate-50">
+          <SourceIcon kind={iconKind} size="lg" />
+          <span className="truncate">{source.name}</span>
+        </h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          <span className="font-medium capitalize text-slate-600 dark:text-slate-300">{source.kind.kind}</span>
+          {state.kind === 'ok' && (
+            <span>
+              {' '}&middot; {state.tables.length} {state.tables.length === 1 ? 'table' : 'tables'}
+              {totalSize > 0 && <> &middot; {formatBytes(totalSize)}</>}
+            </span>
+          )}
+        </p>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -217,20 +167,17 @@ export function DatabaseDetail() {
             Loading schema…
           </div>
         )}
-
         {state.kind === 'error' && (
           <div className="rounded-md border border-rose-300 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
             <p className="font-medium">Could not load schema</p>
             <p className="mt-1">{state.message}</p>
           </div>
         )}
-
         {state.kind === 'ok' && state.tables.length === 0 && (
           <div className="rounded-lg border-2 border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
             <p className="text-sm text-slate-600 dark:text-slate-400">No tables found in this database.</p>
           </div>
         )}
-
         {state.kind === 'ok' && state.tables.length > 0 && (
           <div className="space-y-1">
             {state.tables.map((table) => {
@@ -238,13 +185,13 @@ export function DatabaseDetail() {
               const pkCols = table.columns.filter((c) => c.is_primary_key);
               const fkCount = table.foreign_keys?.length ?? 0;
               const idxCount = table.indexes?.length ?? 0;
-              const profile = profiles.get(table.table_name) ?? { kind: 'idle' };
+              const sample = samples.get(table.table_name) ?? { kind: 'idle' };
+              // whether any column has a comment
+              const hasComments = table.columns.some((c) => c.comment);
 
               return (
-                <div
-                  key={table.table_name}
-                  className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
-                >
+                <div key={table.table_name} className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                  {/* Table header row */}
                   <button
                     onClick={() => toggleTable(table.table_name)}
                     className="group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60"
@@ -255,26 +202,15 @@ export function DatabaseDetail() {
                         {table.table_name}
                       </span>
                       <span className="ml-2 text-xs text-slate-400 dark:text-slate-500">
-                        {table.columns.length}{' '}
-                        {table.columns.length === 1 ? 'col' : 'cols'}
-                        {table.size_bytes != null && table.size_bytes > 0 && (
-                          <> &middot; {formatBytes(table.size_bytes)}</>
-                        )}
-                        {table.row_count_estimate != null && (
-                          <> &middot; ~{table.row_count_estimate.toLocaleString()} rows</>
-                        )}
-                        {idxCount > 0 && (
-                          <> &middot; {idxCount} {idxCount === 1 ? 'index' : 'indexes'}</>
-                        )}
-                        {fkCount > 0 && (
-                          <> &middot; {fkCount} FK</>
-                        )}
+                        {table.columns.length} {table.columns.length === 1 ? 'col' : 'cols'}
+                        {table.size_bytes != null && table.size_bytes > 0 && <> &middot; {formatBytes(table.size_bytes)}</>}
+                        {table.row_count_estimate != null && <> &middot; ~{table.row_count_estimate.toLocaleString()} rows</>}
+                        {idxCount > 0 && <> &middot; {idxCount} {idxCount === 1 ? 'index' : 'indexes'}</>}
+                        {fkCount > 0 && <> &middot; {fkCount} FK</>}
                       </span>
                     </div>
                     <ChevronRight
-                      className={`h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:text-purple-500 dark:text-slate-600 ${
-                        isOpen ? 'rotate-90' : ''
-                      }`}
+                      className={`h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:text-purple-500 dark:text-slate-600 ${isOpen ? 'rotate-90' : ''}`}
                       strokeWidth={1.5}
                     />
                   </button>
@@ -282,117 +218,57 @@ export function DatabaseDetail() {
                   {isOpen && (
                     <div className="border-t border-slate-100 dark:border-slate-800">
 
-                      {/* Column profile table */}
+                      {/* Column structure table */}
                       <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50 text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
-                            <tr>
-                              <th className="px-4 py-2 text-left text-xs font-medium">Name</th>
-                              <th className="px-4 py-2 text-left text-xs font-medium">Type</th>
-                              <th className="px-4 py-2 text-right text-xs font-medium" title="% of rows where this column is null">Empty</th>
-                              <th className="px-4 py-2 text-right text-xs font-medium">Unique</th>
-                              <th className="px-4 py-2 text-right text-xs font-medium">Min</th>
-                              <th className="px-4 py-2 text-right text-xs font-medium">Max</th>
-                              <th className="px-4 py-2 text-right text-xs font-medium">Avg</th>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 dark:bg-slate-800/50">
+                              <th className="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Column</th>
+                              <th className="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Type</th>
+                              <th className="px-4 py-2 text-center font-medium text-slate-500 dark:text-slate-400">Null</th>
+                              <th className="px-4 py-2 text-center font-medium text-slate-500 dark:text-slate-400">PK</th>
+                              <th className="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Default</th>
+                              {hasComments && (
+                                <th className="px-4 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Comment</th>
+                              )}
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                            {table.columns.map((col) => {
-                              const stats = profile.kind === 'ok'
-                                ? profile.data.columns.find((p) => p.column_name === col.name)
-                                : undefined;
-                              const loading = profile.kind === 'loading';
-
-                              return (
-                                <tr key={col.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                  <td className="px-4 py-1.5 font-mono text-xs text-slate-900 dark:text-slate-100">
-                                    {col.is_primary_key && (
-                                      <Key className="mr-1 inline h-3 w-3 text-amber-500" />
-                                    )}
-                                    {col.name}
+                            {table.columns.map((col) => (
+                              <tr key={col.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                <td className="px-4 py-1.5 font-mono font-medium text-slate-800 dark:text-slate-100">
+                                  {col.name}
+                                </td>
+                                <td className="px-4 py-1.5 font-mono text-slate-500 dark:text-slate-400">
+                                  {col.data_type}
+                                </td>
+                                <td className="px-4 py-1.5 text-center">
+                                  {col.nullable
+                                    ? <span className="text-amber-500">✓</span>
+                                    : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                                </td>
+                                <td className="px-4 py-1.5 text-center">
+                                  {col.is_primary_key
+                                    ? <Key className="inline h-3 w-3 text-amber-500" />
+                                    : <span className="text-slate-300 dark:text-slate-600">—</span>}
+                                </td>
+                                <td className="max-w-[160px] truncate px-4 py-1.5 font-mono text-slate-400 dark:text-slate-500" title={col.default_value}>
+                                  {col.default_value ?? <span className="text-slate-300 dark:text-slate-600">—</span>}
+                                </td>
+                                {hasComments && (
+                                  <td className="max-w-[200px] truncate px-4 py-1.5 text-slate-500 dark:text-slate-400" title={col.comment}>
+                                    {col.comment ?? ''}
                                   </td>
-                                  <td className="px-4 py-1.5 font-mono text-xs text-slate-500 dark:text-slate-400">
-                                    {col.data_type}
-                                    {col.nullable && (
-                                      <span className="ml-1 text-[10px] text-slate-300 dark:text-slate-600">?</span>
-                                    )}
-                                  </td>
-                                  <td className={`px-4 py-1.5 text-right text-xs tabular-nums ${nullPctColor(stats?.null_percentage ?? null)}`}>
-                                    {stats ? formatPercent(stats.null_percentage) : loading ? '…' : '—'}
-                                  </td>
-                                  <td className="px-4 py-1.5 text-right text-xs tabular-nums text-slate-600 dark:text-slate-400">
-                                    {stats?.approx_unique != null ? stats.approx_unique.toLocaleString() : loading ? '…' : '—'}
-                                  </td>
-                                  <td className="px-4 py-1.5 text-right font-mono text-xs text-slate-500 dark:text-slate-400">
-                                    {stats ? (truncate(stats.min, 20) ?? '—') : loading ? '…' : '—'}
-                                  </td>
-                                  <td className="px-4 py-1.5 text-right font-mono text-xs text-slate-500 dark:text-slate-400">
-                                    {stats ? (truncate(stats.max, 20) ?? '—') : loading ? '…' : '—'}
-                                  </td>
-                                  <td className="px-4 py-1.5 text-right font-mono text-xs text-slate-500 dark:text-slate-400">
-                                    {stats ? (truncate(stats.avg, 12) ?? '—') : loading ? '…' : '—'}
-                                  </td>
-                                </tr>
-                              );
-                            })}
+                                )}
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
                       </div>
 
-                      {/* Profile loading / error states */}
-                      {profile.kind === 'loading' && (
-                        <div className="flex items-center gap-1.5 border-t border-slate-100 px-4 py-2 text-xs text-slate-400 dark:border-slate-800 dark:text-slate-500">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Computing stats from sample…
-                        </div>
-                      )}
-                      {profile.kind === 'error' && (
-                        <div className="border-t border-rose-200 bg-rose-50 px-4 py-2 text-[11px] text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
-                          Couldn't load stats: {profile.message}
-                        </div>
-                      )}
-                      {profile.kind === 'ok' && (
-                        <div className="border-t border-slate-100 px-4 py-1 text-[11px] text-slate-400 dark:border-slate-800 dark:text-slate-500">
-                          Stats from first {profile.data.sample_size.toLocaleString()} rows
-                        </div>
-                      )}
-
-                      {/* Sample rows */}
-                      {profile.kind === 'ok' && profile.data.sample_rows.length > 0 && (
-                        <div className="border-t border-slate-100 dark:border-slate-800">
-                          <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
-                            Sample rows
-                          </div>
-                          <div className="overflow-x-auto pb-2">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="bg-slate-50 dark:bg-slate-800/50">
-                                  {table.columns.map((col) => (
-                                    <th key={col.name} className="px-3 py-1.5 text-left font-mono font-medium text-slate-500 dark:text-slate-400">
-                                      {col.name}
-                                    </th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                {profile.data.sample_rows.map((row, ri) => (
-                                  <tr key={ri} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                                    {table.columns.map((col) => (
-                                      <td key={col.name} className="max-w-[160px] truncate px-3 py-1 text-slate-700 dark:text-slate-300" title={row[col.name]}>
-                                        {row[col.name] ?? <span className="text-slate-300 dark:text-slate-600">null</span>}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-
                       {/* Indexes */}
-                      {(table.indexes?.length ?? 0) > 0 && (
-                        <div className="border-t border-slate-100 px-4 pt-2 pb-2 dark:border-slate-800">
+                      {idxCount > 0 && (
+                        <div className="border-t border-slate-100 px-4 py-2 dark:border-slate-800">
                           <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
                             <List className="h-3 w-3" /> Indexes
                           </p>
@@ -400,34 +276,24 @@ export function DatabaseDetail() {
                             <div key={idx.name} className="flex items-center gap-2 py-0.5 text-xs">
                               <span className="font-mono text-slate-600 dark:text-slate-300">{idx.name}</span>
                               <span className="text-slate-400">({idx.columns.join(', ')})</span>
-                              {idx.unique && (
-                                <span className="rounded bg-blue-50 px-1 text-[10px] text-blue-500 dark:bg-blue-900/30 dark:text-blue-400">
-                                  UNIQUE
-                                </span>
-                              )}
+                              {idx.unique && <span className="rounded bg-blue-50 px-1 text-[10px] text-blue-500 dark:bg-blue-900/30 dark:text-blue-400">UNIQUE</span>}
                             </div>
                           ))}
                         </div>
                       )}
 
                       {/* Foreign keys */}
-                      {(table.foreign_keys?.length ?? 0) > 0 && (
-                        <div className="border-t border-slate-100 px-4 pt-2 pb-2 dark:border-slate-800">
+                      {fkCount > 0 && (
+                        <div className="border-t border-slate-100 px-4 py-2 dark:border-slate-800">
                           <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
                             <Link className="h-3 w-3" /> Foreign Keys
                           </p>
                           {table.foreign_keys!.map((fk) => (
                             <div key={fk.name} className="py-0.5 text-xs text-slate-500 dark:text-slate-400">
-                              <span className="font-mono text-slate-600 dark:text-slate-300">
-                                ({fk.columns.join(', ')})
-                              </span>
+                              <span className="font-mono text-slate-600 dark:text-slate-300">({fk.columns.join(', ')})</span>
                               {' → '}
-                              <span className="font-mono text-purple-500 dark:text-purple-400">
-                                {fk.ref_table}
-                              </span>
-                              <span className="font-mono text-slate-400">
-                                ({fk.ref_columns.join(', ')})
-                              </span>
+                              <span className="font-mono text-purple-500 dark:text-purple-400">{fk.ref_table}</span>
+                              <span className="font-mono text-slate-400">({fk.ref_columns.join(', ')})</span>
                             </div>
                           ))}
                         </div>
@@ -436,11 +302,52 @@ export function DatabaseDetail() {
                       {/* PK summary */}
                       {pkCols.length > 0 && (
                         <div className="border-t border-slate-100 px-4 py-1 dark:border-slate-800">
-                          <span className="text-[10px] text-amber-500">
-                            PK: {pkCols.map((c) => c.name).join(', ')}
-                          </span>
+                          <span className="text-[10px] text-amber-500">PK: {pkCols.map((c) => c.name).join(', ')}</span>
                         </div>
                       )}
+
+                      {/* Sample rows */}
+                      <div className="border-t border-slate-100 dark:border-slate-800">
+                        <div className="flex items-center gap-1.5 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                          Sample rows
+                          {sample.kind === 'loading' && <Loader2 className="h-3 w-3 animate-spin" />}
+                        </div>
+                        {sample.kind === 'error' && (
+                          <p className="px-4 pb-2 text-[11px] text-rose-600 dark:text-rose-400">{sample.message}</p>
+                        )}
+                        {sample.kind === 'ok' && sample.data.sample_rows.length === 0 && (
+                          <p className="px-4 pb-2 text-xs text-slate-400 dark:text-slate-500">No rows found.</p>
+                        )}
+                        {sample.kind === 'ok' && sample.data.sample_rows.length > 0 && (
+                          <div className="overflow-x-auto pb-2">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="bg-slate-50 dark:bg-slate-800/50">
+                                  {table.columns.map((col) => (
+                                    <th key={col.name} className="px-3 py-1.5 text-left font-mono font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                                      {col.name}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {sample.data.sample_rows.map((row, ri) => (
+                                  <tr key={ri} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                                    {table.columns.map((col) => (
+                                      <td key={col.name} className="max-w-[160px] truncate px-3 py-1 text-slate-700 dark:text-slate-300 whitespace-nowrap" title={row[col.name]}>
+                                        {row[col.name] !== '' && row[col.name] !== undefined
+                                          ? row[col.name]
+                                          : <span className="text-slate-300 dark:text-slate-600">null</span>}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+
                     </div>
                   )}
                 </div>

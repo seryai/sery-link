@@ -213,6 +213,7 @@ fn db_core_table_info_to_schema(t: db_core::types::TableInfo) -> TableSchema {
             nullable: c.nullable,
             is_primary_key: c.is_primary_key,
             default_value: c.default_value,
+            comment: c.comment,
         }).collect(),
         row_count_estimate: t.row_count_estimate.map(|v| v as i64),
         size_bytes: t.size_bytes.map(|v| v as i64),
@@ -232,6 +233,8 @@ pub struct ColumnInfo {
     pub is_primary_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -677,10 +680,10 @@ pub async fn introspect_schema(
             return Ok(vec![TableSchema {
                 table_name: "keys".to_string(),
                 columns: vec![
-                    ColumnInfo { name: "key".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: true, default_value: None },
-                    ColumnInfo { name: "value".to_string(), data_type: "TEXT".to_string(), nullable: true, is_primary_key: false, default_value: None },
-                    ColumnInfo { name: "value_type".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: false, default_value: None },
-                    ColumnInfo { name: "ttl".to_string(), data_type: "INTEGER".to_string(), nullable: false, is_primary_key: false, default_value: None },
+                    ColumnInfo { name: "key".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: true, default_value: None, comment: None },
+                    ColumnInfo { name: "value".to_string(), data_type: "TEXT".to_string(), nullable: true, is_primary_key: false, default_value: None, comment: None },
+                    ColumnInfo { name: "value_type".to_string(), data_type: "TEXT".to_string(), nullable: false, is_primary_key: false, default_value: None, comment: None },
+                    ColumnInfo { name: "ttl".to_string(), data_type: "INTEGER".to_string(), nullable: false, is_primary_key: false, default_value: None, comment: None },
                 ],
                 row_count_estimate: None,
                 size_bytes: None,
@@ -843,6 +846,7 @@ fn introspect_blocking(
             nullable: nullable.to_ascii_uppercase() == "YES",
             is_primary_key: is_pk,
             default_value,
+            comment: None,
         });
     }
 
@@ -1297,6 +1301,7 @@ fn introspect_clickhouse_blocking(
             nullable: is_pk == "0",
             is_primary_key: is_pk == "1",
             default_value: None,
+            comment: None,
         });
     }
     Ok(tables.into_iter().map(|(table_name, columns)| TableSchema {
@@ -1472,7 +1477,7 @@ async fn introspect_mongodb(
 
         let columns: Vec<ColumnInfo> = field_map
             .into_iter()
-            .map(|(name, data_type)| ColumnInfo { name, data_type, nullable: true, is_primary_key: false, default_value: None })
+            .map(|(name, data_type)| ColumnInfo { name, data_type, nullable: true, is_primary_key: false, default_value: None, comment: None })
             .collect();
 
         tables.push(TableSchema { table_name: coll_name, columns, row_count_estimate: None, size_bytes: None, indexes: vec![], foreign_keys: vec![] });

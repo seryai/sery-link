@@ -856,7 +856,8 @@ pub async fn execute_query(pool: &MySqlPool, sql: &str, max_rows: usize) -> Resu
 pub async fn introspect_schema(pool: &MySqlPool, database: &str) -> Result<Vec<TableInfo>, String> {
     let columns_sql = format!(
         "SELECT c.TABLE_NAME, c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT, \
-         CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS is_pk \
+         CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS is_pk, \
+         c.COLUMN_COMMENT \
          FROM information_schema.COLUMNS c \
          LEFT JOIN information_schema.KEY_COLUMN_USAGE pk \
            ON pk.TABLE_SCHEMA = c.TABLE_SCHEMA \
@@ -880,6 +881,10 @@ pub async fn introspect_schema(pool: &MySqlPool, database: &str) -> Result<Vec<T
         let nullable = get_str(row, 3) == "YES";
         let default_value: Option<String> = row.get_opt::<Option<String>, _>(4).and_then(|r| r.ok()).flatten();
         let is_pk = row.get::<i32, &str>("is_pk").unwrap_or(0) == 1;
+        let comment: Option<String> = row.get_opt::<Option<String>, _>(6)
+            .and_then(|r| r.ok())
+            .flatten()
+            .filter(|s| !s.is_empty());
 
         tables.entry(table_name).or_default().push(ColumnInfo {
             name: col_name,
@@ -887,6 +892,7 @@ pub async fn introspect_schema(pool: &MySqlPool, database: &str) -> Result<Vec<T
             nullable,
             is_primary_key: is_pk,
             default_value,
+            comment,
         });
     }
 
