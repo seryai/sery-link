@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Download, Loader2, RefreshCw, X } from 'lucide-react';
+import { SourceIcon } from './SourceIcon';
 import { useToast } from './Toast';
 
 // ──────────── Type definitions ────────────
@@ -339,9 +340,8 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
                     key={driver.db_type}
                     className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/40 transition-colors"
                   >
-                    {/* Icon placeholder */}
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/60 text-[11px] font-mono text-muted-foreground">
-                      {driver.db_type.slice(0, 2).toUpperCase()}
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+                      <SourceIcon kind={driver.db_type} size="sm" />
                     </div>
 
                     {/* Label + meta */}
