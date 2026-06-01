@@ -668,8 +668,11 @@ function PickerStage({
               onClick={() => handleTile(tile.kind as AnyKind)}
             />
           ))}
-        {/* Installed JDBC driver tiles — only shown in Databases tab */}
-        {cat.label === 'Databases' && installedDrivers.map(d => (
+        {/* Installed JDBC driver tiles — only shown in Databases tab.
+            Skip drivers that already have a native tile (mysql, postgresql, etc.) */}
+        {cat.label === 'Databases' && installedDrivers
+          .filter(d => !new Set(['mysql','postgresql','snowflake','clickhouse','mongodb','redis','sqlite']).has(d.db_type))
+          .map(d => (
           <button
             key={`agent_db:${d.db_type}`}
             disabled={busy}
