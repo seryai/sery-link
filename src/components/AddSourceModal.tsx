@@ -677,15 +677,13 @@ function PickerStage({
             key={`agent_db:${d.db_type}`}
             disabled={busy}
             onClick={() => onPickAgentDb(d.db_type)}
-            className="flex flex-col items-start gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-left shadow-sm transition-all hover:border-purple-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex flex-col items-center gap-2 rounded-md border border-slate-200 bg-white p-2.5 text-center shadow-sm transition-all hover:border-purple-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <SourceIcon kind={d.db_type} size="md" />
-            <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 leading-tight">
-              {d.label}
-            </span>
-            <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight">
-              JDBC driver
-            </span>
+            <div className="flex h-10 w-10 items-center justify-center">
+              <SourceIcon kind={d.db_type} size="lg" />
+            </div>
+            <div className="text-sm font-medium">{d.label}</div>
+            <div className="text-xs leading-tight text-slate-500 dark:text-slate-400">JDBC driver</div>
           </button>
         ))}
       </div>
