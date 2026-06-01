@@ -2224,7 +2224,6 @@ function ProtocolCard({
   const iconKind = legacyIconKindForTile(tile.kind);
   const presetKind = s3CompatiblePreset(tile.kind);
   const isComingSoon = onClick === undefined;
-  const isDbKind = ['mysql','postgresql','snowflake','clickhouse','mongodb','redis','sqlite'].includes(tile.kind);
   return (
     <button
       type="button"
@@ -2239,17 +2238,9 @@ function ProtocolCard({
       }`}
       title={isComingSoon ? `${tile.label} — coming in v0.7+` : tile.label}
     >
-      <div
-        className={`flex h-10 w-10 items-center justify-center rounded-md ${
-          isDbKind
-            ? ''
-            : isComingSoon
-              ? 'bg-slate-100 dark:bg-slate-800'
-              : 'bg-slate-100 dark:bg-slate-700'
-        }`}
-      >
+      <div className="flex h-10 w-10 items-center justify-center">
         {presetKind ? (
-          <PresetSourceIcon preset={presetKind} size="md" />
+          <PresetSourceIcon preset={presetKind} size="lg" />
         ) : iconKind ? (
           <SourceIcon kind={iconKind} size="lg" />
         ) : (
