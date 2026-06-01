@@ -17,7 +17,6 @@ import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Loader2,
-  MoreVertical,
   Plus,
   RefreshCw,
   Search,
@@ -784,24 +783,6 @@ function SourceRow({
           </span>
         )}
       </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          // Treat the kebab click as a context-menu request at the
-          // button's position so the same menu opens.
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          onContextMenu({
-            ...e,
-            clientX: rect.left,
-            clientY: rect.bottom,
-            preventDefault: () => {},
-          } as unknown as React.MouseEvent);
-        }}
-        className="flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity hover:bg-slate-200 group-hover:opacity-100 dark:hover:bg-slate-700"
-        aria-label="Source actions"
-      >
-        <MoreVertical className="h-4 w-4 text-slate-500" />
-      </button>
     </div>
   );
 }
