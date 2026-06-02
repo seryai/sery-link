@@ -5,6 +5,19 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.5] — 2026-06-02
+
+### Added
+
+- **`files.rescan_dataset` RPC command** — dashboard can now trigger a rescan of a single file from the network file detail page; re-extracts metadata and syncs sample rows back to the cloud.
+
+### Fixed
+
+- **S3 tunnel queries failing with `{{file}} placeholder` error** — datasets with a bare `s3://` query path (no `local://` wrapper) were rejected by the SQL security gate; now routed directly to the remote executor with httpfs + credentials.
+- **Non-UTF-8 CSV files crashing stats and row preview** — remote CSV count and sample queries now pass `ignore_errors=true` to DuckDB, matching the local read path.
+
+---
+
 ## [0.12.4] — 2026-06-01
 
 ### Added
