@@ -325,7 +325,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto py-4">
           {tab === 'drivers' && (
             <div className="space-y-1">
               {drivers.length === 0 && (
@@ -404,7 +404,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
           )}
 
           {tab === 'runtime' && (
-            <div className="space-y-6 max-w-md">
+            <div className="space-y-6 max-w-md px-5">
               <div className="space-y-3">
                 <label className="text-sm font-medium">Java Runtime Mode</label>
                 <div className="space-y-2">
