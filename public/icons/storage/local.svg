@@ -1,3 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="#7C3AED" d="M10 4H4c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/>
+  <defs>
+    <linearGradient id="folderBack" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5BA4F5"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="folderFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#93C5FD"/>
+      <stop offset="100%" stop-color="#60A5FA"/>
+    </linearGradient>
+  </defs>
+  <!-- back panel + tab -->
+  <path fill="url(#folderBack)" d="M2 7.5C2 6.67 2.67 6 3.5 6h5.09l1.41 1.5H20.5c.83 0 1.5.67 1.5 1.5V18.5c0 .83-.67 1.5-1.5 1.5h-17C2.67 20 2 19.33 2 18.5V7.5z"/>
+  <!-- front lighter face -->
+  <path fill="url(#folderFront)" d="M2 9.5C2 8.67 2.67 8 3.5 8h17c.83 0 1.5.67 1.5 1.5v9c0 .83-.67 1.5-1.5 1.5h-17C2.67 20 2 19.33 2 18.5v-9z"/>
 </svg>
