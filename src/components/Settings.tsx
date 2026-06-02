@@ -260,7 +260,7 @@ export function Settings() {
         {tab === 'sync' && <SyncPanel draft={draft} setDraft={setDraft} />}
         {tab === 'mcp' && <McpPanel draft={draft} setDraft={setDraft} />}
         {tab === 'storage' && (
-          <div className="space-y-4">
+          <div className="space-y-6">
             <StoragePanel />
             <DriverStoreDialog open={true} onClose={() => {}} embedded />
           </div>
