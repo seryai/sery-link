@@ -504,6 +504,7 @@ export function FolderDetail() {
       <VirtualizedDatasetList
         filtered={filtered}
         scanRunning={scanState.kind !== 'idle'}
+        cacheLoading={cacheLoading}
         search={search}
         folderPath={folderPath}
         sort={sort}
@@ -521,6 +522,7 @@ const GRID_COLS = 'grid-cols-[1fr_4.5rem_5.5rem_3.5rem_5rem_6.5rem]';
 function VirtualizedDatasetList({
   filtered,
   scanRunning,
+  cacheLoading,
   search,
   folderPath,
   sort,
@@ -528,6 +530,7 @@ function VirtualizedDatasetList({
 }: {
   filtered: DatasetMetadata[];
   scanRunning: boolean;
+  cacheLoading: boolean;
   search: string;
   folderPath: string;
   sort: FolderSort;
