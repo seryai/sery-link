@@ -22,7 +22,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowDown,
   ArrowUpDown,
-  Database,
+  FileSpreadsheet,
   FileText,
   Loader2,
   RefreshCw,
@@ -644,7 +644,7 @@ function DatasetRow({ dataset, onOpen }: { dataset: DatasetMetadata; onOpen: () 
           ? <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
           : isDbTable
             ? <Table2 className="h-3.5 w-3.5 shrink-0 text-blue-500 dark:text-blue-400" />
-            : <Database className="h-3.5 w-3.5 shrink-0 text-purple-500 dark:text-purple-400" />
+            : <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-emerald-500 dark:text-emerald-400" />
         }
         <span className="truncate text-sm text-slate-800 dark:text-slate-100">
           {dataset.relative_path}
