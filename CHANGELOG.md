@@ -5,6 +5,28 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.4] — 2026-06-01
+
+### Added
+
+- **ODS, JSON, XML, ODP, ODT, PPT, RTF file support** — scanner now indexes these formats; JSON and ODS get full schema extraction, ODP/ODT/PPT/RTF get content extraction, XML is shallow-scanned.
+- **Unsupported files shown as shallow entries** — zip, exe, and other non-indexable files appear in the file list with metadata (size, format); clicking shows "not supported" instead of an error.
+- **macOS-style blue folder icon** — local folder sources now use a two-layer blue folder icon matching macOS Finder.
+
+### Fixed
+
+- **S3/HTTPS sources showing "Never scanned"** — scan stats were only written for local sources; now also written for S3 and HTTPS sources after each rescan.
+- **Duplicate concurrent remote scans** — `rescan_source_by_id` now holds a per-source lock so autoscan timer and watcher can't both scan the same source simultaneously.
+- **Watcher fallback log spam** — removed per-tick `[watcher] fallback rescan` and `unchanged (hash match)` log lines that fired every 60 s even for unchanged folders.
+- **6× redundant `get_cached` calls after scan** — `scan_complete` handler in FolderDetail is now debounced 200 ms so rapid-fire events collapse to one cache read.
+- **Analytics 400 errors in dev** — when `api_url` is localhost, analytics pings are routed to the local API instead of the unreachable prod `analytics.sery.ai` domain.
+- **Settings storage tab: driver list width mismatch** — embedded DriverStoreDialog now uses the same `rounded-xl border` card as StoragePanel, with matching padding and a gap between sections.
+- **Tokio panic on scanner rayon threads** — replaced bare `tokio::spawn` with `Handle::try_current()` guard.
+- **CSV encoding errors in remote scan** — S3 DESCRIBE queries now use `ignore_errors=true` for CSVs.
+- **dead_code warning for `is_supported`** — marked `#[cfg(test)]` since `is_always_skip` replaced it in production.
+
+---
+
 ## [0.12.3] — 2026-06-01
 
 ### Fixed
