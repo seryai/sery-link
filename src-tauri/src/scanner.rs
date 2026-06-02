@@ -109,8 +109,8 @@ pub enum ScanTier {
 fn default_tier_for(ext: &str) -> ScanTier {
     match ext {
         "parquet" | "csv" | "xlsx" | "ods" | "json" => ScanTier::Full,
-        "docx" | "pptx" | "pdf" | "odt" | "odp" | "ppt" | "rtf" => ScanTier::Content,
-        "html" | "htm" | "ipynb" | "xml" => ScanTier::Shallow,
+        "docx" | "pptx" | "pdf" | "odt" | "odp" | "ppt" | "rtf" | "html" | "htm" => ScanTier::Content,
+        "ipynb" | "xml" => ScanTier::Shallow,
         _ => ScanTier::Shallow,
     }
 }
@@ -1951,17 +1951,21 @@ mod tier_tests {
     }
 
     #[test]
-    fn html_and_ipynb_default_to_shallow() {
-        // These extensions are typically dumped in bulk (saved web pages,
-        // exported notebooks) and the user rarely cares about indexed
-        // content. Shallow by default keeps the wall time honest.
-        for ext in ["html", "htm", "ipynb"] {
+    fn html_defaults_to_content() {
+        // mdkit has a pure-Rust html2md extractor so HTML gets full
+        // content extraction without Pandoc.
+        for ext in ["html", "htm"] {
             assert_eq!(
                 default_tier_for(ext),
-                ScanTier::Shallow,
-                "{ext} should be Shallow"
+                ScanTier::Content,
+                "{ext} should be Content"
             );
         }
+    }
+
+    #[test]
+    fn ipynb_defaults_to_shallow() {
+        assert_eq!(default_tier_for("ipynb"), ScanTier::Shallow);
     }
 
     #[test]
