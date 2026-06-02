@@ -75,7 +75,14 @@ pub fn xlsx_to_csv(xlsx_path: &Path) -> Result<PathBuf> {
     }
 
     // Atomic rename so concurrent readers never see a half-written CSV.
-    fs::rename(&tmp_path, &cache_path).map_err(AgentError::Io)?;
+    fs::rename(&tmp_path, &cache_path).map_err(|e| {
+        AgentError::FileSystem(format!(
+            "rename {} -> {}: {}",
+            tmp_path.display(),
+            cache_path.display(),
+            e
+        ))
+    })?;
 
     Ok(cache_path)
 }

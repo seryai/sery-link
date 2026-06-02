@@ -79,7 +79,25 @@ pub fn csv_to_parquet(csv_path: &Path) -> Result<PathBuf> {
         );
         match conn.execute(&sql, []) {
             Ok(_) => {
-                fs::rename(&tmp_path, &cache_path).map_err(AgentError::Io)?;
+                // Guard: verify DuckDB actually created the file before
+                // attempting rename — DuckDB 1.1 can return Ok(0) on COPY
+                // even when the output file was not written (e.g. when the
+                // parent dir is concurrently removed).
+                if !tmp_path.exists() {
+                    last_err = Some(format!(
+                        "DuckDB COPY returned Ok but output file does not exist: {}",
+                        tmp_path.display()
+                    ));
+                    continue;
+                }
+                fs::rename(&tmp_path, &cache_path).map_err(|e| {
+                    AgentError::FileSystem(format!(
+                        "rename {} -> {}: {}",
+                        tmp_path.display(),
+                        cache_path.display(),
+                        e
+                    ))
+                })?;
                 return Ok(cache_path);
             }
             Err(e) => {

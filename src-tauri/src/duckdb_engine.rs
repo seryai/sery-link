@@ -291,8 +291,10 @@ fn
     let (effective_path, effective_ext): (Cow<str>, &str) = match file_ext {
         "xlsx" | "xls" => {
             let csv = excel::xlsx_to_csv(Path::new(file_path))?;
-            let parquet = crate::csv::csv_to_parquet(&csv)?;
-            (Cow::Owned(parquet.to_string_lossy().to_string()), "parquet")
+            match crate::csv::csv_to_parquet(&csv) {
+                Ok(parquet) => (Cow::Owned(parquet.to_string_lossy().to_string()), "parquet"),
+                Err(_) => (Cow::Owned(csv.to_string_lossy().to_string()), "csv"),
+            }
         },
         "csv" => {
             let parquet = crate::csv::csv_to_parquet(Path::new(file_path))?;

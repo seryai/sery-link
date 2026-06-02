@@ -1671,8 +1671,10 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     let (effective_path, effective_ext): (Cow<Path>, &str) = match ext.as_str() {
         "xlsx" | "xls" => {
             let csv = crate::excel::xlsx_to_csv(&full_path).map_err(|e| e.to_string())?;
-            let parquet = crate::csv::csv_to_parquet(&csv).map_err(|e| e.to_string())?;
-            (Cow::Owned(parquet), "parquet")
+            match crate::csv::csv_to_parquet(&csv) {
+                Ok(parquet) => (Cow::Owned(parquet), "parquet"),
+                Err(_) => (Cow::Owned(csv), "csv"),
+            }
         }
         "csv" => {
             let parquet = crate::csv::csv_to_parquet(&full_path).map_err(|e| e.to_string())?;
@@ -1689,6 +1691,7 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
 
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
+        "csv" => "read_csv_auto",
         _ => {
             return Err(format!(
                 "unsupported format after conversion: {}",
@@ -2186,8 +2189,12 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
     let (effective_path, effective_ext): (Cow<Path>, &str) = match ext.as_str() {
         "xlsx" | "xls" => {
             let csv = crate::excel::xlsx_to_csv(&full_path).map_err(|e| e.to_string())?;
-            let parquet = crate::csv::csv_to_parquet(&csv).map_err(|e| e.to_string())?;
-            (Cow::Owned(parquet), "parquet")
+            // Try Parquet for speed; fall back to reading the CSV directly
+            // if the conversion fails (e.g. DuckDB COPY IO issue in temp dir).
+            match crate::csv::csv_to_parquet(&csv) {
+                Ok(parquet) => (Cow::Owned(parquet), "parquet"),
+                Err(_) => (Cow::Owned(csv), "csv"),
+            }
         }
         "csv" => {
             let parquet = crate::csv::csv_to_parquet(&full_path).map_err(|e| e.to_string())?;
@@ -2204,6 +2211,7 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
 
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
+        "csv" => "read_csv_auto",
         _ => return Err(format!("unsupported format: {}", effective_ext)),
     };
 
