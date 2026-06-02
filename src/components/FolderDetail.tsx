@@ -28,6 +28,7 @@ import {
   RefreshCw,
   Search,
   SquareArrowOutUpRight,
+  Table2,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import type {
@@ -632,6 +633,7 @@ function VirtualizedDatasetList({
 
 function DatasetRow({ dataset, onOpen }: { dataset: DatasetMetadata; onOpen: () => void }) {
   const isDoc = isDocumentFormat(dataset.file_format);
+  const isDbTable = isDbTableFormat(dataset.file_format);
   return (
     <button
       onClick={onOpen}
@@ -640,7 +642,9 @@ function DatasetRow({ dataset, onOpen }: { dataset: DatasetMetadata; onOpen: () 
       <div className="flex min-w-0 items-center gap-2">
         {isDoc
           ? <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
-          : <Database className="h-3.5 w-3.5 shrink-0 text-purple-500 dark:text-purple-400" />
+          : isDbTable
+            ? <Table2 className="h-3.5 w-3.5 shrink-0 text-blue-500 dark:text-blue-400" />
+            : <Database className="h-3.5 w-3.5 shrink-0 text-purple-500 dark:text-purple-400" />
         }
         <span className="truncate text-sm text-slate-800 dark:text-slate-100">
           {dataset.relative_path}
@@ -696,6 +700,14 @@ function FilterChip({
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 const DOCUMENT_FORMATS = new Set(['docx', 'pptx', 'html', 'htm', 'ipynb', 'pdf']);
+const DB_TABLE_FORMATS = new Set([
+  'mysql', 'postgresql', 'mongodb', 'redis', 'sqlite', 'snowflake', 'clickhouse',
+  'oracle', 'oracle-legacy', 'oracle-10g', 'db2', 'informix', 'saphana', 'teradata',
+  'vertica', 'databricks', 'trino', 'hive', 'bigquery', 'cassandra', 'neo4j',
+  'firebird', 'exasol', 'h2', 'kylin', 'access', 'dameng', 'kingbase', 'highgo',
+  'vastbase', 'goldendb', 'oceanbase-oracle', 'gbase', 'sundb', 'yashandb',
+  'tdengine', 'xugu', 'mongodb-jdbc', 'agent_db',
+]);
 const KNOWN_TABULAR = new Set(['csv', 'tsv', 'parquet', 'xlsx', 'xls']);
 
 /** Test whether a dataset's `file_format` belongs to the chip's
@@ -722,6 +734,10 @@ function matchesFormat(filter: FolderFormatFilter, fmt: string): boolean {
 
 function isDocumentFormat(fmt: string): boolean {
   return DOCUMENT_FORMATS.has(fmt.toLowerCase());
+}
+
+function isDbTableFormat(fmt: string): boolean {
+  return DB_TABLE_FORMATS.has(fmt.toLowerCase());
 }
 
 function folderBasename(path: string): string {
