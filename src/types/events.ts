@@ -462,6 +462,9 @@ export interface AgentConfig {
 
 export interface QueryHistoryEntry {
   query_id: string | null;
+  /** Natural-language question that triggered this SQL (set when the
+   *  query came from the dashboard chat, absent for local preview queries). */
+  question?: string;
   timestamp: string;
   file_path: string;
   sql: string;

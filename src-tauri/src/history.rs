@@ -18,6 +18,10 @@ pub struct QueryHistoryEntry {
     pub timestamp: String,
     /// Optional query_id from the cloud (maps back to a chat message).
     pub query_id: Option<String>,
+    /// Natural-language question that triggered this SQL (forwarded by
+    /// the cloud API via the WebSocket message when available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
     /// Target file path (truncated at display time if needed).
     pub file_path: String,
     /// The SQL that was run (truncated to 2000 chars).
@@ -141,6 +145,7 @@ pub fn clear_history() -> Result<()> {
 /// Convenience constructor used by the query executor.
 pub fn record(
     query_id: Option<String>,
+    question: Option<String>,
     file_path: &str,
     sql: &str,
     status: &str,
@@ -157,6 +162,7 @@ pub fn record(
     let entry = QueryHistoryEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         query_id,
+        question,
         file_path: file_path.to_string(),
         sql: truncated_sql,
         status: status.to_string(),

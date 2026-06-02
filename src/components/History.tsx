@@ -294,8 +294,13 @@ function HistoryRow({
               </>
             )}
           </div>
+          {entry.question ? (
+            <div className="mt-0.5 truncate text-sm font-medium text-slate-800 dark:text-slate-100" title={entry.question}>
+              {entry.question}
+            </div>
+          ) : null}
           <div
-            className="mt-0.5 truncate font-mono text-xs text-slate-700 dark:text-slate-300"
+            className="mt-0.5 truncate font-mono text-xs text-slate-500 dark:text-slate-400"
             title={entry.file_path}
           >
             {entry.file_path}

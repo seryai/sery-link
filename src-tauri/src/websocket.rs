@@ -646,6 +646,11 @@ impl WebSocketClient {
             .or_else(|| message["file_path"].as_str())
             .ok_or_else(|| AgentError::WebSocket("Missing database_path".to_string()))?;
 
+        let user_question: Option<String> = message["user_question"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         eprintln!("Executing query {}: {}", query_id, sql);
 
         // Tell the frontend a new query is starting so it can spin up a row in
@@ -671,6 +676,7 @@ impl WebSocketClient {
 
                 history::record(
                     Some(query_id.to_string()),
+                    user_question.clone(),
                     file_path,
                     sql,
                     "success",
@@ -715,6 +721,7 @@ impl WebSocketClient {
 
                 history::record(
                     Some(query_id.to_string()),
+                    user_question,
                     file_path,
                     sql,
                     "error",
@@ -784,6 +791,11 @@ impl WebSocketClient {
             .as_str()
             .ok_or_else(|| AgentError::WebSocket("Missing sql".to_string()))?;
 
+        let db_user_question: Option<String> = message["user_question"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         eprintln!("[ws] run_db_sql query_id={query_id} source_id={source_id}");
 
         if let Some(app) = &app {
@@ -807,6 +819,7 @@ impl WebSocketClient {
 
                 history::record(
                     Some(query_id.to_string()),
+                    db_user_question.clone(),
                     &format!("db://{}", source_id),
                     sql,
                     "success",
@@ -850,6 +863,7 @@ impl WebSocketClient {
 
                 history::record(
                     Some(query_id.to_string()),
+                    db_user_question,
                     &format!("db://{}", source_id),
                     sql,
                     "error",
