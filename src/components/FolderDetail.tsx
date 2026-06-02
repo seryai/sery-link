@@ -100,6 +100,10 @@ export function FolderDetail() {
     new Map(),
   );
   const [scanState, setScanState] = useState<ScanState>({ kind: 'idle' });
+  // True while the initial get_cached_folder_metadata call is in flight.
+  // Suppresses the "No indexable files found" empty state during cache load
+  // so the user doesn't see a flicker on every revisit after restart.
+  const [cacheLoading, setCacheLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const initialLoadRef = useRef(false);
   const scanCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -135,6 +139,7 @@ export function FolderDetail() {
     let cancelled = false;
     initialLoadRef.current = true;
 
+    setCacheLoading(true);
     (async () => {
       let hadCache = false;
       try {
@@ -151,6 +156,7 @@ export function FolderDetail() {
         console.error('Failed to load cached folder metadata:', err);
       }
       if (cancelled) return;
+      setCacheLoading(false);
       if (!hadCache) {
         // First visit to this folder — nothing cached yet, so trigger
         // the initial scan so the user sees their files.
@@ -570,6 +576,14 @@ function VirtualizedDatasetList({
       </button>
     );
   };
+
+  if (cacheLoading) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+      </div>
+    );
+  }
 
   if (!scanRunning && filtered.length === 0 && search === '') {
     return (

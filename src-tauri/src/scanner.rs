@@ -1199,7 +1199,18 @@ pub fn reextract_file(folder_path: &str, relative_path: &str) -> Result<DatasetM
         } else {
             content
         };
-        return Ok(DatasetMetadata { document_markdown: Some(markdown), ..shallow });
+        let result = DatasetMetadata { document_markdown: Some(markdown), ..shallow };
+        // Persist so the next FileDetail open doesn't need to re-read.
+        let _ = crate::scan_cache::with_cache(|c| {
+            c.put(
+                folder_path,
+                &cache_key.relative_path,
+                cache_key.mtime_secs,
+                cache_key.size_bytes,
+                &result,
+            )
+        });
+        return Ok(result);
     }
 
     let tier = default_tier_for(&ext);
