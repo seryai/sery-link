@@ -100,6 +100,23 @@ fn cloud_offline() -> bool {
     CLOUD_OFFLINE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Per-source scan lock. Prevents two concurrent rescan_source_by_id calls
+/// for the same source (e.g. autoscan timer + watcher both firing at once).
+static SCANS_IN_PROGRESS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Returns `true` if this source is not already being scanned and claims the slot.
+/// Returns `false` if a scan is already in progress — caller should skip.
+fn try_claim_scan(source_id: &str) -> bool {
+    let mut set = SCANS_IN_PROGRESS.lock().unwrap();
+    set.insert(source_id.to_string())
+}
+
+fn release_scan(source_id: &str) {
+    let mut set = SCANS_IN_PROGRESS.lock().unwrap();
+    set.remove(source_id);
+}
+
 fn mark_cloud_offline() {
     CLOUD_OFFLINE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -2353,6 +2370,13 @@ pub async fn rescan_source_by_id<R: Runtime>(
     app: AppHandle<R>,
     source_id: String,
 ) -> Result<Value, String> {
+    if !try_claim_scan(&source_id) {
+        return Ok(serde_json::json!({ "skipped": "scan already in progress" }));
+    }
+    struct ScanGuard(String);
+    impl Drop for ScanGuard { fn drop(&mut self) { release_scan(&self.0); } }
+    let _scan_guard = ScanGuard(source_id.clone());
+
     use crate::sources::SourceKind;
 
     let source = Config::load()

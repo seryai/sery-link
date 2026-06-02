@@ -191,7 +191,6 @@ pub async fn start_watcher(folders: Vec<String>) -> Result<WatcherHandle> {
 
         loop {
             for folder in &fallback_folders {
-                eprintln!("[watcher] fallback rescan of {}", folder);
                 if let Err(e) = sync_folder(folder).await {
                     eprintln!("[watcher] fallback sync error for {}: {}", folder, e);
                 }
@@ -276,7 +275,6 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     .unwrap_or_default();
 
     if !current_hash.is_empty() && stored_hash.as_deref() == Some(current_hash.as_str()) {
-        eprintln!("[watcher] {} unchanged (hash match), skipping sync", folder_path);
         return Ok(());
     }
 

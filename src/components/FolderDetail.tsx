@@ -101,6 +101,7 @@ export function FolderDetail() {
   const [scanState, setScanState] = useState<ScanState>({ kind: 'idle' });
   const [error, setError] = useState<string | null>(null);
   const initialLoadRef = useRef(false);
+  const scanCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const datasets = useMemo(
     () =>
@@ -209,27 +210,31 @@ export function FolderDetail() {
       });
     }).then((off) => unlisteners.push(off));
 
-    void listen<ScanComplete>(EVENT_NAMES.SCAN_COMPLETE, async (evt) => {
+    void listen<ScanComplete>(EVENT_NAMES.SCAN_COMPLETE, (evt) => {
       if (evt.payload.folder !== folderPath) return;
-      // Reconcile against the cache to drop any files that existed in a
-      // prior scan but are gone now. The cache has been kept up-to-date
-      // by the scanner; refetching is cheap.
-      try {
-        const fresh = await invoke<DatasetMetadata[]>(
-          'get_cached_folder_metadata',
-          { folderPath },
-        );
-        const map = new Map<string, DatasetMetadata>();
-        for (const d of fresh) map.set(d.relative_path, d);
-        setDatasetMap(map);
-      } catch {
-        /* keep what we have */
-      }
-      setScanState({ kind: 'idle' });
+      // Debounce: rapid-fire scan_complete events (e.g. two concurrent scans)
+      // collapse into a single cache refresh after 200 ms.
+      if (scanCompleteTimerRef.current) clearTimeout(scanCompleteTimerRef.current);
+      scanCompleteTimerRef.current = setTimeout(async () => {
+        scanCompleteTimerRef.current = null;
+        try {
+          const fresh = await invoke<DatasetMetadata[]>(
+            'get_cached_folder_metadata',
+            { folderPath },
+          );
+          const map = new Map<string, DatasetMetadata>();
+          for (const d of fresh) map.set(d.relative_path, d);
+          setDatasetMap(map);
+        } catch {
+          /* keep what we have */
+        }
+        setScanState({ kind: 'idle' });
+      }, 200);
     }).then((off) => unlisteners.push(off));
 
     return () => {
       for (const off of unlisteners) off();
+      if (scanCompleteTimerRef.current) clearTimeout(scanCompleteTimerRef.current);
     };
   }, [folderPath]);
 
