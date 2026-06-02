@@ -368,7 +368,11 @@ pub fn test_s3_credentials_blocking(
             _ => return Ok(()),
         };
         let escaped = url.replace('\'', "''");
-        let probe = format!("DESCRIBE SELECT * FROM {}('{}') LIMIT 0", read_func, escaped);
+        let probe = if read_func == "read_csv_auto" {
+            format!("DESCRIBE SELECT * FROM read_csv_auto('{}', ignore_errors=true) LIMIT 0", escaped)
+        } else {
+            format!("DESCRIBE SELECT * FROM {}('{}') LIMIT 0", read_func, escaped)
+        };
         conn.execute_batch(&probe).map_err(|e| {
             AgentError::Database(format!(
                 "S3 connection test failed: {}. Double-check the URL, region, and credentials.",
@@ -400,7 +404,11 @@ fn extract_remote_schema(
 ) -> Result<Vec<ColumnSchema>> {
     // DESCRIBE over the remote URL pulls only the Parquet footer (or
     // sniffs the first CSV rows) — we don't download the whole file.
-    let sql = format!("DESCRIBE SELECT * FROM {}('{}')", read_func, escaped_url);
+    let sql = if read_func == "read_csv_auto" {
+        format!("DESCRIBE SELECT * FROM read_csv_auto('{}', ignore_errors=true)", escaped_url)
+    } else {
+        format!("DESCRIBE SELECT * FROM {}('{}')", read_func, escaped_url)
+    };
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| AgentError::Database(format!("prepare DESCRIBE: {}", e)))?;
