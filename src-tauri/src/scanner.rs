@@ -1578,7 +1578,7 @@ fn extract_schema(
         ),
         "csv" => (
             "read_csv_auto",
-            format!("SELECT COUNT(*) FROM read_csv_auto('{}')", path_str),
+            format!("SELECT COUNT(*) FROM read_csv_auto('{}', ignore_errors=true)", path_str),
         ),
         "json" => (
             "read_json_auto",
@@ -1589,7 +1589,11 @@ fn extract_schema(
         }
     };
 
-    let schema_sql = format!("DESCRIBE SELECT * FROM {}('{}')", read_func, path_str);
+    let schema_sql = if read_func == "read_csv_auto" {
+        format!("DESCRIBE SELECT * FROM read_csv_auto('{}', ignore_errors=true)", path_str)
+    } else {
+        format!("DESCRIBE SELECT * FROM {}('{}')", read_func, path_str)
+    };
 
     let mut columns = Vec::new();
     let mut stmt = conn

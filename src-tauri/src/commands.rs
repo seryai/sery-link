@@ -2545,9 +2545,11 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         });
         *websocket::LAST_SCAN_STATUS.lock().unwrap() = Some(payload.clone());
         if scan_status_should_emit(&last_emit_for_progress) {
-            tokio::spawn(async move {
-                websocket::send_outbound_json(&payload).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    websocket::send_outbound_json(&payload).await;
+                });
+            }
         }
     });
 
