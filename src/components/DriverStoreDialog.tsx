@@ -341,7 +341,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
                     className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/40 transition-colors"
                   >
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center">
-                      <SourceIcon kind={driver.db_type} size="sm" />
+                      <SourceIcon kind={driver.db_type} size="md" />
                     </div>
 
                     {/* Label + meta */}

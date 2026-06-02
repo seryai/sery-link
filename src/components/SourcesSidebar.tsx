@@ -761,9 +761,9 @@ function SourceRow({
         )}`}
       >
         {s3Preset ? (
-          <PresetSourceIcon preset={s3Preset} size="sm" />
+          <PresetSourceIcon preset={s3Preset} size="md" />
         ) : (
-          <SourceIcon kind={legacyKind} size="sm" />
+          <SourceIcon kind={legacyKind} size="md" />
         )}
       </div>
       <div className="min-w-0 flex-1">

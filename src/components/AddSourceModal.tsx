@@ -679,8 +679,8 @@ function PickerStage({
             onClick={() => onPickAgentDb(d.db_type)}
             className="flex flex-col items-center gap-2 rounded-md border border-slate-200 bg-white p-2.5 text-center shadow-sm transition-all hover:border-purple-400 hover:shadow-md dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <div className="flex h-10 w-10 items-center justify-center">
-              <SourceIcon kind={d.db_type} size="lg" />
+            <div className="flex h-8 w-8 items-center justify-center">
+              <SourceIcon kind={d.db_type} size="md" />
             </div>
             <div className="text-sm font-medium">{d.label}</div>
             <div className="text-xs leading-tight text-slate-500 dark:text-slate-400">JDBC driver</div>
@@ -2298,11 +2298,11 @@ function ProtocolCard({
       }`}
       title={isComingSoon ? `${tile.label} — coming in v0.7+` : tile.label}
     >
-      <div className="flex h-10 w-10 items-center justify-center">
+      <div className="flex h-8 w-8 items-center justify-center">
         {presetKind ? (
-          <PresetSourceIcon preset={presetKind} size="lg" />
+          <PresetSourceIcon preset={presetKind} size="md" />
         ) : iconKind ? (
-          <SourceIcon kind={iconKind} size="lg" />
+          <SourceIcon kind={iconKind} size="md" />
         ) : (
           <PlaceholderIcon />
         )}
@@ -3173,7 +3173,7 @@ function AgentDbStage({
 function PlaceholderIcon() {
   return (
     <svg
-      className="h-5 w-5 text-slate-400 dark:text-slate-500"
+      className="h-8 w-8 text-slate-400 dark:text-slate-500"
       viewBox="0 0 20 20"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
