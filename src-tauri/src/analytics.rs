@@ -289,7 +289,16 @@ async fn flush_once() {
         client_version: concat!("sery-link/", env!("CARGO_PKG_VERSION")),
     };
 
-    let url = format!("{}/v1/pings", config.cloud.analytics_url);
+    // If analytics_url is the prod default but api_url is local (dev mode),
+    // fall back to the local api_url so pings don't hit the prod endpoint.
+    let analytics_base = if config.cloud.analytics_url.contains("analytics.sery.ai")
+        && (config.cloud.api_url.contains("localhost") || config.cloud.api_url.contains("127.0.0.1"))
+    {
+        config.cloud.api_url.trim_end_matches('/').to_string()
+    } else {
+        config.cloud.analytics_url.trim_end_matches('/').to_string()
+    };
+    let url = format!("{}/v1/pings", analytics_base);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
