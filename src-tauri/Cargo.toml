@@ -94,6 +94,7 @@ anytomd = { version = "0.1", default-features = false }
 mdkit = { version = "0.7", features = ["pandoc", "ocr-platform"] }
 regex = "1.10"
 rayon = "1.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # MCP support — when invoked with `sery-link --mcp-stdio --root <dir>`,
 # the binary becomes a stdio Model Context Protocol server exposing

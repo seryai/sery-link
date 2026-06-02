@@ -1,16 +1,19 @@
-//! Persistent local query history (JSONL) for the Sery Link agent.
+//! Persistent local query history backed by SQLite.
 //!
-//! Every query executed over the WebSocket tunnel gets appended to
-//! `~/.seryai/query_history.jsonl` with one JSON object per line. The file is
-//! read back on demand by the frontend via the `get_query_history` command.
+//! Every query executed over the WebSocket tunnel is appended to the
+//! `query_history` table in `~/.seryai/sery.db`. The table is capped at
+//! MAX_HISTORY_ROWS rows; older rows are deleted on each insert via a
+//! single `DELETE … NOT IN (… ORDER BY id DESC LIMIT N)` statement.
+//!
+//! On first run the code migrates any existing
+//! `~/.seryai/query_history.jsonl` file into SQLite so history is not lost.
 
 use crate::error::{AgentError, Result};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-const MAX_HISTORY_LINES: usize = 1000;
+const MAX_HISTORY_ROWS: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryHistoryEntry {
@@ -36,14 +39,107 @@ pub struct QueryHistoryEntry {
     pub error: Option<String>,
 }
 
-fn history_path() -> Result<PathBuf> {
+fn db_path() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| AgentError::Config("Could not find home directory".to_string()))?;
-    Ok(home.join(".seryai").join("query_history.jsonl"))
+    Ok(home.join(".seryai").join("sery.db"))
 }
 
-/// Append a single entry to the history file. This is called from the
-/// WebSocket query handler; failures are logged but do not propagate so
+fn open_db() -> Result<Connection> {
+    let path = db_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(AgentError::Io)?;
+    }
+    let conn = Connection::open(&path)
+        .map_err(|e| AgentError::Config(format!("SQLite open: {e}")))?;
+    // WAL mode: readers don't block writers and vice-versa.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| AgentError::Config(format!("SQLite pragma: {e}")))?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS query_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   TEXT    NOT NULL,
+            query_id    TEXT,
+            question    TEXT,
+            file_path   TEXT    NOT NULL,
+            sql         TEXT    NOT NULL,
+            status      TEXT    NOT NULL,
+            row_count   INTEGER,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            error       TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_qh_id ON query_history(id DESC);",
+    )
+    .map_err(|e| AgentError::Config(format!("SQLite create table: {e}")))?;
+
+    // One-time migration from the legacy JSONL file.
+    migrate_from_jsonl(&conn);
+
+    Ok(conn)
+}
+
+/// Import `~/.seryai/query_history.jsonl` into SQLite (once).
+///
+/// Runs only when the table is empty AND the JSONL file exists.
+/// After a successful import the JSONL file is renamed to
+/// `query_history.jsonl.migrated` so it is never re-imported.
+fn migrate_from_jsonl(conn: &Connection) {
+    // Skip if the table already has rows — migration already ran.
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM query_history", [], |r| r.get(0))
+        .unwrap_or(1);
+    if count > 0 {
+        return;
+    }
+
+    let jsonl_path = match dirs::home_dir() {
+        Some(h) => h.join(".seryai").join("query_history.jsonl"),
+        None => return,
+    };
+    if !jsonl_path.exists() {
+        return;
+    }
+
+    let content = match std::fs::read_to_string(&jsonl_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut imported = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(e) = serde_json::from_str::<QueryHistoryEntry>(trimmed) {
+            let _ = conn.execute(
+                "INSERT INTO query_history
+                 (timestamp, query_id, question, file_path, sql, status, row_count, duration_ms, error)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![
+                    e.timestamp,
+                    e.query_id,
+                    e.question,
+                    e.file_path,
+                    e.sql,
+                    e.status,
+                    e.row_count.map(|n| n as i64),
+                    e.duration_ms as i64,
+                    e.error,
+                ],
+            );
+            imported += 1;
+        }
+    }
+
+    if imported > 0 {
+        eprintln!("[history] migrated {imported} entries from JSONL to SQLite");
+        let done = jsonl_path.with_extension("jsonl.migrated");
+        let _ = std::fs::rename(&jsonl_path, &done);
+    }
+}
+
+/// Append a single entry. Failures are logged but never propagate so
 /// history never breaks actual query execution.
 pub fn append_entry(entry: &QueryHistoryEntry) {
     if let Err(e) = append_entry_inner(entry) {
@@ -52,93 +148,77 @@ pub fn append_entry(entry: &QueryHistoryEntry) {
 }
 
 fn append_entry_inner(entry: &QueryHistoryEntry) -> Result<()> {
-    let path = history_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(AgentError::Io)?;
-    }
+    let conn = open_db()?;
+    conn.execute(
+        "INSERT INTO query_history
+         (timestamp, query_id, question, file_path, sql, status, row_count, duration_ms, error)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            entry.timestamp,
+            entry.query_id,
+            entry.question,
+            entry.file_path,
+            entry.sql,
+            entry.status,
+            entry.row_count.map(|n| n as i64),
+            entry.duration_ms as i64,
+            entry.error,
+        ],
+    )
+    .map_err(|e| AgentError::Config(format!("SQLite insert: {e}")))?;
 
-    let line = serde_json::to_string(entry)
-        .map_err(|e| AgentError::Serialization(format!("history serialize: {}", e)))?;
+    // Trim to MAX_HISTORY_ROWS — keep the newest rows.
+    conn.execute(
+        "DELETE FROM query_history
+         WHERE id NOT IN (
+             SELECT id FROM query_history ORDER BY id DESC LIMIT ?1
+         )",
+        params![MAX_HISTORY_ROWS as i64],
+    )
+    .map_err(|e| AgentError::Config(format!("SQLite trim: {e}")))?;
 
-    {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(AgentError::Io)?;
-        writeln!(file, "{}", line).map_err(AgentError::Io)?;
-    }
-
-    // Lazy rotation: if the file exceeds the cap by more than 20%, compact it.
-    if let Ok(metadata) = fs::metadata(&path) {
-        // Heuristic: only check rotation every ~10KB appended
-        if metadata.len() > 0 && metadata.len() % 10_240 < 200 {
-            let _ = rotate_if_needed(&path);
-        }
-    }
-
-    Ok(())
-}
-
-fn rotate_if_needed(path: &PathBuf) -> Result<()> {
-    let file = fs::File::open(path).map_err(AgentError::Io)?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().map_while(|l| l.ok()).collect();
-
-    if lines.len() > (MAX_HISTORY_LINES + MAX_HISTORY_LINES / 5) {
-        // Keep only the last MAX_HISTORY_LINES entries
-        let keep: Vec<&String> = lines
-            .iter()
-            .skip(lines.len() - MAX_HISTORY_LINES)
-            .collect();
-        let tmp = path.with_extension("jsonl.tmp");
-        {
-            let mut out = fs::File::create(&tmp).map_err(AgentError::Io)?;
-            for line in keep {
-                writeln!(out, "{}", line).map_err(AgentError::Io)?;
-            }
-        }
-        fs::rename(&tmp, path).map_err(AgentError::Io)?;
-    }
     Ok(())
 }
 
 /// Load the most recent `limit` history entries, newest first.
 pub fn load_history(limit: usize) -> Result<Vec<QueryHistoryEntry>> {
-    let path = history_path()?;
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
+    let conn = open_db()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT timestamp, query_id, question, file_path, sql,
+                    status, row_count, duration_ms, error
+             FROM query_history
+             ORDER BY id DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| AgentError::Config(format!("SQLite prepare: {e}")))?;
 
-    let file = fs::File::open(&path).map_err(AgentError::Io)?;
-    let reader = BufReader::new(file);
+    let entries: Vec<QueryHistoryEntry> = stmt
+        .query_map(params![limit as i64], |row| {
+            Ok(QueryHistoryEntry {
+                timestamp: row.get(0)?,
+                query_id: row.get(1)?,
+                question: row.get(2)?,
+                file_path: row.get(3)?,
+                sql: row.get(4)?,
+                status: row.get(5)?,
+                row_count: row.get::<_, Option<i64>>(6)?.map(|n| n as usize),
+                duration_ms: row.get::<_, i64>(7)? as u64,
+                error: row.get(8)?,
+            })
+        })
+        .map_err(|e| AgentError::Config(format!("SQLite query: {e}")))?
+        .filter_map(|r| r.ok())
+        .collect();
 
-    let mut entries: Vec<QueryHistoryEntry> = Vec::new();
-    for line in reader.lines().map_while(|l| l.ok()) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<QueryHistoryEntry>(trimmed) {
-            Ok(entry) => entries.push(entry),
-            Err(e) => {
-                eprintln!("[history] skipping malformed line: {}", e);
-            }
-        }
-    }
-
-    // Newest first
-    entries.reverse();
-    entries.truncate(limit);
     Ok(entries)
 }
 
 /// Clear all history.
 pub fn clear_history() -> Result<()> {
-    let path = history_path()?;
-    if path.exists() {
-        fs::remove_file(&path).map_err(AgentError::Io)?;
-    }
+    let conn = open_db()?;
+    conn.execute("DELETE FROM query_history", [])
+        .map_err(|e| AgentError::Config(format!("SQLite clear: {e}")))?;
     Ok(())
 }
 
@@ -159,7 +239,7 @@ pub fn record(
         sql.to_string()
     };
 
-    let entry = QueryHistoryEntry {
+    append_entry(&QueryHistoryEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
         query_id,
         question,
@@ -169,6 +249,5 @@ pub fn record(
         row_count,
         duration_ms,
         error,
-    };
-    append_entry(&entry);
+    });
 }
