@@ -49,6 +49,17 @@ pub async fn execute_query(sql: &str, file_path: &str, config: &Config) -> Resul
     // validate_sql_payload sees `{{file}}` and zero forbidden read_*
     // calls, and execute_query_blocking substitutes `{{file}}` with the
     // right read_func call for the file's extension.
+    // ─── bare remote URL fast-path ────────────────────────────────────────────
+    // Datasets whose query_path is a bare s3:// (or https://) URL — i.e.
+    // stored WITHOUT a local:// wrapper — arrive here with file_path already
+    // equal to the S3 URL. Route them directly to the remote executor so
+    // httpfs + credentials can handle them. The {{file}} placeholder check
+    // does not apply here: the SQL already names the S3 path directly and
+    // the remote executor just passes it to DuckDB as-is.
+    if crate::url::is_remote_url(file_path) {
+        return execute_remote_tunnel_query(sql, file_path, file_path, config).await;
+    }
+
     // ─── local://agent_id/s3://... fast-path ──────────────────────────────────
     // When the user adds an S3 source in Sery Link, files are indexed with
     // query_path = "local://agent_id/s3://bucket/key". The tunnel sends that
