@@ -436,7 +436,11 @@ fn count_remote_rows(conn: &Connection, read_func: &str, escaped_url: &str) -> R
     // COUNT(*) over a remote file is expensive for CSV (streams the
     // whole body) but cheap for parquet (metadata). Ignore failures —
     // a row count of -1 shows up as "unknown" in the UI.
-    let sql = format!("SELECT COUNT(*) FROM {}('{}')", read_func, escaped_url);
+    let sql = if read_func == "read_csv_auto" {
+        format!("SELECT COUNT(*) FROM {}('{}', ignore_errors=true)", read_func, escaped_url)
+    } else {
+        format!("SELECT COUNT(*) FROM {}('{}')", read_func, escaped_url)
+    };
     conn.query_row(&sql, [], |row| row.get::<_, i64>(0))
         .map_err(|e| AgentError::Database(format!("COUNT(*): {}", e)))
 }
@@ -458,12 +462,17 @@ fn extract_remote_samples(
         return Ok((None, false));
     }
 
-    let sql = format!(
-        "SELECT * FROM {}('{}') LIMIT {}",
-        read_func,
-        escaped_url,
-        crate::scanner::sample_row_limit()
-    );
+    let sql = if read_func == "read_csv_auto" {
+        format!(
+            "SELECT * FROM {}('{}', ignore_errors=true) LIMIT {}",
+            read_func, escaped_url, crate::scanner::sample_row_limit()
+        )
+    } else {
+        format!(
+            "SELECT * FROM {}('{}') LIMIT {}",
+            read_func, escaped_url, crate::scanner::sample_row_limit()
+        )
+    };
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| AgentError::Database(format!("prepare samples: {}", e)))?;
