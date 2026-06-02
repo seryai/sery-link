@@ -7,6 +7,12 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Helvetica Neue', 'Arial', 'sans-serif'],
+      },
+      fontSize: {
+        '2xs': ['0.6875rem', { lineHeight: '1.4' }],
+      },
       // Brand purple — overrides Tailwind's default palette so every
       // existing `bg-purple-600` / `text-purple-700` / etc. resolves
       // to brand-aligned values without code changes. 600 is the
