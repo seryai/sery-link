@@ -1567,6 +1567,17 @@ pub async fn reextract_file(
 // writing or seeing any SQL. Thin wrapper around DuckDB's SUMMARIZE.
 // ---------------------------------------------------------------------------
 
+/// Build a DuckDB read expression for a given function + path.
+/// CSV gets `ignore_errors=true` so files with non-UTF-8 bytes (e.g.
+/// Latin-1) are read with bad rows skipped rather than aborting.
+fn read_expr(func: &str, escaped_path: &str) -> String {
+    if func == "read_csv_auto" {
+        format!("{}('{}', ignore_errors=true)", func, escaped_path)
+    } else {
+        format!("{}('{}')", func, escaped_path)
+    }
+}
+
 /// One row of DuckDB's SUMMARIZE output, lightly renamed for the UI. Values
 /// are strings (DuckDB emits min/max as VARCHAR so all column types are
 /// representable) so the frontend doesn't need to worry about numeric
@@ -1782,8 +1793,8 @@ fn run_remote_summarize(
             .map_err(|e| e.to_string())?;
     }
     let sql = format!(
-        "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
-        read_func, escaped_url
+        "SELECT * FROM (SUMMARIZE SELECT * FROM {})",
+        read_expr(read_func, escaped_url)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1840,8 +1851,8 @@ fn run_summarize(read_func: &str, path_str: &str) -> Result<Vec<ColumnProfile>, 
     // subquery makes DuckDB treat it as an ordinary SELECT and the
     // column info arrives before we start iterating rows.
     let sql = format!(
-        "SELECT * FROM (SUMMARIZE SELECT * FROM {}('{}'))",
-        read_func, path_str
+        "SELECT * FROM (SUMMARIZE SELECT * FROM {})",
+        read_expr(read_func, path_str)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
 
@@ -2279,8 +2290,8 @@ fn run_read_rows_with_conn(
     // Same DESCRIBE-then-execute pattern text_to_sql uses to avoid
     // duckdb-rs panicking when column metadata is read pre-execute.
     let select_sql = format!(
-        "SELECT * FROM {}('{}') LIMIT {}",
-        read_func, path_str, MAX_PREVIEW_ROWS
+        "SELECT * FROM {} LIMIT {}",
+        read_expr(read_func, path_str), MAX_PREVIEW_ROWS
     );
     let describe_sql = format!("DESCRIBE ({})", select_sql);
     let columns: Vec<String> = match conn.prepare(&describe_sql) {
