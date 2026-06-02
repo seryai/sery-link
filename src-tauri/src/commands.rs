@@ -1681,6 +1681,7 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
             (Cow::Owned(parquet), "parquet")
         }
         "parquet" => (Cow::Borrowed(full_path.as_path()), "parquet"),
+        "json" | "jsonl" | "ndjson" => (Cow::Borrowed(full_path.as_path()), "json"),
         other => {
             return Err(format!(
                 "can't profile {} files — stats are only available for tabular data",
@@ -1692,6 +1693,7 @@ fn profile_blocking(folder_path: &str, relative_path: &str) -> Result<Vec<Column
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
         "csv" => "read_csv_auto",
+        "json" => "read_json_auto",
         _ => {
             return Err(format!(
                 "unsupported format after conversion: {}",
@@ -2201,6 +2203,7 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
             (Cow::Owned(parquet), "parquet")
         }
         "parquet" => (Cow::Borrowed(full_path.as_path()), "parquet"),
+        "json" | "jsonl" | "ndjson" => (Cow::Borrowed(full_path.as_path()), "json"),
         other => {
             return Err(format!(
                 "can't preview rows for {} files — only tabular formats supported",
@@ -2212,6 +2215,7 @@ fn read_rows_blocking(folder_path: &str, relative_path: &str) -> Result<DatasetR
     let read_func = match effective_ext {
         "parquet" => "read_parquet",
         "csv" => "read_csv_auto",
+        "json" => "read_json_auto",
         _ => return Err(format!("unsupported format: {}", effective_ext)),
     };
 
