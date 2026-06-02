@@ -448,6 +448,131 @@ impl AgentCommand for RichMetadataCommand {
     }
 }
 
+// ── files.rescan_dataset ────────────────────────────────────────────────────
+
+pub struct RescanDatasetCommand;
+
+#[async_trait]
+impl AgentCommand for RescanDatasetCommand {
+    fn name(&self) -> &'static str { "files.rescan_dataset" }
+    fn description(&self) -> &'static str {
+        "Re-scan a single dataset (local file or remote URL), refresh its metadata \
+         including sample_rows, and sync the result back to the cloud. \
+         Returns the updated DatasetMetadata."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query_path": {
+                    "type": "string",
+                    "description": "Full path or URL of the dataset to re-scan \
+                                    (e.g. s3://bucket/file.csv or /Users/foo/data.csv)"
+                },
+                "creds_source": {
+                    "type": "string",
+                    "description": "Optional: S3 listing URL used as the keyring key \
+                                    when query_path is a per-object URL under a prefix."
+                }
+            },
+            "required": ["query_path"]
+        })
+    }
+
+    async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
+        let query_path = ctx.args["query_path"]
+            .as_str()
+            .ok_or("missing query_path")?
+            .to_string();
+
+        // For remote URLs (s3://, https://, sftp://, …) re-run the remote
+        // scanner which collects schema + row_count + sample_rows in one pass.
+        // For local paths fall through to reextract_file which already handles
+        // the full extraction pipeline.
+        if crate::url::is_remote_url(&query_path) {
+            let creds_source = ctx.args["creds_source"]
+                .as_str()
+                .unwrap_or(&query_path)
+                .to_string();
+
+            let url = query_path.clone();
+            let metadata = tokio::task::spawn_blocking(move || -> Result<crate::scanner::DatasetMetadata, String> {
+                // HEAD probe gives us content-type + size — same as the regular
+                // remote scanner path. Use block_on since we're already in a
+                // blocking thread.
+                let rt = tokio::runtime::Handle::current();
+                let head = rt.block_on(crate::remote::head_probe(&url))
+                    .map_err(|e| e.to_string())?;
+                crate::remote::scan_remote_blocking_with_creds(&url, &head, &creds_source)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+
+            // Sync to cloud so API picks up the fresh sample_rows.
+            let config = crate::config::Config::load().map_err(|e| e.to_string())?;
+            if let Ok(token) = crate::keyring_store::get_token() {
+                let _ = crate::scanner::sync_metadata_to_cloud(
+                    &config.cloud.api_url,
+                    &token,
+                    Some(&query_path),
+                    None,
+                    vec![metadata.clone()],
+                ).await;
+            }
+
+            return Ok(serde_json::to_value(&metadata).map_err(|e| e.to_string())?);
+        }
+
+        // Local file — reuse the existing reextract_file path which handles
+        // CSV → Parquet conversion, markdown extraction, PII redaction, etc.
+        let folder_path;
+        let relative_path;
+        {
+            let config = crate::config::Config::load().map_err(|e| e.to_string())?;
+            let abs = if query_path.starts_with('/') {
+                query_path.clone()
+            } else {
+                format!("/{query_path}")
+            };
+            let resolved = config.watched_folders.iter().find_map(|f| {
+                let root = f.path.trim_end_matches('/');
+                let prefix = format!("{root}/");
+                if abs.starts_with(&prefix) {
+                    Some((f.path.clone(), abs[prefix.len()..].to_string()))
+                } else {
+                    None
+                }
+            });
+            let (fp, rp) = resolved.ok_or_else(|| format!("path not in any watched folder: {query_path}"))?;
+            folder_path = fp;
+            relative_path = rp;
+        }
+
+        let fp2 = folder_path.clone();
+        let rp2 = relative_path.clone();
+        let metadata = tokio::task::spawn_blocking(move || {
+            crate::scanner::reextract_file(&fp2, &rp2).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+        // Sync to cloud.
+        let config = crate::config::Config::load().map_err(|e| e.to_string())?;
+        if let Ok(token) = crate::keyring_store::get_token() {
+            let _ = crate::scanner::sync_metadata_to_cloud(
+                &config.cloud.api_url,
+                &token,
+                Some(&folder_path),
+                None,
+                vec![metadata.clone()],
+            ).await;
+        }
+
+        Ok(serde_json::to_value(&metadata).map_err(|e| e.to_string())?)
+    }
+}
+
 fn rich_metadata_sync(folder_path: &str, relative_path: &str) -> Result<Value, String> {
     use std::path::Path;
 
