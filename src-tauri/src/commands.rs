@@ -2737,7 +2737,15 @@ pub async fn rescan_folder<R: Runtime>(app: AppHandle<R>, folder_path: String) -
         // (which reads config.sources) sees an up-to-date last_scan_at.
         use crate::sources::SourceKind;
         if let Some(source_id) = config.sources.iter().find(|s| {
-            matches!(&s.kind, SourceKind::Local { path, .. } if path.to_string_lossy() == folder_path)
+            match &s.kind {
+                SourceKind::Local { path, .. } => path.to_string_lossy() == folder_path,
+                SourceKind::S3 { url } | SourceKind::Https { url } => {
+                    let base = url.trim_end_matches('/');
+                    folder_path.trim_end_matches('/') == base
+                        || folder_path.starts_with(&format!("{base}/"))
+                }
+                _ => false,
+            }
         }).map(|s| s.id.clone()) {
             config.update_source_scan_stats(&source_id, scan_stats, when);
         }
