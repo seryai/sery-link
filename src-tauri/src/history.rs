@@ -4,9 +4,6 @@
 //! `query_history` table in `~/.seryai/sery.db`. The table is capped at
 //! MAX_HISTORY_ROWS rows; older rows are deleted on each insert via a
 //! single `DELETE … NOT IN (… ORDER BY id DESC LIMIT N)` statement.
-//!
-//! On first run the code migrates any existing
-//! `~/.seryai/query_history.jsonl` file into SQLite so history is not lost.
 
 use crate::error::{AgentError, Result};
 use rusqlite::{params, Connection};
@@ -71,72 +68,7 @@ fn open_db() -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_qh_id ON query_history(id DESC);",
     )
     .map_err(|e| AgentError::Config(format!("SQLite create table: {e}")))?;
-
-    // One-time migration from the legacy JSONL file.
-    migrate_from_jsonl(&conn);
-
     Ok(conn)
-}
-
-/// Import `~/.seryai/query_history.jsonl` into SQLite (once).
-///
-/// Runs only when the table is empty AND the JSONL file exists.
-/// After a successful import the JSONL file is renamed to
-/// `query_history.jsonl.migrated` so it is never re-imported.
-fn migrate_from_jsonl(conn: &Connection) {
-    // Skip if the table already has rows — migration already ran.
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM query_history", [], |r| r.get(0))
-        .unwrap_or(1);
-    if count > 0 {
-        return;
-    }
-
-    let jsonl_path = match dirs::home_dir() {
-        Some(h) => h.join(".seryai").join("query_history.jsonl"),
-        None => return,
-    };
-    if !jsonl_path.exists() {
-        return;
-    }
-
-    let content = match std::fs::read_to_string(&jsonl_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let mut imported = 0usize;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(e) = serde_json::from_str::<QueryHistoryEntry>(trimmed) {
-            let _ = conn.execute(
-                "INSERT INTO query_history
-                 (timestamp, query_id, question, file_path, sql, status, row_count, duration_ms, error)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![
-                    e.timestamp,
-                    e.query_id,
-                    e.question,
-                    e.file_path,
-                    e.sql,
-                    e.status,
-                    e.row_count.map(|n| n as i64),
-                    e.duration_ms as i64,
-                    e.error,
-                ],
-            );
-            imported += 1;
-        }
-    }
-
-    if imported > 0 {
-        eprintln!("[history] migrated {imported} entries from JSONL to SQLite");
-        let done = jsonl_path.with_extension("jsonl.migrated");
-        let _ = std::fs::rename(&jsonl_path, &done);
-    }
 }
 
 /// Append a single entry. Failures are logged but never propagate so
