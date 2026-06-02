@@ -256,7 +256,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
   const updatableCount = drivers.filter((d) => d.update_available).length;
 
   const inner = (
-    <div className={embedded ? 'flex flex-col' : 'relative flex h-[80vh] w-[760px] max-w-[95vw] flex-col rounded-xl border bg-background shadow-2xl'}>
+    <div className={embedded ? 'flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900' : 'relative flex h-[80vh] w-[760px] max-w-[95vw] flex-col rounded-xl border bg-background shadow-2xl'}>
       {/* Header — only in modal mode */}
       {!embedded && (
         <div className="flex items-center justify-between border-b px-6 py-4">
@@ -277,7 +277,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
 
         {/* Usage summary bar */}
         {usage && (
-          <div className="flex items-center gap-4 border-b bg-muted/20 px-6 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-4 border-b bg-muted/20 px-5 py-2 text-xs text-muted-foreground">
             <span>
               Total: <strong>{formatBytes(usage.total_bytes)}</strong>
             </span>
@@ -287,7 +287,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
         )}
 
         {/* Tab bar */}
-        <div className="flex items-center justify-between border-b px-6 pt-3">
+        <div className="flex items-center justify-between border-b px-5 pt-3">
           <div className="flex gap-1">
             {(['drivers', 'runtime'] as const).map((t) => (
               <button
@@ -325,7 +325,7 @@ export function DriverStoreDialog({ open, onClose, embedded = false }: DriverSto
         </div>
 
         {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        <div className="flex-1 overflow-y-auto px-5 py-4">
           {tab === 'drivers' && (
             <div className="space-y-1">
               {drivers.length === 0 && (
