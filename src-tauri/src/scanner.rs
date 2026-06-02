@@ -983,8 +983,8 @@ fn scan_folder_blocking(
         // shorthand doesn't compile here. Closure form makes the
         // method-resolution unambiguous.
         .filter_map(|r| r.ok())
-        .filter(|e| is_supported(&e.path))
         .filter(|e| !is_excluded(&e.path, folder_path, &settings.exclude_patterns))
+        .filter(|e| !is_always_skip(&e.path))
         .map(|e| e.path)
         .collect();
 
@@ -1206,6 +1206,7 @@ pub fn reextract_file(folder_path: &str, relative_path: &str) -> Result<DatasetM
     Ok(extract_one(&path, folder_path, &cache_key, tier, &shallow))
 }
 
+#[cfg(test)]
 fn is_supported(path: &Path) -> bool {
     is_supported_ext(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
 }
@@ -1220,6 +1221,22 @@ pub fn is_supported_ext(ext: &str) -> bool {
         "parquet" | "csv" | "xlsx" | "xls" | "ods" | "json"
         | "docx" | "pptx" | "odt" | "odp" | "ppt" | "rtf"
         | "html" | "htm" | "ipynb" | "pdf" | "xml"
+    )
+}
+
+/// Formats that are never worth indexing even as shallow entries: binary
+/// executables, disk images, object files, OS lock/metadata files.
+/// Anything NOT on this list will appear in the file list (with just
+/// path/size/mtime if the format is otherwise unsupported).
+fn is_always_skip(path: &Path) -> bool {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "exe" | "dll" | "so" | "dylib" | "lib" | "a" | "o"
+        | "dmg" | "iso" | "img" | "vmdk" | "vhd"
+        | "app" | "deb" | "rpm" | "apk" | "ipa"
+        | "class" | "pyc" | "pyo" | "wasm"
+        | "swp" | "swo" | "tmp" | "bak"
     )
 }
 
@@ -2004,13 +2021,26 @@ mod filter_tests {
     }
 
     #[test]
-    fn is_supported_rejects_nonindexable() {
-        for bad in ["exe", "bin", "mp4", "zip", "tar", ""] {
+    fn is_supported_rejects_content_extractable() {
+        // is_supported gates schema/content extraction, not file-list presence.
+        // zip/tar/mp4 appear in the list as shallow entries; exe is always-skipped.
+        for bad in ["exe", "bin", "mp4", ""] {
             let p = PathBuf::from(format!("/tmp/file.{bad}"));
-            assert!(!is_supported(&p), "{bad} should NOT be supported");
+            assert!(!is_supported(&p), "{bad} should NOT be content-supported");
         }
         // No extension — must also be rejected.
         assert!(!is_supported(Path::new("/tmp/some_binary")));
+    }
+
+    #[test]
+    fn is_always_skip_blocks_binaries() {
+        use super::is_always_skip;
+        for ext in ["exe", "dll", "dmg", "iso", "app", "pyc"] {
+            assert!(is_always_skip(&PathBuf::from(format!("/tmp/file.{ext}"))), "{ext} should be skipped");
+        }
+        for ext in ["zip", "tar", "mp4", "mp3", "pdf", "docx"] {
+            assert!(!is_always_skip(&PathBuf::from(format!("/tmp/file.{ext}"))), "{ext} should NOT be always-skipped");
+        }
     }
 
     #[test]
