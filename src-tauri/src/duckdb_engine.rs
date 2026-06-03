@@ -488,7 +488,23 @@ async fn execute_remote_tunnel_query(
     });
 
     match tokio::time::timeout(Duration::from_secs(QUERY_TIMEOUT_SECS), task).await {
-        Ok(join) => join.map_err(|e| AgentError::Database(format!("task: {e}")))?,
+        Ok(join_result) => {
+            match join_result {
+                Ok(inner) => inner,
+                Err(e) if e.is_panic() => {
+                    // DuckDB can panic internally when ignore_errors=true is
+                    // used on a CSV with encoding issues (unwrap on None in the
+                    // duckdb crate's row iterator). Give the agent a useful hint.
+                    let hint = if rewritten.to_ascii_lowercase().contains("ignore_errors") {
+                        "CSV read panicked with ignore_errors=true — retry with encoding='latin1' instead"
+                    } else {
+                        "Query panicked internally — if this is a CSV file, retry with encoding='latin1'"
+                    };
+                    Err(AgentError::Database(hint.to_string()))
+                }
+                Err(e) => Err(AgentError::Database(format!("task: {e}"))),
+            }
+        }
         Err(_) => Err(AgentError::Database(format!(
             "Remote query timed out after {QUERY_TIMEOUT_SECS}s"
         ))),
