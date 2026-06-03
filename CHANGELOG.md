@@ -5,6 +5,14 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.6] — 2026-06-03
+
+### Fixed
+
+- **Sync button on database source detail page** — clicking Sync showed "Command rescan_source_by_id not found"; the command was defined internally but not registered as a Tauri invoke handler.
+
+---
+
 ## [0.12.5] — 2026-06-02
 
 ### Added
