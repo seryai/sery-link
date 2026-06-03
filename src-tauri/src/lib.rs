@@ -372,6 +372,7 @@ pub fn run() {
             commands::mark_recipe_run,
             commands::get_auto_scan_config,
             commands::set_auto_scan_interval,
+            commands::rescan_source_by_id,
             // BYOK (Anthropic / OpenAI / Gemini) was removed in the
             // v0.5.3 → file-manager pivot. AI now happens cloud-side
             // via the dashboard / api server. See PR #62 (or git

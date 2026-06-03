@@ -2387,8 +2387,9 @@ fn stringify_cell(v: &duckdb::types::Value) -> String {
 }
 
 /// Dispatch a rescan to the right command based on source kind.
-/// Called by the WebSocket `trigger_scan` handler and the autoscan loop.
-/// Not a Tauri command — internal use only.
+/// Called by the WebSocket `trigger_scan` handler, the autoscan loop,
+/// and directly from the UI via Tauri invoke.
+#[tauri::command]
 pub async fn rescan_source_by_id<R: Runtime>(
     app: AppHandle<R>,
     source_id: String,
