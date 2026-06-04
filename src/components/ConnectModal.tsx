@@ -2,14 +2,19 @@
 // to connected-to-cloud state.
 //
 // Shown when the user clicks "Connect" in the StatusBar (when
-// `authenticated === false`). Accepts a workspace key of the form
-// `sery_k_…` generated from the web dashboard's Settings →
-// Workspace keys page. Paste + click Connect → auth_with_key writes
-// the token to the keyring, starts the tunnel, and the StatusBar
-// flips to Online.
+// `authenticated === false`). Accepts EITHER credential shape:
 //
-// Also exposes a visible path to the web dashboard for users who
-// don't have a key yet — no silent signup, no hidden magic.
+//   * Workspace key — `sery_k_…`. Long-lived. Settings → Workspace
+//     Keys on the dashboard. Multiple machines can be added with the
+//     same key over time.
+//   * Mesh invitation code — 10-char Crockford base32 (no I/L/O/U).
+//     Single-use, expirable. Settings → Machine Invitations on the
+//     dashboard. Auto-detected by format so the user doesn't need to
+//     pick a tab.
+//
+// Paste + Connect → either auth_with_key or auth_with_invitation
+// runs on the Rust side, writes the token to the keyring, starts
+// the tunnel, and the StatusBar flips to Online.
 
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -23,10 +28,29 @@ type Phase =
   | { kind: 'key' }
   | { kind: 'catch_up'; folders: CatchUpFolder[] };
 
+type CredentialKind = 'workspace_key' | 'invitation' | 'unknown';
+
+// Crockford base32 — excludes I, L, O, U to avoid look-alikes. Must
+// stay in sync with `_CODE_ALPHABET` in api/app/services/mesh/__init__.py.
+const INVITATION_CODE_LENGTH = 10;
+const INVITATION_ALPHABET = /^[ABCDEFGHJKMNPQRSTVWXYZ23456789]+$/;
+
+function classify(input: string): CredentialKind {
+  const trimmed = input.trim();
+  if (trimmed.startsWith('sery_k_') && trimmed.length >= 16) {
+    return 'workspace_key';
+  }
+  const upper = trimmed.toUpperCase();
+  if (upper.length === INVITATION_CODE_LENGTH && INVITATION_ALPHABET.test(upper)) {
+    return 'invitation';
+  }
+  return 'unknown';
+}
+
 type Props = {
   onClose: () => void;
   /**
-   * Called after the workspace key is accepted. The caller typically
+   * Called after the credential is accepted. The caller typically
    * uses this to start the WebSocket tunnel + refresh any cached
    * state that depended on being authenticated.
    */
@@ -38,24 +62,31 @@ type Props = {
    * Connect-button click — we never auto-submit a deep-linked key.
    */
   defaultKey?: string;
+  /**
+   * Pre-populated mesh invitation code. Set by the
+   * `seryai://join?code=...` deep link from the dashboard's
+   * Machine Invitations panel. Same explicit-confirmation rule as
+   * defaultKey — paste arrived; user still chooses to click Connect.
+   */
+  defaultCode?: string;
 };
 
 export function ConnectModal({
   onClose,
   onConnected,
   defaultKey,
+  defaultCode,
 }: Props) {
-  const [key, setKey] = useState(defaultKey ?? '');
+  const [value, setValue] = useState(defaultKey ?? defaultCode ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: 'key' });
   const { setAgentInfo, setAuthenticated, config } = useAgentStore();
   const toast = useToast();
 
-  const canSubmit =
-    key.trim().startsWith('sery_k_') &&
-    key.trim().length >= 16 &&
-    !submitting;
+  const kind = classify(value);
+  const canSubmit = kind !== 'unknown' && !submitting;
+  const arrivedFromDeepLink = Boolean(defaultKey || defaultCode);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,17 +95,27 @@ export function ConnectModal({
     setErrorMsg(null);
     try {
       const machineName = config?.agent?.name?.trim() || defaultMachineName();
-      const token = await invoke<AgentToken>('auth_with_key', {
-        key: key.trim(),
-        displayName: machineName,
-      });
+      let token: AgentToken;
+      if (kind === 'workspace_key') {
+        token = await invoke<AgentToken>('auth_with_key', {
+          key: value.trim(),
+          displayName: machineName,
+        });
+      } else {
+        // Invitation codes get upper-cased to tolerate user-typed
+        // lowercase — the server alphabet is upper-only Crockford.
+        token = await invoke<AgentToken>('auth_with_invitation', {
+          code: value.trim().toUpperCase(),
+          displayName: machineName,
+        });
+      }
       setAgentInfo(token);
       setAuthenticated(true);
 
       // Persist workspace_id / agent_id to config so offline-capable
       // paths (scanner, cache) don't need a round-trip later. The
-      // Rust-side auth_with_key command already does this, but this
-      // is a belt-and-suspenders follow-up in case the config write
+      // Rust-side auth commands already do this, but this is a
+      // belt-and-suspenders follow-up in case the config write
       // raced with the setAgentInfo above.
 
       // Start the WebSocket tunnel so cloud queries work.
@@ -101,7 +142,7 @@ export function ConnectModal({
         onClose();
       }
     } catch (err) {
-      setErrorMsg(friendlyConnectError(err));
+      setErrorMsg(friendlyConnectError(err, kind));
     } finally {
       setSubmitting(false);
     }
@@ -133,8 +174,8 @@ export function ConnectModal({
               Connect to Sery.ai
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Paste a workspace key to enable cross-machine queries
-              and the Machines view.
+              Paste a workspace key or invitation code to enable
+              cross-machine queries and the Machines view.
             </p>
           </div>
           <button
@@ -147,47 +188,65 @@ export function ConnectModal({
           </button>
         </div>
 
-        {defaultKey && (
+        {arrivedFromDeepLink && (
           <div className="mb-3 rounded-md border border-purple-200 bg-purple-50/60 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
-            This key arrived via an invite link. Click <strong>Connect</strong> to join the workspace.
+            {defaultCode
+              ? <>This invitation arrived via a link. Click <strong>Connect</strong> to join the workspace.</>
+              : <>This key arrived via an invite link. Click <strong>Connect</strong> to join the workspace.</>}
           </div>
         )}
 
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-            Workspace key
+            Workspace key or invitation code
           </span>
           <input
             type="text"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            value={key}
-            onChange={e => setKey(e.target.value)}
-            placeholder="sery_k_XXXXXXXXXXXXXXXXXXXX"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="sery_k_… or 10-char invitation code"
             autoFocus
             autoComplete="off"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
           />
           <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-            Starts with <code>sery_k_</code>. Generated on the web
-            dashboard.
+            {kind === 'workspace_key' && 'Recognized as a workspace key.'}
+            {kind === 'invitation' && 'Recognized as an invitation code.'}
+            {kind === 'unknown' && (
+              <>
+                Workspace keys start with <code>sery_k_</code>. Invitations are 10
+                characters (letters + digits, no <code>I/L/O/U</code>).
+              </>
+            )}
           </span>
         </label>
 
 
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-800/50">
           <p className="text-slate-600 dark:text-slate-300">
-            Don't have a workspace key yet?
+            Don't have a key or invitation yet?
           </p>
-          <button
-            type="button"
-            onClick={() => openUrl('https://app.sery.ai/settings/workspace-keys')}
-            className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
-          >
-            Open the dashboard to create one
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
+          <div className="mt-1 flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={() => openUrl('https://app.sery.ai/settings/mesh-invitations')}
+              className="inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
+            >
+              Create an invitation
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => openUrl('https://app.sery.ai/settings/workspace-keys')}
+              className="inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
+            >
+              Or create a long-lived workspace key
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {errorMsg && (
@@ -232,14 +291,24 @@ function defaultMachineName(): string {
   return platform === 'Unknown' ? 'My Computer' : `My ${platform}`;
 }
 
-function friendlyConnectError(err: unknown): string {
+function friendlyConnectError(err: unknown, kind: CredentialKind): string {
   const raw = String(err);
   const lower = raw.toLowerCase();
-  if (raw.includes('401') || lower.includes('invalid key') || lower.includes('unauthorized')) {
+  const credential = kind === 'invitation' ? 'invitation code' : 'key';
+  if (raw.includes('401') || lower.includes('invalid') || lower.includes('unauthorized') || lower.includes('expired') || lower.includes('not found')) {
+    if (kind === 'invitation') {
+      return "That invitation isn't valid — it may have already been used, revoked, or expired. Ask for a fresh one.";
+    }
     return "That key isn't recognized. Double-check you copied the whole thing, including the sery_k_ prefix.";
   }
   if (raw.includes('403') || lower.includes('revoked')) {
-    return 'That key has been revoked. Generate a fresh one in the dashboard.';
+    return `That ${credential} has been revoked. Generate a fresh one in the dashboard.`;
+  }
+  if (raw.includes('409') || lower.includes('already')) {
+    return 'This invitation has already been used. Ask for a new one.';
+  }
+  if (lower.includes('cap') || lower.includes('limit')) {
+    return "Workspace is at its machine limit. Ask the owner to free up a seat or upgrade.";
   }
   if (lower.includes('timed out') || lower.includes('timeout')) {
     return "Can't reach Sery.ai. Check your internet and try again.";

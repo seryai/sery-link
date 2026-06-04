@@ -153,6 +153,11 @@ export function StatusBar({ headless }: { headless?: boolean }) {
   // closes — never persisted (the modal is the only legitimate
   // consumer of an invite key).
   const [deepLinkKey, setDeepLinkKey] = useState<string | null>(null);
+  // Same shape, for the v0.8.10 mesh-invitation deep link
+  // (`seryai://join?code=...`). Kept separate from deepLinkKey so the
+  // ConnectModal can render the right banner copy and route to the
+  // right Tauri command.
+  const [deepLinkCode, setDeepLinkCode] = useState<string | null>(null);
 
   // Bridge the seryai://pair?key=… URL scheme into the existing
   // workspace-key auth flow. The Rust side (deep_link.rs) already
@@ -180,14 +185,45 @@ export function StatusBar({ headless }: { headless?: boolean }) {
     };
   }, [authenticated, toast]);
 
+  // Mirror of the deep-link-pair listener for the mesh-invitation
+  // path. The Rust deep_link.rs handle_join emits this event with
+  // the raw 10-char code as the payload.
+  useEffect(() => {
+    const unlisten = listen<string>('deep-link-join', (event) => {
+      const code = event.payload;
+      // Loose validation — the modal does the strict alphabet check.
+      // Here we just want to refuse obviously corrupt payloads so we
+      // don't open a modal with an empty box.
+      if (!code || code.length < 4) {
+        toast.error("Invitation link didn't look right. Ask the sender to resend.");
+        return;
+      }
+      if (authenticated) {
+        toast.info(
+          "You're already connected to a workspace. Disconnect first to redeem an invitation.",
+        );
+        return;
+      }
+      setDeepLinkCode(code);
+      setShowConnect(true);
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [authenticated, toast]);
+
   function closeConnect() {
     setShowConnect(false);
     setDeepLinkKey(null);
+    setDeepLinkCode(null);
     setDeepLinkKeyOverride(null);
   }
 
   // Effective default key: store-triggered override > deep-link > saved key
   const effectiveDefaultKey = deepLinkKeyOverride ?? deepLinkKey ?? savedKey;
+  // Invitation codes are single-use and never persisted, so only the
+  // deep-link source feeds defaultCode.
+  const effectiveDefaultCode = deepLinkCode ?? undefined;
 
   // Headless mode: render only modals (no visible bar). Used in the new
   // layout where TitleBar shows status inline and StatusBar is a
@@ -196,7 +232,11 @@ export function StatusBar({ headless }: { headless?: boolean }) {
     return (
       <>
         {showConnect && (
-          <ConnectModal onClose={closeConnect} defaultKey={effectiveDefaultKey} />
+          <ConnectModal
+            onClose={closeConnect}
+            defaultKey={effectiveDefaultKey}
+            defaultCode={effectiveDefaultCode}
+          />
         )}
         {showCatchUp && (
           <CatchUpDialog
@@ -246,6 +286,7 @@ export function StatusBar({ headless }: { headless?: boolean }) {
           <ConnectModal
             onClose={closeConnect}
             defaultKey={effectiveDefaultKey}
+            defaultCode={effectiveDefaultCode}
           />
         )}
       </>

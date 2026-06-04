@@ -265,6 +265,37 @@ pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentTok
     Ok(token)
 }
 
+/// Redeem a single-use mesh invitation code (the v0.8.10 alternative
+/// to long-lived workspace keys — Settings → Machine Invitations on
+/// the dashboard). Same post-auth side-effects as `auth_with_key`:
+/// persist identity, kick off a heartbeat, fetch remote config so the
+/// machine inherits the workspace's settings on first connect.
+#[tauri::command]
+pub async fn auth_with_invitation(code: String, display_name: String) -> Result<AgentToken, String> {
+    let config = Config::load().map_err(|e| e.to_string())?;
+    let token = auth::auth_with_mesh_invitation(
+        code,
+        display_name,
+        config.agent.machine_id,
+        config.cloud.api_url.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    persist_identity(&token.workspace_id, &token.agent_id);
+    post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
+    tokio::spawn(async move {
+        if let (Ok(tok), Ok(cfg)) = (keyring_store::get_token(), Config::load()) {
+            if let Some(remote) = scanner::fetch_remote_config(&cfg.cloud.api_url, &tok).await {
+                if let Ok(mut c) = Config::load() {
+                    c.apply_remote_config(&remote);
+                    let _ = c.save();
+                }
+            }
+        }
+    });
+    Ok(token)
+}
+
 #[tauri::command]
 pub async fn get_config() -> Result<Config, String> {
     Config::load().map_err(|e| e.to_string())

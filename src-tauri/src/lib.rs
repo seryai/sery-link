@@ -255,6 +255,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::start_auth_flow,
             commands::auth_with_key,
+            commands::auth_with_invitation,
             commands::bootstrap_workspace,
             commands::get_config,
             commands::save_config,

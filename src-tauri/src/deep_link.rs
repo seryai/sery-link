@@ -60,6 +60,7 @@ pub fn handle_url<R: Runtime>(app: &AppHandle<R>, raw_url: &str) {
     match (verb.as_str(), path) {
         ("reveal", _) => handle_reveal(&url),
         ("pair", _) => handle_pair(app, &url),
+        ("join", _) => handle_join(app, &url),
         // OAuth callbacks USED to live here as ("oauth", "/gdrive/callback")
         // but Google rejects custom URI schemes that don't follow
         // reverse-domain notation (`seryai://` has no dots). The
@@ -128,6 +129,33 @@ fn handle_pair<R: Runtime>(app: &AppHandle<R>, url: &Url) {
     use tauri::Emitter;
     if let Err(err) = app.emit("deep-link-pair", &key) {
         eprintln!("[deep-link] pair: failed to emit event: {err}");
+    }
+}
+
+fn handle_join<R: Runtime>(app: &AppHandle<R>, url: &Url) {
+    // v0.8.10 — single-use mesh invitation codes (Settings →
+    // Machine Invitations on the dashboard). Generated as 10-char
+    // Crockford-base32 strings, shared as `seryai://join?code=…`
+    // deep links from the dashboard. Same routing shape as `pair`:
+    // pull the code out, emit `deep-link-join` with the raw value,
+    // let the frontend (StatusBar) pre-fill ConnectModal and require
+    // explicit user confirmation before redeeming.
+    let code = url
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default();
+
+    if code.is_empty() {
+        eprintln!("[deep-link] join: missing or empty `code` parameter");
+        return;
+    }
+
+    eprintln!("[deep-link] join: received invitation code (len={})", code.len());
+
+    use tauri::Emitter;
+    if let Err(err) = app.emit("deep-link-join", &code) {
+        eprintln!("[deep-link] join: failed to emit event: {err}");
     }
 }
 
