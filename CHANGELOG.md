@@ -5,6 +5,14 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.7] — 2026-06-05
+
+### Added
+
+- **Mesh invitation redemption** — pair a fresh machine with a 10-char Crockford-base32 code minted from the dashboard (Settings → Machine Invitations). Single-use, audit-stamped, no long-lived workspace key required. `seryai://join?code=…` deep link opens the Connect modal pre-filled. ConnectModal auto-detects whether the input is a `sery_k_` workspace key or an invitation code and routes accordingly, with specific error copy for revoked / already-used / machine-cap failures.
+
+---
+
 ## [0.12.6] — 2026-06-03
 
 ### Fixed
