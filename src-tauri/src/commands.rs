@@ -3217,6 +3217,14 @@ pub async fn logout<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     *watcher_guard = None;
     drop(watcher_guard);
 
+    // Decommission this agent in the cloud BEFORE we lose the token. Cascades
+    // delete agent_tokens + agent_sources, which frees the local source UUIDs
+    // for re-use when the same Sery Link pairs to a different workspace later.
+    // Best-effort: a failure (network down, server cold) doesn't block logout.
+    if let (Ok(token), Ok(config)) = (keyring_store::get_token(), Config::load()) {
+        scanner::decommission_self(&config.cloud.api_url, &token).await;
+    }
+
     keyring_store::delete_token().map_err(|e| e.to_string())?;
     crate::tray::set_state(&app, "offline");
     Ok(())

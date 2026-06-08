@@ -2583,6 +2583,31 @@ pub async fn fetch_remote_config(
     }
 }
 
+/// Tell the cloud "this agent is going away" before we clear the keyring
+/// token. Best-effort: a network failure here mustn't block logout (the
+/// user still gets disconnected locally), but a success frees up the
+/// agent_sources rows so the same Sery Link can re-pair to a different
+/// workspace later without PK-colliding on source UUIDs.
+pub async fn decommission_self(api_url: &str, token: &str) {
+    let client = reqwest::Client::new();
+    match client
+        .delete(format!("{}/v1/agent/self", api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            eprintln!("[scanner] decommissioned this agent in the cloud");
+        }
+        Ok(r) => {
+            eprintln!("[scanner] decommission_self returned {}", r.status());
+        }
+        Err(e) => {
+            eprintln!("[scanner] decommission_self network error: {}", e);
+        }
+    }
+}
+
 /// `source_prefix` must be the virtual query_path prefix, e.g.:
 ///   `local://<agent_id>/Users/foo/Documents/`  (local folder)
 ///   `local://<agent_id>/s3://bucket/prefix/`   (S3 source)
