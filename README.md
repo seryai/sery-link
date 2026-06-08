@@ -4,7 +4,7 @@
 
 Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
 
-> **Browse · preview · profile · query — across every cloud you have, no downloads.** Sery Link is also the desktop endpoint for [Sery](https://sery.ai) — a private data network for your files (multi-machine workspace upgrade is opt-in).
+> **Browse · preview · profile · query — across every cloud you have, no downloads.** Sery Link is also the desktop endpoint for [Sery](https://sery.ai) — your private data agent (multi-machine workspace upgrade is opt-in).
 
 ## What you can do with one install
 
