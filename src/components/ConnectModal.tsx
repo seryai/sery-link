@@ -123,7 +123,7 @@ export function ConnectModal({
         console.error('Tunnel failed to start after connect:', err),
       );
 
-      toast.success('Connected. Your workspace is live.');
+      toast.success('This device is now linked to your Sery account.');
       onConnected?.(token);
 
       // Catch-up step: if the user added folders + scanned them in
@@ -174,8 +174,8 @@ export function ConnectModal({
               Connect to Sery.ai
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Paste a workspace key or invitation code to enable
-              cross-machine queries and the Machines view.
+              Link this device to your Sery account so it can see your
+              other machines.
             </p>
           </div>
           <button
@@ -190,15 +190,13 @@ export function ConnectModal({
 
         {arrivedFromDeepLink && (
           <div className="mb-3 rounded-md border border-purple-200 bg-purple-50/60 p-3 text-xs text-purple-900 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-200">
-            {defaultCode
-              ? <>This invitation arrived via a link. Click <strong>Connect</strong> to join the workspace.</>
-              : <>This key arrived via an invite link. Click <strong>Connect</strong> to join the workspace.</>}
+            This code arrived via a link. Click <strong>Connect</strong> to link this device.
           </div>
         )}
 
         <label className="block">
           <span className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
-            Workspace key or invitation code
+            Paste your connect code
           </span>
           <input
             type="text"
@@ -207,46 +205,23 @@ export function ConnectModal({
             spellCheck={false}
             value={value}
             onChange={e => setValue(e.target.value)}
-            placeholder="sery_k_… or 10-char invitation code"
+            placeholder="Paste from app.sery.ai"
             autoFocus
             autoComplete="off"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
           />
-          <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-            {kind === 'workspace_key' && 'Recognized as a workspace key.'}
-            {kind === 'invitation' && 'Recognized as an invitation code.'}
-            {kind === 'unknown' && (
-              <>
-                Workspace keys start with <code>sery_k_</code>. Invitations are 10
-                characters (letters + digits, no <code>I/L/O/U</code>).
-              </>
-            )}
-          </span>
         </label>
 
 
-        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-800/50">
-          <p className="text-slate-600 dark:text-slate-300">
-            Don't have a key or invitation yet?
-          </p>
-          <div className="mt-1 flex flex-col gap-1">
-            <button
-              type="button"
-              onClick={() => openUrl('https://app.sery.ai/settings/mesh-invitations')}
-              className="inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
-            >
-              Create an invitation
-              <ExternalLink className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => openUrl('https://app.sery.ai/settings/workspace-keys')}
-              className="inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
-            >
-              Or create a long-lived workspace key
-              <ExternalLink className="h-3.5 w-3.5" />
-            </button>
-          </div>
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => openUrl('https://app.sery.ai/connect')}
+            className="inline-flex items-center gap-1 text-sm font-medium text-purple-600 hover:underline dark:text-purple-400"
+          >
+            Get a code from Sery.ai
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
         </div>
 
         {errorMsg && (
@@ -291,24 +266,20 @@ function defaultMachineName(): string {
   return platform === 'Unknown' ? 'My Computer' : `My ${platform}`;
 }
 
-function friendlyConnectError(err: unknown, kind: CredentialKind): string {
+function friendlyConnectError(err: unknown, _kind: CredentialKind): string {
   const raw = String(err);
   const lower = raw.toLowerCase();
-  const credential = kind === 'invitation' ? 'invitation code' : 'key';
   if (raw.includes('401') || lower.includes('invalid') || lower.includes('unauthorized') || lower.includes('expired') || lower.includes('not found')) {
-    if (kind === 'invitation') {
-      return "That invitation isn't valid — it may have already been used, revoked, or expired. Ask for a fresh one.";
-    }
-    return "That key isn't recognized. Double-check you copied the whole thing, including the sery_k_ prefix.";
+    return "That code didn't work — it may have expired, been used already, or been mistyped. Grab a fresh one from app.sery.ai.";
   }
   if (raw.includes('403') || lower.includes('revoked')) {
-    return `That ${credential} has been revoked. Generate a fresh one in the dashboard.`;
+    return 'That code has been revoked. Generate a fresh one at app.sery.ai.';
   }
   if (raw.includes('409') || lower.includes('already')) {
-    return 'This invitation has already been used. Ask for a new one.';
+    return 'This code has already been used. Get a new one at app.sery.ai.';
   }
   if (lower.includes('cap') || lower.includes('limit')) {
-    return "Workspace is at its machine limit. Ask the owner to free up a seat or upgrade.";
+    return 'Your account is at its device limit. Free up a slot or upgrade.';
   }
   if (lower.includes('timed out') || lower.includes('timeout')) {
     return "Can't reach Sery.ai. Check your internet and try again.";
