@@ -5,6 +5,14 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.8] — 2026-06-08
+
+### Fixed
+
+- **Logout now cleans up the cloud-side agent** — `logout()` calls `DELETE /v1/agent/self` before clearing the keyring token, which cascades the agent's tokens + sources on the server. Re-pairing the same machine to a different workspace no longer collides on `agent_sources_pkey` (the prior 500 surfaced as `UniqueViolationError`), and the local scan index / source UUIDs stay intact so re-sync is instant — no re-scan required. Best-effort: a network failure during logout doesn't block the local sign-out, and the server's new 409 guard catches the residual case cleanly.
+
+---
+
 ## [0.12.7] — 2026-06-05
 
 ### Added
