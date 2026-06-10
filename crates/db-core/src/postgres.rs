@@ -851,7 +851,7 @@ pub async fn introspect_schema(pool: &PgPool, schema: &str) -> Result<Vec<TableI
             .ok()
             .and_then(|fqn| {
                 // fqn = "schema"."table" — extract table part
-                fqn.split('.').last().map(|t| t.trim_matches('"').to_string())
+                fqn.split('.').next_back().map(|t| t.trim_matches('"').to_string())
             })
             .unwrap_or(table_fqn);
 
@@ -945,7 +945,7 @@ pub async fn introspect_schema(pool: &PgPool, schema: &str) -> Result<Vec<TableI
 /// Test a connection without creating a persistent pool.
 pub async fn test_connection(config: &PgConfig) -> Result<(), String> {
     let pool = create_pool(config).await?;
-    let _ = pool.close();
+    pool.close();
     Ok(())
 }
 

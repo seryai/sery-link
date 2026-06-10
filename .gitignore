@@ -13,6 +13,10 @@ dist-ssr
 dist-builds
 *.local
 
+# Rust build output at the workspace root (49GB — one git add . away
+# from staging it; src-tauri/target is covered by src-tauri/.gitignore)
+target/
+
 # Environment / secrets
 .env
 .env.*

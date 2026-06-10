@@ -1253,7 +1253,7 @@ mod tests {
         let folder = &config.watched_folders[0];
 
         assert_eq!(folder.max_file_size_mb, 1024);
-        assert!(folder.exclude_patterns.len() > 0);
+        assert!(!folder.exclude_patterns.is_empty());
         assert!(folder.last_scan_at.is_none());
         assert!(folder.last_scan_stats.is_none());
     }

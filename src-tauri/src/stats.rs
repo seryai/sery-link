@@ -154,8 +154,10 @@ mod tests {
 
     #[test]
     fn roll_over_initializes_date_on_first_call() {
-        let mut s = Stats::default();
-        s.queries_today = 42; // pretend state from a crash or bug
+        let mut s = Stats {
+            queries_today: 42, // pretend state from a crash or bug
+            ..Stats::default()
+        };
         roll_over_day(&mut s, "2026-04-17");
         assert_eq!(s.queries_today, 0, "counter resets on first roll-over");
         assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));
@@ -163,9 +165,11 @@ mod tests {
 
     #[test]
     fn roll_over_resets_counter_on_new_day() {
-        let mut s = Stats::default();
-        s.queries_today = 7;
-        s.queries_today_date = Some("2026-04-16".into());
+        let mut s = Stats {
+            queries_today: 7,
+            queries_today_date: Some("2026-04-16".into()),
+            ..Stats::default()
+        };
         roll_over_day(&mut s, "2026-04-17");
         assert_eq!(s.queries_today, 0);
         assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));
@@ -173,9 +177,11 @@ mod tests {
 
     #[test]
     fn roll_over_is_noop_on_same_day() {
-        let mut s = Stats::default();
-        s.queries_today = 7;
-        s.queries_today_date = Some("2026-04-17".into());
+        let mut s = Stats {
+            queries_today: 7,
+            queries_today_date: Some("2026-04-17".into()),
+            ..Stats::default()
+        };
         roll_over_day(&mut s, "2026-04-17");
         assert_eq!(s.queries_today, 7, "counter must not reset mid-day");
         assert_eq!(s.queries_today_date.as_deref(), Some("2026-04-17"));

@@ -66,7 +66,7 @@ fn quick_ask_shortcut() -> Shortcut {
 /// the app, just degrade the UX.
 pub fn register<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let shortcut = quick_ask_shortcut();
-    let shortcut_for_handler = shortcut.clone();
+    let shortcut_for_handler = shortcut;
 
     let plugin = tauri_plugin_global_shortcut::Builder::new()
         .with_handler(move |app, triggered, event| {

@@ -482,7 +482,7 @@ fn derive_name_from_kind(kind: &SourceKind) -> String {
     }
 }
 
-fn derive_local_name(path: &PathBuf) -> String {
+fn derive_local_name(path: &std::path::Path) -> String {
     path.file_name()
         .and_then(|s| s.to_str())
         .map(String::from)

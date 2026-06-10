@@ -5,10 +5,10 @@
 //!
 //!   - `list_root_folders()`   — top-level folders for the picker UI
 //!   - `list_folder()`         — children of a chosen folder, used by
-//!                               the scan walker
+//!     the scan walker
 //!   - `download_file_to()`    — stream a binary file to a path
 //!   - `download_export_to()`  — same, but for Google-native exports
-//!                               (Sheets → .xlsx, etc.)
+//!     (Sheets → .xlsx, etc.)
 //!
 //! Auth: every method takes a *fresh* access token. Token refresh is
 //! handled by `with_fresh_token()` here, which loads tokens from

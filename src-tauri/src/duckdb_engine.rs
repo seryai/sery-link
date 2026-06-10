@@ -67,7 +67,7 @@ pub async fn execute_query(sql: &str, file_path: &str, config: &Config) -> Resul
     // directly against S3 on this machine — Sery Link holds the credentials.
     if file_path.starts_with("local://") {
         let rest = file_path.strip_prefix("local://").unwrap_or(file_path);
-        let inner = rest.splitn(2, '/').nth(1).unwrap_or("");
+        let inner = rest.split_once('/').map(|x| x.1).unwrap_or("");
         if crate::url::is_remote_url(inner) {
             return execute_remote_tunnel_query(sql, file_path, inner, config).await;
         }
@@ -280,9 +280,7 @@ fn is_ident_char(b: u8) -> bool {
 }
 
 #[allow(dead_code)]
-#[allow(dead_code)]
-fn
- execute_query_blocking(sql: &str, file_path: &str) -> Result<QueryResult> {
+fn execute_query_blocking(sql: &str, file_path: &str) -> Result<QueryResult> {
     let start = std::time::Instant::now();
 
     // Create in-memory connection
@@ -367,7 +365,7 @@ fn
         let mut row_values = Vec::new();
         for i in 0..columns.len() {
             // Convert DuckDB value to JSON
-            let value = row_value_to_json(&row, i)?;
+            let value = row_value_to_json(row, i)?;
             row_values.push(value);
         }
         rows.push(row_values);

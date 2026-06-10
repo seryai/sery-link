@@ -40,7 +40,7 @@ fn load() -> Credentials {
     if let Some(ref c) = *guard {
         return c.clone();
     }
-    let creds = match creds_path().and_then(|p| {
+    let creds = creds_path().and_then(|p| {
         if p.exists() {
             let txt = fs::read_to_string(&p)
                 .map_err(|e| AgentError::Config(format!("read credentials: {e}")))?;
@@ -49,10 +49,7 @@ fn load() -> Credentials {
         } else {
             Ok(Credentials::default())
         }
-    }) {
-        Ok(c) => c,
-        Err(_) => Credentials::default(),
-    };
+    }).unwrap_or_default();
     *guard = Some(creds.clone());
     creds
 }

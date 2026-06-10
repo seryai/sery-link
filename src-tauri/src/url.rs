@@ -164,7 +164,7 @@ fn rewrite_google_sheets_url(url: &str) -> Option<String> {
     let id_start = after_d + 3;
     let rest = &trimmed[id_start..];
     let id_end_offset = rest
-        .find(|c: char| c == '/' || c == '?' || c == '#')
+        .find(['/', '?', '#'])
         .unwrap_or(rest.len());
     let id = &rest[..id_end_offset];
     if id.is_empty() {

@@ -419,15 +419,13 @@ fn extract_remote_schema(
         .map_err(|e| AgentError::Database(format!("query DESCRIBE: {}", e)))?;
 
     let mut columns = Vec::new();
-    for row in rows {
-        if let Ok((name, col_type)) = row {
-            columns.push(ColumnSchema {
-                name,
-                col_type,
-                nullable: true,
-                ..Default::default()
-            });
-        }
+    for (name, col_type) in rows.flatten() {
+        columns.push(ColumnSchema {
+            name,
+            col_type,
+            nullable: true,
+            ..Default::default()
+        });
     }
     Ok(columns)
 }

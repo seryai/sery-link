@@ -93,6 +93,7 @@ impl SyncManifest {
     ///   - The key isn't in the manifest at all (first time seen).
     ///   - Size has changed.
     ///   - mtime marker has changed.
+    ///
     /// Local file existence is NOT consulted here — that's the
     /// caller's responsibility, since "manifest hit but local file
     /// got deleted out from under us" still means we need to

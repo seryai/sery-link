@@ -60,7 +60,7 @@ static FLUSH_CONSECUTIVE_FAILURES: AtomicU32 = AtomicU32::new(0);
 /// every 10th. Increments the counter as a side effect.
 fn should_log_flush_failure() -> bool {
     let prev = FLUSH_CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed);
-    prev == 0 || prev % 10 == 0
+    prev == 0 || prev.is_multiple_of(10)
 }
 
 fn reset_flush_failures() {
