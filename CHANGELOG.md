@@ -5,6 +5,15 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.9] — 2026-06-10
+
+### Fixed
+
+- **Hermetic test cache** — `metadata_cache.rs` tests now write to a per-process temp dir (`cfg(test)`) instead of the real user data dir. Tests no longer fail when the desktop app is running and holds the DuckDB exclusive lock.
+- **`target/` gitignored** — 49 GB Rust build output was untracked; added `target/` to `.gitignore`.
+- **Cargo.lock synced** — lock file was out of sync after the 0.12.8 version bump; committed the updated lock.
+- **Clippy** — burned down 53 of 66 workspace warnings: collapsed identical if/else branches, replaced post-`Default` field assignment with struct literals, removed duplicate `#[allow(dead_code)]`, `&PathBuf` → `&Path`, doc-list indentation fixes across 24 files.
+
 ## [0.12.8] — 2026-06-08
 
 ### Fixed
