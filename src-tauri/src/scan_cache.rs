@@ -275,15 +275,13 @@ impl ScanCache {
             .map_err(|e| AgentError::Database(format!("execute all-entries query: {}", e)))?;
 
         let mut out = Vec::new();
-        for row in rows {
-            if let Ok((folder_path, relative_path, metadata_json)) = row {
-                if let Ok(metadata) = serde_json::from_str::<DatasetMetadata>(&metadata_json) {
-                    out.push(CachedEntry {
-                        folder_path,
-                        relative_path,
-                        metadata,
-                    });
-                }
+        for (folder_path, relative_path, metadata_json) in rows.flatten() {
+            if let Ok(metadata) = serde_json::from_str::<DatasetMetadata>(&metadata_json) {
+                out.push(CachedEntry {
+                    folder_path,
+                    relative_path,
+                    metadata,
+                });
             }
         }
         Ok(out)

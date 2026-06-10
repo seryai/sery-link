@@ -452,7 +452,7 @@ impl MetadataCache {
             },
         ).map_err(|e| AgentError::Database(format!("Query failed: {}", e)))?;
 
-        Ok(rows.next().transpose().map_err(|e| AgentError::Database(format!("Failed to fetch dataset: {}", e)))?)
+        rows.next().transpose().map_err(|e| AgentError::Database(format!("Failed to fetch dataset: {}", e)))
     }
 
     /// Compute the schema diff between what's cached for this (workspace, path)

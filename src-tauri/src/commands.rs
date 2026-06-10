@@ -750,7 +750,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
     // Captured before the move into GdriveWatchedFolder below; we
     // use it for the user-facing "indexed N files" toast and the
     // Tauri command return value.
-    let cached_count: usize;
+    
 
     for (i, file) in walked.files.iter().enumerate() {
         let _ = app.emit(
@@ -804,7 +804,7 @@ pub async fn gdrive_watch_folder<R: Runtime>(
         .map_err(|e| e.to_string())?;
     let cache_path_str = cache_dir.to_string_lossy().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    cached_count = file_ids.len();
+    let cached_count: usize = file_ids.len();
     {
         let mut config = Config::load().map_err(|e| e.to_string())?;
         config.add_gdrive_watched_folder(crate::config::GdriveWatchedFolder {
@@ -1855,10 +1855,8 @@ fn run_remote_summarize(
         })
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for row in rows {
-        if let Ok(p) = row {
-            out.push(p);
-        }
+    for p in rows.flatten() {
+        out.push(p);
     }
     Ok(out)
 }
@@ -1924,10 +1922,8 @@ fn run_summarize(read_func: &str, path_str: &str) -> Result<Vec<ColumnProfile>, 
         .map_err(|e| e.to_string())?;
 
     let mut out = Vec::new();
-    for row in rows {
-        if let Ok(p) = row {
-            out.push(p);
-        }
+    for p in rows.flatten() {
+        out.push(p);
     }
     Ok(out)
 }
@@ -5734,14 +5730,14 @@ pub async fn sync_db_source_to_cloud(source_id: &str, config: &Config) -> usize 
         })
         .unwrap_or_else(|| "database_table".to_string());
 
-    let is_mysql = source.map_or(false, |s| matches!(s.kind, crate::sources::SourceKind::Mysql { .. }));
+    let is_mysql = source.is_some_and(|s| matches!(s.kind, crate::sources::SourceKind::Mysql { .. }));
     // Oracle and similar legacy JDBC drivers use FETCH FIRST n ROWS ONLY
     // (or ROWNUM). DB2, SAP HANA, Teradata accept FETCH FIRST too. To
     // keep this simple, we use FETCH FIRST for every Oracle-family
     // driver and LIMIT for the rest — the agent surfaces a syntax error
     // for the unlucky driver that disagrees, and the sample is
     // best-effort anyway (None on error).
-    let is_oracle_family = source.map_or(false, |s| matches!(
+    let is_oracle_family = source.is_some_and(|s| matches!(
         &s.kind,
         crate::sources::SourceKind::AgentDb { driver_key, .. } if driver_key.starts_with("oracle")
     ));
@@ -6047,7 +6043,7 @@ mod search_tests {
             tabular("/a", "my_orders_final.csv", &[]),
         ];
         let matches = rank_matches(&entries, "orders.csv");
-        assert!(matches.len() >= 1);
+        assert!(!matches.is_empty());
         assert_eq!(matches[0].relative_path, "orders.csv");
         assert!(matches[0].score >= 120);
     }

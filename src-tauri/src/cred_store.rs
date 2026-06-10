@@ -57,10 +57,7 @@ fn read_vault() -> HashMap<String, HashMap<String, String>> {
         Ok(t) => t,
         Err(_) => return HashMap::new(),
     };
-    match serde_json::from_str::<HashMap<String, HashMap<String, String>>>(&txt) {
-        Ok(m) => m,
-        Err(_) => HashMap::new(),
-    }
+    serde_json::from_str::<HashMap<String, HashMap<String, String>>>(&txt).unwrap_or_default()
 }
 
 fn write_vault(map: &HashMap<String, HashMap<String, String>>) -> Result<(), Error> {

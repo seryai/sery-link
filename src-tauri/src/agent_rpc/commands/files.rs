@@ -11,9 +11,8 @@ fn resolve_path(args: &Value) -> Result<(String, String), String> {
         let abs = if qp.starts_with("local://") {
             // Legacy: strip local://agent_id/ → inner path
             let inner = qp.splitn(4, '/').nth(3).unwrap_or(qp);
-            if inner.contains("://") {
-                inner.to_string()
-            } else if inner.starts_with('/') {
+            // Remote URLs (s3://...) and absolute paths pass through as-is
+            if inner.contains("://") || inner.starts_with('/') {
                 inner.to_string()
             } else {
                 format!("/{inner}")
@@ -229,8 +228,7 @@ impl AgentCommand for ExtractFileCommand {
                     crate::scanner::extract_pdf_first_pages(&path, n)
                 })
                 .await
-                .map_err(|e| e.to_string())?
-                .map_err(|e| e)?;
+                .map_err(|e| e.to_string())??;
 
                 return Ok(json!({
                     "document_markdown": markdown,
@@ -521,7 +519,7 @@ impl AgentCommand for RescanDatasetCommand {
                 ).await;
             }
 
-            return Ok(serde_json::to_value(&metadata).map_err(|e| e.to_string())?);
+            return serde_json::to_value(&metadata).map_err(|e| e.to_string());
         }
 
         // Local file — reuse the existing reextract_file path which handles

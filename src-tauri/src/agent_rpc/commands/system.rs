@@ -123,7 +123,7 @@ impl AgentCommand for OpenPathCommand {
         let config = crate::config::Config::load().map_err(|e| e.to_string())?;
         let allowed = config.sources.iter().any(|s| {
             if let crate::sources::SourceKind::Local { path: src_path, .. } = &s.kind {
-                path.starts_with(&src_path.to_string_lossy().as_ref())
+                path.starts_with(src_path.to_string_lossy().as_ref())
             } else {
                 false
             }

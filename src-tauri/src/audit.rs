@@ -32,16 +32,13 @@ const MAX_AUDIT_ENTRIES: usize = 10_000;
 /// audit files (which don't have this field) still deserialize cleanly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AuditKind {
+    #[default]
     Sync,
     ByokCall,
 }
 
-impl Default for AuditKind {
-    fn default() -> Self {
-        AuditKind::Sync
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {

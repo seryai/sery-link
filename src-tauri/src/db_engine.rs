@@ -234,7 +234,7 @@ pub async fn execute_agent_query(
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|r| r.as_array().map(|row| row.clone()))
+                .filter_map(|r| r.as_array().cloned())
                 .collect()
         })
         .unwrap_or_default();
@@ -1012,7 +1012,7 @@ pub async fn execute_db_query(
         )
         .await
         .map_err(|_| AgentError::Database(format!("MySQL query timed out after {TIMEOUT_SECS}s")))?
-        .map_err(|e| AgentError::Database(e))?;
+        .map_err(AgentError::Database)?;
         return Ok(db_core_result_to_query_result(result));
     }
 
@@ -1025,7 +1025,7 @@ pub async fn execute_db_query(
         )
         .await
         .map_err(|_| AgentError::Database(format!("PostgreSQL query timed out after {TIMEOUT_SECS}s")))?
-        .map_err(|e| AgentError::Database(e))?;
+        .map_err(AgentError::Database)?;
         return Ok(db_core_result_to_query_result(result));
     }
 
@@ -1211,7 +1211,7 @@ pub async fn introspect_schema(
         )
         .await
         .map_err(|_| AgentError::Database("MySQL introspect timed out".to_string()))?
-        .map_err(|e| AgentError::Database(e))?;
+        .map_err(AgentError::Database)?;
         return Ok(tables.into_iter().map(db_core_table_info_to_schema).collect());
     }
 
@@ -1224,7 +1224,7 @@ pub async fn introspect_schema(
         )
         .await
         .map_err(|_| AgentError::Database("PostgreSQL introspect timed out".to_string()))?
-        .map_err(|e| AgentError::Database(e))?;
+        .map_err(AgentError::Database)?;
         return Ok(tables.into_iter().map(db_core_table_info_to_schema).collect());
     }
 
@@ -1413,7 +1413,7 @@ fn introspect_blocking(
         tables.entry(table).or_default().push(ColumnInfo {
             name: col_name,
             data_type,
-            nullable: nullable.to_ascii_uppercase() == "YES",
+            nullable: nullable.eq_ignore_ascii_case("YES"),
             is_primary_key: is_pk,
             default_value,
             comment: None,
@@ -1677,7 +1677,7 @@ pub fn test_connection_blocking(
             mysql_cfg.ssh = None;
             db_core::mysql::test_connection(&mysql_cfg)
                 .await
-                .map_err(|e| AgentError::Database(e))
+                .map_err(AgentError::Database)
         });
     }
 
@@ -1699,7 +1699,7 @@ pub fn test_connection_blocking(
             pg_cfg.ssh = None;
             db_core::postgres::test_connection(&pg_cfg)
                 .await
-                .map_err(|e| AgentError::Database(e))
+                .map_err(AgentError::Database)
         });
     }
 

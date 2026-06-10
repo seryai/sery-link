@@ -20,9 +20,9 @@ const SERVICE: &str = "sery-agent-db";
 
 /// Persist `password` against `source_id` in the OS keychain.
 ///
-/// Overwrites an existing entry if present — callers typically delete
-/// + re-store rather than update in place, but `set_password` is
-/// idempotent on every supported backend so this is safe to call
+/// Overwrites an existing entry if present — callers typically
+/// delete-and-re-store rather than update in place, but `set_password`
+/// is idempotent on every supported backend so this is safe to call
 /// repeatedly.
 pub fn store_password(source_id: &str, password: &str) -> Result<(), String> {
     let entry = Entry::new(SERVICE, source_id)

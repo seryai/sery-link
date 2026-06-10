@@ -809,7 +809,7 @@ fn walk_one(path: &Path, folder_path: &str, settings: &FolderSettings) -> WalkOu
             let is_doc = path
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|e| is_document_ext(e))
+                .map(is_document_ext)
                 .unwrap_or(false);
             if !is_doc || hit.document_markdown.is_some() {
                 return WalkOutcome::CacheHit(hit);
@@ -1637,15 +1637,13 @@ fn extract_schema(
         })
         .map_err(|e| AgentError::Database(format!("Failed to read schema: {}", e)))?;
 
-    for row in rows {
-        if let Ok((name, col_type)) = row {
-            columns.push(ColumnSchema {
-                name,
-                col_type,
-                nullable: true,
-                ..Default::default()
-            });
-        }
+    for (name, col_type) in rows.flatten() {
+        columns.push(ColumnSchema {
+            name,
+            col_type,
+            nullable: true,
+            ..Default::default()
+        });
     }
 
     let row_count: i64 = match conn.query_row(&count_sql, [], |row| row.get(0)) {

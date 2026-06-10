@@ -102,19 +102,13 @@ pub struct ScanComplete {
 /// `Content`, since the minimal record is the final state for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DatasetPhase {
     Shallow,
+    #[default]
     Content,
 }
 
-impl Default for DatasetPhase {
-    fn default() -> Self {
-        // Default to Content so any code path that constructs a
-        // `DatasetScanned` without specifying a phase preserves the
-        // pre-two-pass behaviour ("this is the final record").
-        Self::Content
-    }
-}
 
 /// Emitted once per file as soon as the scanner finishes extracting its
 /// metadata — lets FolderDetail stream rows into view instead of waiting

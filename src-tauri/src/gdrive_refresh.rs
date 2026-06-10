@@ -41,8 +41,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
 
 /// Delay before the FIRST tick after app launch. Gives initial-scan
-/// + auth bootstrap a chance to settle so we don't pile a Drive walk
-/// on top of a cold-start workload.
+/// and auth bootstrap a chance to settle so we don't pile a Drive
+/// walk on top of a cold-start workload.
 const STARTUP_DELAY: Duration = Duration::from_secs(60);
 
 /// Fire-and-forget loop kicked off from `lib.rs::run`. Runs forever
