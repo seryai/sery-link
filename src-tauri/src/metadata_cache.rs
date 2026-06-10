@@ -34,9 +34,7 @@ static METADATA_CONN: OnceCell<Mutex<Connection>> = OnceCell::new();
 /// Returns the static reference on success; propagates IO/SQL errors.
 fn get_or_init_conn() -> Result<&'static Mutex<Connection>> {
     METADATA_CONN.get_or_try_init(|| {
-        let cache_dir = dirs::data_local_dir()
-            .ok_or_else(|| AgentError::Config("Could not determine local data directory".to_string()))?
-            .join("sery");
+        let cache_dir = resolve_cache_dir()?;
 
         std::fs::create_dir_all(&cache_dir)
             .map_err(|e| AgentError::Config(format!("Failed to create cache directory: {}", e)))?;
@@ -70,6 +68,28 @@ fn get_or_init_conn() -> Result<&'static Mutex<Connection>> {
 
         Ok(Mutex::new(conn))
     })
+}
+
+/// Where the metadata cache DB lives.
+///
+/// In test builds this is a per-process temp dir: tests must never open
+/// the real user cache — a running Sery Link app holds a DuckDB lock on
+/// it, and a test bug could corrupt real user data.
+#[cfg(test)]
+fn resolve_cache_dir() -> Result<std::path::PathBuf> {
+    static TEST_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    Ok(TEST_DIR
+        .get_or_init(|| {
+            std::env::temp_dir().join(format!("sery-test-cache-{}", std::process::id()))
+        })
+        .clone())
+}
+
+#[cfg(not(test))]
+fn resolve_cache_dir() -> Result<std::path::PathBuf> {
+    Ok(dirs::data_local_dir()
+        .ok_or_else(|| AgentError::Config("Could not determine local data directory".to_string()))?
+        .join("sery"))
 }
 
 /// Process-wide write lock for the metadata cache.
