@@ -34,6 +34,28 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Desktop-app feel: UI chrome (labels, buttons, nav) is not selectable.
+     DATA stays selectable via the re-enable rules below — this is a data
+     tool; users copy paths, SQL, table cells, and error text all day. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Re-enable selection where text IS the product:
+   - form fields (WebKit can break editing when an ancestor is none)
+   - tables (query results, schema/profile views)
+   - code/pre + mono text (file paths, SQL, connection strings)
+   - .selectable — opt-in hook for anything else (error messages, IDs) */
+input,
+textarea,
+[contenteditable='true'],
+table,
+code,
+pre,
+.font-mono,
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 #root {
