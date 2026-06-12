@@ -243,12 +243,54 @@ pub async fn bootstrap_workspace(display_name: String) -> Result<AgentToken, Str
     Ok(token)
 }
 
+/// Capture the credentials of the CURRENT pairing before an auth call
+/// overwrites the keyring token. Returns (old_token, old_workspace_id)
+/// when this machine was already paired; (None, None) on first pair.
+fn capture_previous_pairing(config: &Config) -> (Option<String>, Option<String>) {
+    (
+        keyring_store::get_token().ok(),
+        config.agent.workspace_id.clone(),
+    )
+}
+
+/// After pairing lands on a DIFFERENT workspace, decommission the old
+/// agent with the old token. Frees the old workspace's agent_sources
+/// rows so this machine's source UUIDs (a global PK server-side) don't
+/// 409-collide on the next source sync. Same-workspace re-pair (key
+/// rotation) must NOT decommission — the server reuses the agent row
+/// by machine_id, keeping portal config and annotations.
+/// Best-effort: if the old workspace is already gone the call just 401s.
+async fn decommission_previous_pairing(
+    api_url: &str,
+    old_token: Option<String>,
+    old_workspace_id: Option<String>,
+    new_workspace_id: &str,
+) {
+    if let (Some(token), Some(old_ws)) = (old_token, old_workspace_id) {
+        if old_ws != new_workspace_id {
+            eprintln!(
+                "[auth] workspace switch ({} -> {}): decommissioning old agent",
+                old_ws, new_workspace_id
+            );
+            scanner::decommission_self(api_url, &token).await;
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
+    let (old_token, old_workspace_id) = capture_previous_pairing(&config);
     let token = auth::auth_with_workspace_key(key, display_name, config.agent.machine_id, config.cloud.api_url.clone())
         .await
         .map_err(|e| e.to_string())?;
+    decommission_previous_pairing(
+        &config.cloud.api_url,
+        old_token,
+        old_workspace_id,
+        &token.workspace_id,
+    )
+    .await;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
     // Best-effort: fetch remote agent config and apply it.
@@ -273,6 +315,7 @@ pub async fn auth_with_key(key: String, display_name: String) -> Result<AgentTok
 #[tauri::command]
 pub async fn auth_with_invitation(code: String, display_name: String) -> Result<AgentToken, String> {
     let config = Config::load().map_err(|e| e.to_string())?;
+    let (old_token, old_workspace_id) = capture_previous_pairing(&config);
     let token = auth::auth_with_mesh_invitation(
         code,
         display_name,
@@ -281,6 +324,13 @@ pub async fn auth_with_invitation(code: String, display_name: String) -> Result<
     )
     .await
     .map_err(|e| e.to_string())?;
+    decommission_previous_pairing(
+        &config.cloud.api_url,
+        old_token,
+        old_workspace_id,
+        &token.workspace_id,
+    )
+    .await;
     persist_identity(&token.workspace_id, &token.agent_id);
     post_pair_heartbeat(&config.cloud.api_url, &token.access_token).await;
     tokio::spawn(async move {

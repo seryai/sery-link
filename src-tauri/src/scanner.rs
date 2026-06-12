@@ -2503,7 +2503,10 @@ pub async fn reconcile_with_cloud(api_url: &str, token: &str, source_roots: Vec<
 }
 
 /// Sync the full structured source list to PUT /v1/agent/sources.
-/// Called after any add / remove / rename. Best-effort.
+/// Called after any add / remove / rename. Best-effort, but failures
+/// are surfaced to the UI via the `sync_failed` event — a silently
+/// dropped 409 here is exactly how "machine on the network page with
+/// no sources" happened after a re-pair onto orphaned source UUIDs.
 pub async fn sync_sources_to_cloud(api_url: &str, token: &str, sources: serde_json::Value) {
     let client = reqwest::Client::new();
     match client
@@ -2514,7 +2517,29 @@ pub async fn sync_sources_to_cloud(api_url: &str, token: &str, sources: serde_js
         .await
     {
         Ok(r) if r.status().is_success() => {}
-        Ok(r) => eprintln!("[scanner] sync_sources returned {}", r.status()),
+        Ok(r) => {
+            let status = r.status();
+            // FastAPI errors carry {"detail": "..."} with the actionable
+            // message (the 409 detail literally says how to recover).
+            let detail = r
+                .text()
+                .await
+                .ok()
+                .and_then(|body| {
+                    serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v["detail"].as_str().map(String::from))
+                })
+                .unwrap_or_default();
+            eprintln!("[scanner] sync_sources returned {}: {}", status, detail);
+            if let Some(app) = crate::events::app_handle() {
+                crate::events::emit_sync_failed(
+                    app,
+                    "sources",
+                    &format!("Source sync rejected ({}): {}", status, detail),
+                );
+            }
+        }
         Err(e) => eprintln!("[scanner] sync_sources network error: {}", e),
     }
 }
