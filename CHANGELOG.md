@@ -5,6 +5,14 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.10] — 2026-06-11
+
+### Fixed
+
+- **Switching workspace keys now cleanly moves the machine** — pairing with a key for a different workspace decommissions the old agent, so the previous workspace no longer shows a permanently-offline ghost machine and the new workspace receives the full source list (previously the source sync silently failed with a UUID collision and the machine appeared with no sources). Same-workspace key rotation keeps the agent record, portal config, and annotations. Server-side eviction covers the same case for older builds.
+- **Source-sync failures are now visible** — a rejected `PUT /v1/agent/sources` (e.g. the UUID-collision 409) surfaces through the in-app sync-failed banner with the server's recovery message instead of vanishing into the log.
+- **Native desktop selection behavior** — UI chrome (labels, buttons, navigation) is no longer text-selectable. Data stays copyable: tables, file paths, SQL, connection strings, and form fields.
+
 ## [0.12.9] — 2026-06-10
 
 ### Fixed
