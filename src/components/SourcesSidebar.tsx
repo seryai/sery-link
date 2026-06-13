@@ -406,6 +406,7 @@ export function SourcesSidebar() {
     const dropboxTargets = sources.filter((s) => s.kind.kind === 'dropbox');
     const azureTargets = sources.filter((s) => s.kind.kind === 'azure_blob');
     const onedriveTargets = sources.filter((s) => s.kind.kind === 'one_drive');
+    const dbTargets = sources.filter((s) => DB_KINDS.has(s.kind.kind));
     const pathTargets = sources
       .filter(
         (s) =>
@@ -414,7 +415,8 @@ export function SourcesSidebar() {
           s.kind.kind !== 'dropbox' &&
           s.kind.kind !== 'azure_blob' &&
           s.kind.kind !== 'one_drive' &&
-          s.kind.kind !== 'google_drive',
+          s.kind.kind !== 'google_drive' &&
+          !DB_KINDS.has(s.kind.kind),
       )
       .map((s) => ({ source: s, key: scanKeyOf(s) }))
       .filter((t): t is { source: DataSource; key: string } => t.key !== null);
@@ -424,6 +426,7 @@ export function SourcesSidebar() {
       dropboxTargets.length +
       azureTargets.length +
       onedriveTargets.length +
+      dbTargets.length +
       pathTargets.length;
     if (total === 0) {
       toast.error('No scannable sources');
@@ -473,6 +476,9 @@ export function SourcesSidebar() {
     }
     for (const source of onedriveTargets) {
       dispatchCacheAndScan('rescan_onedrive_source', source, 'OneDrive');
+    }
+    for (const source of dbTargets) {
+      dispatchCacheAndScan('rescan_source_by_id', source, source.kind.kind);
     }
   };
 
