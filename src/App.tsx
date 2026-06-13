@@ -28,7 +28,6 @@ import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
 import { Notifications } from './components/Notifications';
 import { Recipes } from './components/Recipes';
-import { ReAuthModal } from './components/ReAuthModal';
 import { WorkspaceKeyRevokedModal } from './components/WorkspaceKeyRevokedModal';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { TitleBar } from './components/TitleBar';
@@ -234,7 +233,6 @@ function AppInner() {
       </div>
 
       {/* Global overlays */}
-      <ReAuthModal />
       <WorkspaceKeyRevokedModal />
       <KeyboardShortcuts />
       <CommandPalette

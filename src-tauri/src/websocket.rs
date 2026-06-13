@@ -240,7 +240,7 @@ impl WebSocketClient {
                             }
                         }
                         // Had a saved key but re-auth failed — the key was revoked.
-                        // Show the workspace-key input modal, NOT the OAuth browser.
+                        // Show the workspace-key input modal.
                         *status.write().await = ConnectionStatus::AuthExpired;
                         if let Some(app) = &app {
                             events::emit_workspace_key_revoked(app);
@@ -248,11 +248,11 @@ impl WebSocketClient {
                         return;
                     }
 
-                    // No saved key — this is an OAuth-paired machine with an
-                    // expired token. Open the browser login flow.
+                    // No saved key — token expired. Prompt for a workspace key;
+                    // Sery Link does not use browser OAuth for re-authentication.
                     *status.write().await = ConnectionStatus::AuthExpired;
                     if let Some(app) = &app {
-                        events::emit_auth_expired(app);
+                        events::emit_workspace_key_revoked(app);
                     }
                     return;
                 }
