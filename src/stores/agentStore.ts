@@ -86,8 +86,10 @@ interface AgentState {
   // In-flight folder scans keyed by folder path
   scansInFlight: Record<string, ScanState>;
 
-  // Re-auth modal flag (raised by auth_expired event)
+  // Re-auth modal flag (raised by auth_expired event — OAuth machines only)
   reAuthRequired: boolean;
+  // Workspace-key revoked modal (raised by workspace_key_revoked event)
+  workspaceKeyRevoked: boolean;
 
   // Onboarding flag
   onboardingComplete: boolean;
@@ -112,6 +114,7 @@ interface AgentState {
   applyScanProgress: (p: ScanProgress) => void;
   clearScanProgress: (folder: string) => void;
   setReAuthRequired: (v: boolean) => void;
+  setWorkspaceKeyRevoked: (v: boolean) => void;
   setOnboardingComplete: (v: boolean) => void;
   setSchemaNotifications: (entries: SchemaNotification[]) => void;
   addSchemaNotification: (payload: SchemaChangedPayload) => void;
@@ -172,6 +175,7 @@ const initial = {
   history: [] as QueryHistoryEntry[],
   scansInFlight: {} as Record<string, ScanState>,
   reAuthRequired: false,
+  workspaceKeyRevoked: false,
   onboardingComplete: false,
   schemaNotifications: [] as SchemaNotification[],
   searchQuery: '',
@@ -222,6 +226,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       return { scansInFlight: next };
     }),
   setReAuthRequired: (v) => set({ reAuthRequired: v }),
+  setWorkspaceKeyRevoked: (v) => set({ workspaceKeyRevoked: v }),
   setOnboardingComplete: (v) => set({ onboardingComplete: v }),
   setSearchQuery: (q) => set({ searchQuery: q }),
   setSearchResults: (results) => set({ searchResults: results }),

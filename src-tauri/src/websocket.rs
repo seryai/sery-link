@@ -236,12 +236,20 @@ impl WebSocketClient {
                                 continue;
                             }
                             Err(e) => {
-                                eprintln!("Silent re-auth failed: {}", e);
+                                eprintln!("Silent re-auth failed (key likely revoked): {}", e);
                             }
                         }
+                        // Had a saved key but re-auth failed — the key was revoked.
+                        // Show the workspace-key input modal, NOT the OAuth browser.
+                        *status.write().await = ConnectionStatus::AuthExpired;
+                        if let Some(app) = &app {
+                            events::emit_workspace_key_revoked(app);
+                        }
+                        return;
                     }
 
-                    // No saved key or re-auth failed — prompt the user.
+                    // No saved key — this is an OAuth-paired machine with an
+                    // expired token. Open the browser login flow.
                     *status.write().await = ConnectionStatus::AuthExpired;
                     if let Some(app) = &app {
                         events::emit_auth_expired(app);

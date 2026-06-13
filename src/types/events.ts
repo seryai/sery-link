@@ -13,6 +13,7 @@ export const EVENT_NAMES = {
   QUERY_COMPLETED: 'query_completed',
   HISTORY_UPDATED: 'history_updated',
   AUTH_EXPIRED: 'auth_expired',
+  WORKSPACE_KEY_REVOKED: 'workspace_key_revoked',
   SYNC_COMPLETED: 'sync_completed',
   SYNC_FAILED: 'sync_failed',
   STATS_UPDATED: 'stats_updated',

@@ -41,6 +41,7 @@ pub const EVT_QUERY_STARTED: &str = "query_started";
 pub const EVT_QUERY_COMPLETED: &str = "query_completed";
 pub const EVT_HISTORY_UPDATED: &str = "history_updated";
 pub const EVT_AUTH_EXPIRED: &str = "auth_expired";
+pub const EVT_WORKSPACE_KEY_REVOKED: &str = "workspace_key_revoked";
 pub const EVT_SYNC_COMPLETED: &str = "sync_completed";
 pub const EVT_SYNC_FAILED: &str = "sync_failed";
 pub const EVT_STATS_UPDATED: &str = "stats_updated";
@@ -234,6 +235,16 @@ pub fn emit_auth_expired<R: Runtime>(app: &AppHandle<R>) {
         app,
         "Sery Link",
         "Your session has expired. Please reconnect.",
+    );
+    crate::tray::set_state(app, "error");
+}
+
+pub fn emit_workspace_key_revoked<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit(EVT_WORKSPACE_KEY_REVOKED, ());
+    notify(
+        app,
+        "Sery Link",
+        "Your workspace key was revoked. Enter a new key to reconnect.",
     );
     crate::tray::set_state(app, "error");
 }

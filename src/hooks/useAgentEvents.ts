@@ -35,6 +35,7 @@ export function useAgentEvents() {
     prependHistory,
     setHistory,
     setReAuthRequired,
+    setWorkspaceKeyRevoked,
     addSchemaNotification,
   } = useAgentStore();
   const toast = useToast();
@@ -144,10 +145,17 @@ export function useAgentEvents() {
       }),
     );
 
-    // Auth expiration — raise the re-auth modal
+    // Auth expiration (OAuth machines) — raise the browser re-auth modal
     unsubs.push(
       listen(EVENT_NAMES.AUTH_EXPIRED, () => {
         setReAuthRequired(true);
+      }),
+    );
+
+    // Workspace key revoked — raise the key-input modal (no browser needed)
+    unsubs.push(
+      listen(EVENT_NAMES.WORKSPACE_KEY_REVOKED, () => {
+        setWorkspaceKeyRevoked(true);
       }),
     );
 
