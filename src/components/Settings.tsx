@@ -985,10 +985,23 @@ function UpdaterSection() {
       )}
 
       {state.kind === 'installed' && (
-        <p className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Update installed. Quit and reopen Sery Link to finish applying it.
-        </p>
+        <div className="space-y-3">
+          <p className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Update installed. Restart Sery Link to finish applying it.
+          </p>
+          <button
+            onClick={() => {
+              invoke('restart_app').catch((err) =>
+                console.error('restart failed', err),
+              );
+            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-purple-700"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Restart now
+          </button>
+        </div>
       )}
 
       {state.kind === 'error' && (

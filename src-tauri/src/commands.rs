@@ -3424,6 +3424,15 @@ pub async fn stop_file_watcher() -> Result<(), String> {
     Ok(())
 }
 
+/// Relaunch the app. Used by the updater UI after an update is installed so
+/// the user doesn't have to quit and reopen by hand. `restart()` replaces the
+/// running process, so it never returns — the `-> ()` is just to satisfy the
+/// command signature.
+#[tauri::command]
+pub fn restart_app<R: Runtime>(app: AppHandle<R>) {
+    app.restart();
+}
+
 #[tauri::command]
 pub async fn restart_file_watcher() -> Result<(), String> {
     // Atomic drop-then-install under a single write lock — a previous

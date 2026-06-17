@@ -333,6 +333,7 @@ pub fn run() {
             commands::start_file_watcher,
             commands::stop_file_watcher,
             commands::restart_file_watcher,
+            commands::restart_app,
             commands::get_query_history,
             commands::clear_query_history,
             commands::get_stats,
