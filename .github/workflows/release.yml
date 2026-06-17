@@ -37,7 +37,11 @@ jobs:
             label: "Linux"
             pdfium_target: linux-x64
             pandoc_target: linux-amd64
-          - platform: windows-latest
+          # Pinned to windows-2022 (VS 17 / MSVC 14.4x). windows-latest moved to
+          # VS 18 / MSVC 14.51, under which the vendored DuckDB's bundled fmt fails
+          # to compile (stdext::checked_array_iterator removed, inline-var / c++17
+          # errors). All other runners are pinned for the same float-regression reason.
+          - platform: windows-2022
             args: ""
             label: "Windows"
             pdfium_target: win-x64
