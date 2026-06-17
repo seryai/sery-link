@@ -275,6 +275,13 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     .unwrap_or_default();
 
     if !current_hash.is_empty() && stored_hash.as_deref() == Some(current_hash.as_str()) {
+        // Folder is unchanged, so there's nothing to re-scan — but advance
+        // last_scan_at anyway, otherwise a quiet folder gets flagged
+        // "stale — not scanned in 24 h" when its data is in fact fresh.
+        if let Ok(mut c) = Config::load() {
+            c.mark_local_scanned(folder_path, None, chrono::Utc::now().to_rfc3339());
+            let _ = c.save();
+        }
         return Ok(());
     }
 
@@ -308,9 +315,9 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     // we just don't contact the server.
     if !crate::commands::cloud_sync_enabled() {
         if let Ok(mut c) = Config::load() {
-            c.update_folder_scan_stats(
+            c.mark_local_scanned(
                 folder_path,
-                ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms },
+                Some(ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms }),
                 chrono::Utc::now().to_rfc3339(),
             );
             let _ = c.save();
@@ -354,9 +361,9 @@ async fn sync_folder(folder_path: &str) -> Result<()> {
     match sync_result {
         Ok(_) => {
             if let Ok(mut c) = Config::load() {
-                c.update_folder_scan_stats(
+                c.mark_local_scanned(
                     folder_path,
-                    ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms },
+                    Some(ScanStats { datasets: dataset_count, columns: column_count, errors: 0, total_bytes, duration_ms }),
                     chrono::Utc::now().to_rfc3339(),
                 );
                 if !current_hash.is_empty() {

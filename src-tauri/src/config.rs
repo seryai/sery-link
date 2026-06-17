@@ -253,14 +253,23 @@ pub struct SyncConfig {
     /// per Option 3 (user opt-in, default off).
     #[serde(default)]
     pub include_document_text: bool,
-    /// Cloud-pushed auto-scan interval in minutes. When set, the background
-    /// autoscan loop triggers a rescan of folders that have file-system
-    /// changes since their last scan. Absence (None) disables the loop.
-    /// Populated by `apply_remote_config`; also writable via the
-    /// `set_auto_scan_interval` Tauri command so the user can override
-    /// locally.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Auto-scan interval in minutes for the background autoscan loop, which
+    /// rescans changed local folders and (always) remote sources so they don't
+    /// go "stale". Defaults to 60 so a fresh or pre-field agent keeps sources
+    /// fresh out of the box. `None` (set explicitly in Settings) disables the
+    /// loop. The cloud (`apply_remote_config`) can override it, and the user
+    /// can change/disable it via the `set_auto_scan_interval` command.
+    /// Not skip-serialized: a user-chosen `None` must persist as `null`, or it
+    /// would reload as the default and silently re-enable.
+    #[serde(default = "default_auto_scan_interval")]
     pub auto_scan_interval_minutes: Option<u32>,
+}
+
+/// Default auto-scan cadence. 60 min keeps remote sources (S3, databases,
+/// cloud drives) fresh without hammering them; existing agents that predate
+/// this field pick it up on next load.
+fn default_auto_scan_interval() -> Option<u32> {
+    Some(60)
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +715,32 @@ impl Config {
         }
     }
 
+    /// Mark a local folder `path` as scanned at `when`, advancing the
+    /// timestamp on BOTH the legacy `watched_folders` entry and the F42+
+    /// `sources` entry (matched by path). The dashboard reads the source
+    /// record, but the watcher historically only touched watched_folders —
+    /// which is why quiet local folders showed "stale" even when fresh.
+    /// Pass `Some(stats)` after a real scan; pass `None` on a no-change pass
+    /// to advance only the timestamp without clobbering existing stats.
+    pub fn mark_local_scanned(&mut self, path: &str, stats: Option<ScanStats>, when: String) {
+        if let Some(folder) = self.watched_folders.iter_mut().find(|f| f.path == path) {
+            if let Some(s) = stats.clone() {
+                folder.last_scan_stats = Some(s);
+            }
+            folder.last_scan_at = Some(when.clone());
+        }
+        for source in self.sources.iter_mut() {
+            if let crate::sources::SourceKind::Local { path: sp, .. } = &source.kind {
+                if sp.to_string_lossy() == path {
+                    if let Some(s) = stats.clone() {
+                        source.last_scan_stats = Some(s);
+                    }
+                    source.last_scan_at = Some(when.clone());
+                }
+            }
+        }
+    }
+
     /// Return the exclude patterns for a local folder path, checking
     /// both `watched_folders` (legacy) and `sources` (F42+).
     pub fn get_folder_exclude_patterns(&self, path: &str) -> Vec<String> {
@@ -1013,7 +1048,12 @@ impl Config {
     pub fn apply_remote_config(&mut self, remote: &RemoteAgentConfig) {
         self.sync.include_document_text = remote.include_document_text;
         self.sync.scan_tier_overrides = remote.scan_tier_overrides.clone();
-        self.sync.auto_scan_interval_minutes = remote.scan_interval_minutes;
+        // Only override when the cloud actually sends a value, so absence from
+        // the cloud doesn't wipe the local default (Some(60)) and silently
+        // disable auto-scan. The cloud can disable by sending 0.
+        if remote.scan_interval_minutes.is_some() {
+            self.sync.auto_scan_interval_minutes = remote.scan_interval_minutes;
+        }
     }
 
     /// Migrate existing users to the new auth mode system.
@@ -1151,6 +1191,51 @@ mod tests {
         assert!(folder.last_scan_stats.is_some());
         assert_eq!(folder.last_scan_stats.as_ref().unwrap().datasets, 10);
         assert_eq!(folder.last_scan_at.as_ref().unwrap(), &timestamp);
+    }
+
+    #[test]
+    fn test_mark_local_scanned_advances_timestamp() {
+        let mut config = Config::default();
+        config.add_watched_folder("/test/folder".to_string(), true);
+
+        let stats = ScanStats {
+            datasets: 10,
+            columns: 50,
+            errors: 0,
+            total_bytes: 1024000,
+            duration_ms: 500,
+        };
+
+        // Real scan: sets both stats and timestamp.
+        config.mark_local_scanned(
+            "/test/folder",
+            Some(stats.clone()),
+            "2026-04-15T12:00:00Z".to_string(),
+        );
+        let folder = &config.watched_folders[0];
+        assert_eq!(folder.last_scan_stats.as_ref().unwrap().datasets, 10);
+        assert_eq!(folder.last_scan_at.as_ref().unwrap(), "2026-04-15T12:00:00Z");
+
+        // No-change pass: advances the timestamp but preserves the old stats
+        // (this is the fix for a quiet folder showing false "stale").
+        config.mark_local_scanned("/test/folder", None, "2026-04-16T12:00:00Z".to_string());
+        let folder = &config.watched_folders[0];
+        assert_eq!(folder.last_scan_at.as_ref().unwrap(), "2026-04-16T12:00:00Z");
+        assert_eq!(folder.last_scan_stats.as_ref().unwrap().datasets, 10);
+    }
+
+    #[test]
+    fn test_auto_scan_interval_defaults_when_key_missing() {
+        // An older config that predates the field (key absent) must reload as
+        // Some(60), not None — otherwise autoscan silently idles and remote
+        // sources go "stale". Guards against re-adding skip_serializing_if.
+        let sync = Config::default().sync;
+        let mut v = serde_json::to_value(&sync).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("auto_scan_interval_minutes");
+        let parsed: SyncConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed.auto_scan_interval_minutes, Some(60));
     }
 
     #[test]
