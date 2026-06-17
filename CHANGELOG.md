@@ -5,6 +5,16 @@ All notable changes to Sery Link will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.12] — 2026-06-16
+
+### Fixed
+
+- **No more false "sources stale — not scanned in 24h" warnings** — the Overview "needs attention" banner no longer flags sources that are actually being scanned. Two root causes: (1) the local file watcher runs on its interval but hash-skipped unchanged folders without bumping `last_scan_at`, and it only updated the internal watched-folders record, not the `sources` entry the dashboard reads — both now go through a single `mark_local_scanned` path that advances the timestamp on every pass, change or no change; (2) the auto-scan loop that rescans remote sources read `auto_scan_interval_minutes`, but that key was being dropped from `config.json` on save (so the loop sat idle) — it now defaults to 60 minutes when absent.
+
+### Added
+
+- **"Restart now" button after an update installs** — once an update finishes downloading on Settings → About, a Restart now button appears so you can apply it immediately instead of manually quitting and reopening the app.
+
 ## [0.12.10] — 2026-06-11
 
 ### Fixed
