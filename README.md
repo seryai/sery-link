@@ -2,7 +2,7 @@
 
 **Your private data agent — search every cloud without a download. Free + open source (AGPL-3.0).**
 
-Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay in your OS keychain. Sery never sees your files.
+Connect every cloud storage you have — local, HTTPS, S3 (+ B2 / Wasabi / R2 / GCS presets), Google Drive, SFTP, WebDAV, Dropbox, Azure Blob, OneDrive. Browse, preview tables and Parquet files in-place, run SQL on remote bytes without downloading, and ask AI questions across all of it. Credentials stay on your machine in `~/.seryai/.vault.json`, owner-only (0600) — the same model as `~/.aws/credentials`. Sery never sees your files.
 
 > **Browse · preview · profile · query — across every cloud you have, no downloads.** Sery Link is also the desktop endpoint for [Sery](https://sery.ai) — your private data agent (multi-machine workspace upgrade is opt-in).
 
@@ -20,7 +20,7 @@ Sery Link works in three independent modes. Use any combination — they coexist
 
 ## Features
 
-- 🌐 **Browse every cloud you have, in one app** — 9 protocols (Local, HTTPS, S3, Drive, SFTP, WebDAV, Dropbox, Azure, OneDrive) plus 4 S3-compatible presets (B2, Wasabi, R2, GCS). Credentials in the OS keychain, fetched directly from your machine.
+- 🌐 **Browse every cloud you have, in one app** — 9 protocols (Local, HTTPS, S3, Drive, SFTP, WebDAV, Dropbox, Azure, OneDrive) plus 4 S3-compatible presets (B2, Wasabi, R2, GCS). Credentials stored locally in `~/.seryai/.vault.json` (0600, owner-only), fetched directly from your machine.
 - ⚡ **Preview without downloading** — click any Parquet on S3 → schema + sample rows in <2s via the Parquet footer (no full file pull). CSV / TSV / Excel preview streams just enough.
 - 📊 **Per-file column profiles** — null %, unique values, min/max/avg, computed locally via DuckDB SUMMARIZE.
 - 🔎 **Column-aware search** — match filenames, column names, and extracted document content across every connected source in one pass.
