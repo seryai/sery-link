@@ -703,3 +703,269 @@ fn decode_gps_dms(exif: &exif::Exif, dms_tag: exif::Tag, ref_tag: exif::Tag) -> 
 
     if ref_str.contains('S') || ref_str.contains('W') { Some(-dd) } else { Some(dd) }
 }
+
+// ── files.chunk ────────────────────────────────────────────────────────────
+
+/// Passages per ingest request. Mirrors MAX_CHUNKS_PER_INGEST in the api's
+/// portals router — exceeding it there is a 422, so batch to match.
+const INGEST_BATCH: usize = 500;
+
+/// Target passage size in characters. Large enough to carry an answerable
+/// span, small enough that a buyer pays for signal rather than filler.
+const DEFAULT_MAX_CHARS: usize = 1200;
+
+/// Characters of overlap between consecutive passages, so a sentence that
+/// straddles a boundary is still retrievable from one side of it.
+const DEFAULT_OVERLAP: usize = 150;
+
+/// Split one page of markdown into overlapping passages on paragraph
+/// boundaries where possible, falling back to a hard character cut for
+/// paragraphs longer than `max_chars`.
+fn split_passages(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if trimmed.chars().count() <= max_chars {
+        return vec![trimmed.to_string()];
+    }
+
+    let mut out = Vec::new();
+    let mut current = String::new();
+
+    for para in trimmed.split("\n\n") {
+        let para = para.trim();
+        if para.is_empty() {
+            continue;
+        }
+
+        // A single paragraph longer than the budget is cut on char
+        // boundaries — char_indices keeps this safe for multi-byte text.
+        if para.chars().count() > max_chars {
+            if !current.is_empty() {
+                out.push(std::mem::take(&mut current));
+            }
+            let chars: Vec<char> = para.chars().collect();
+            let step = max_chars.saturating_sub(overlap).max(1);
+            let mut start = 0;
+            while start < chars.len() {
+                let end = (start + max_chars).min(chars.len());
+                out.push(chars[start..end].iter().collect());
+                if end == chars.len() {
+                    break;
+                }
+                start += step;
+            }
+            continue;
+        }
+
+        if current.chars().count() + para.chars().count() + 2 > max_chars {
+            out.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(para);
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+pub struct ChunkDocumentCommand;
+
+#[async_trait]
+impl AgentCommand for ChunkDocumentCommand {
+    fn name(&self) -> &'static str { "files.chunk" }
+    fn description(&self) -> &'static str {
+        "Extract a document, split it into passages with page citations, and push them \
+         to a portal's document product so buyers can query it. Content leaves the \
+         machine only for a corpus the publisher has put up for sale."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query_path":  { "type": "string", "description": "Absolute file path to the document (PDF/DOCX/PPTX/HTML/EPUB)" },
+                "dataset_id":  { "type": "string", "description": "UUID of the Dataset row this document belongs to. Must be portal-visible." },
+                "portal_hash": { "type": "string", "description": "Portal to publish into. Must belong to this agent." },
+                "max_chars":   { "type": "integer", "description": "Target passage size in characters. Default 1200." },
+                "overlap":     { "type": "integer", "description": "Character overlap between passages. Default 150." }
+            },
+            "required": ["query_path", "dataset_id", "portal_hash"]
+        })
+    }
+
+    async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
+        let dataset_id = ctx.args["dataset_id"].as_str().ok_or("missing dataset_id")?.to_string();
+        let portal_hash = ctx.args["portal_hash"].as_str().ok_or("missing portal_hash")?.to_string();
+        let max_chars = ctx.args.get("max_chars").and_then(|v| v.as_u64())
+            .map(|n| n as usize).unwrap_or(DEFAULT_MAX_CHARS).max(200);
+        let overlap = ctx.args.get("overlap").and_then(|v| v.as_u64())
+            .map(|n| n as usize).unwrap_or(DEFAULT_OVERLAP).min(max_chars / 2);
+
+        let (folder_path, relative_path) = resolve_path(&ctx.args)?;
+        let abs_path = format!("{}/{}", folder_path.trim_end_matches('/'), relative_path);
+
+        let fp = folder_path.clone();
+        let rp = relative_path.clone();
+        let meta = tokio::task::spawn_blocking(move || {
+            crate::scanner::reextract_file(&fp, &rp)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+        let markdown = meta.document_markdown.ok_or_else(|| {
+            format!(
+                "Content extraction returned nothing for .{}. Check Sery Link app logs — \
+                 libpdfium (PDF) or pandoc (DOCX/PPTX) may not have loaded.",
+                meta.file_format
+            )
+        })?;
+
+        // Pdfium marks page boundaries with form feeds. When they're absent
+        // (pandoc output, OCR, non-PDF formats) we genuinely don't know the
+        // page, so the citation carries null rather than a fabricated number.
+        let raw_pages: Vec<&str> = markdown.split('\x0C').collect();
+        let has_pages = raw_pages.len() > 1;
+
+        let doc_title = std::path::Path::new(&relative_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&relative_path)
+            .to_string();
+
+        let mut chunks: Vec<Value> = Vec::new();
+        let mut chunk_index: usize = 0;
+        for (page_idx, page_text) in raw_pages.iter().enumerate() {
+            for passage in split_passages(page_text, max_chars, overlap) {
+                let mut entry = json!({
+                    "dataset_id":  dataset_id,
+                    "doc_path":    abs_path,
+                    "doc_title":   doc_title,
+                    "chunk_index": chunk_index,
+                    "text":        passage,
+                });
+                if has_pages {
+                    entry["page"] = json!(page_idx + 1);
+                }
+                chunks.push(entry);
+                chunk_index += 1;
+            }
+        }
+
+        if chunks.is_empty() {
+            return Err("Document produced no passages — it may be empty or image-only".to_string());
+        }
+
+        let config = crate::config::Config::load().map_err(|e| e.to_string())?;
+        let token = crate::keyring_store::get_token()
+            .map_err(|_| "not signed in — connect this machine to a workspace first".to_string())?;
+        let url = format!(
+            "{}/v1/portals/{}/ingest",
+            config.cloud.api_url.trim_end_matches('/'),
+            portal_hash
+        );
+
+        let client = reqwest::Client::new();
+        let total = chunks.len();
+        let batch_count = (total + INGEST_BATCH - 1) / INGEST_BATCH;
+        let mut ingested = 0usize;
+
+        for (i, batch) in chunks.chunks(INGEST_BATCH).enumerate() {
+            let _ = ctx.progress.send(crate::agent_rpc::registry::Progress {
+                data: json!({ "batch": i + 1, "of": batch_count, "sent": ingested }),
+            }).await;
+
+            let resp = client
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&json!({ "chunks": batch }))
+                .send()
+                .await
+                .map_err(|e| format!("ingest request failed: {e}"))?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!(
+                    "ingest rejected ({status}) after {ingested}/{total} passages: {body}"
+                ));
+            }
+            ingested += batch.len();
+        }
+
+        Ok(json!({
+            "doc_path":     abs_path,
+            "doc_title":    doc_title,
+            "passages":     ingested,
+            "pages":        if has_pages { Some(raw_pages.len()) } else { None },
+            "page_numbers": has_pages,
+            "file_format":  meta.file_format,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::split_passages;
+
+    #[test]
+    fn short_text_is_one_passage() {
+        let out = split_passages("a short paragraph", 1200, 150);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], "a short paragraph");
+    }
+
+    #[test]
+    fn empty_and_whitespace_yield_nothing() {
+        assert!(split_passages("", 1200, 150).is_empty());
+        assert!(split_passages("   \n\n  ", 1200, 150).is_empty());
+    }
+
+    #[test]
+    fn paragraphs_pack_up_to_the_budget() {
+        let para = "x".repeat(100);
+        let text = vec![para.as_str(); 10].join("\n\n");
+        let out = split_passages(&text, 250, 20);
+        assert!(out.len() > 1, "expected packing to split, got {}", out.len());
+        for p in &out {
+            assert!(p.chars().count() <= 250, "passage over budget: {}", p.chars().count());
+        }
+    }
+
+    #[test]
+    fn oversized_paragraph_is_cut_with_overlap() {
+        let text = "y".repeat(1000);
+        let out = split_passages(&text, 300, 50);
+        assert!(out.len() > 1);
+        for p in &out {
+            assert!(p.chars().count() <= 300);
+        }
+        // Overlap means the pieces re-cover more than the original length.
+        let covered: usize = out.iter().map(|p| p.chars().count()).sum();
+        assert!(covered > 1000, "expected overlap to repeat characters");
+    }
+
+    #[test]
+    fn multibyte_text_is_not_split_mid_character() {
+        // Char-boundary bugs surface as a panic here, not a wrong answer.
+        let text = "日本語のテキスト".repeat(200);
+        let out = split_passages(&text, 300, 50);
+        assert!(!out.is_empty());
+        for p in &out {
+            assert!(p.chars().count() <= 300);
+        }
+    }
+
+    #[test]
+    fn no_passage_is_empty() {
+        let text = format!("{}\n\n\n\n{}", "a".repeat(50), "b".repeat(50));
+        for p in split_passages(&text, 60, 10) {
+            assert!(!p.trim().is_empty());
+        }
+    }
+}
