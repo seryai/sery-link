@@ -238,6 +238,10 @@ async fn handle_changes(paths: Vec<PathBuf>) -> Result<()> {
         }
     }
 
+    // Files that are part of a product get a fresh snapshot so the cloud
+    // copy tracks the source. Best-effort; never fails the sync.
+    crate::publish::republish_changed(&paths).await;
+
     Ok(())
 }
 

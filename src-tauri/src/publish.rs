@@ -620,6 +620,139 @@ pub async fn publish_document<R: Runtime>(
     Ok(Published { dataset_id, table: None, size_bytes: meta.size_bytes, passages: ingested })
 }
 
+// ── auto-republish ────────────────────────────────────────────────────
+//
+// A published file that changes on disk is re-published, so the cloud copy
+// tracks the source and buyers see a fresh snapshot_at. The watcher calls
+// `republish_changed` after its debounce; the published-file index is
+// fetched from the api and cached briefly so a burst of edits does not
+// turn into a burst of api calls.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone)]
+struct PublishedEntry {
+    product_hash: String,
+    table: Option<String>,
+}
+
+static PUBLISHED_INDEX: once_cell::sync::Lazy<Mutex<Option<(Instant, HashMap<String, PublishedEntry>)>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static REPUBLISHING: once_cell::sync::Lazy<Mutex<HashSet<String>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(HashSet::new()));
+
+const INDEX_TTL: Duration = Duration::from_secs(300);
+
+/// Drop the cached index — called after any publish or withdraw from the UI
+/// so the next change on disk sees the new state.
+pub fn invalidate_published_index() {
+    *PUBLISHED_INDEX.lock().unwrap() = None;
+}
+
+async fn published_index(api: &Api) -> Result<HashMap<String, PublishedEntry>> {
+    if let Some((at, idx)) = PUBLISHED_INDEX.lock().unwrap().as_ref() {
+        if at.elapsed() < INDEX_TTL {
+            return Ok(idx.clone());
+        }
+    }
+    let mut idx = HashMap::new();
+    let products = api.get("/v1/products/mine").await?;
+    for p in products.as_array().cloned().unwrap_or_default() {
+        let Some(hash) = p["hash"].as_str() else { continue };
+        let datasets = api.get(&format!("/v1/products/{hash}/datasets")).await?;
+        for d in datasets.as_array().cloned().unwrap_or_default() {
+            if let Some(path) = d["query_path"].as_str() {
+                idx.insert(
+                    path.to_string(),
+                    PublishedEntry {
+                        product_hash: hash.to_string(),
+                        table: d["table"].as_str().map(|s| s.to_string()),
+                    },
+                );
+            }
+        }
+    }
+    *PUBLISHED_INDEX.lock().unwrap() = Some((Instant::now(), idx.clone()));
+    Ok(idx)
+}
+
+/// Split an absolute path into (watched folder, relative path) using the
+/// configured local sources. None if the file is under no watched folder.
+fn locate(config: &Config, abs: &std::path::Path) -> Option<(String, String)> {
+    let mut roots: Vec<String> = config.watched_folders.iter().map(|f| f.path.clone()).collect();
+    for s in &config.sources {
+        if let crate::sources::SourceKind::Local { path, .. } = &s.kind {
+            roots.push(path.to_string_lossy().into_owned());
+        }
+    }
+    // Longest root first so nested folders resolve to the closest one.
+    roots.sort_by_key(|r| std::cmp::Reverse(r.len()));
+    for root in roots {
+        if let Ok(rel) = abs.strip_prefix(&root) {
+            return Some((root, rel.to_string_lossy().into_owned()));
+        }
+    }
+    None
+}
+
+/// Re-publish every changed path that is part of a product. Best-effort:
+/// failures are logged and emitted as `publish_progress` errors, never
+/// propagated — a broken re-publish must not break the folder sync.
+pub async fn republish_changed(paths: &[std::path::PathBuf]) {
+    let api = match Api::load() {
+        Ok(a) => a,
+        Err(_) => return, // not signed in — nothing can be published
+    };
+    let index = match published_index(&api).await {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("[publish] could not load published index: {e}");
+            return;
+        }
+    };
+    if index.is_empty() {
+        return;
+    }
+    let Ok(config) = Config::load() else { return };
+    let Some(app) = crate::events::app_handle() else { return };
+
+    for path in paths {
+        let abs = path.to_string_lossy().into_owned();
+        let Some(entry) = index.get(&abs) else { continue };
+        if !path.exists() {
+            continue; // deleted or renamed — the publisher decides what to do
+        }
+        let Some((folder, rel)) = locate(&config, path) else { continue };
+
+        {
+            let mut running = REPUBLISHING.lock().unwrap();
+            if !running.insert(abs.clone()) {
+                continue;
+            }
+        }
+        eprintln!("[publish] {abs} changed — re-publishing into {}", entry.product_hash);
+        let result = match kind_of(&ext_of(&rel)) {
+            "tabular" => publish_tabular(app, &entry.product_hash, &folder, &rel, entry.table.clone()).await.map(|_| ()),
+            "document" => publish_document(app, &entry.product_hash, &folder, &rel).await.map(|_| ()),
+            _ => Ok(()),
+        };
+        REPUBLISHING.lock().unwrap().remove(&abs);
+        if let Err(e) = result {
+            eprintln!("[publish] re-publish failed for {abs}: {e}");
+            emit(app, PublishProgress {
+                product_hash: entry.product_hash.clone(),
+                relative_path: rel,
+                stage: "error".into(),
+                done_bytes: 0,
+                total_bytes: 0,
+                detail: Some(format!("auto re-publish failed: {e}")),
+            });
+        }
+    }
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -639,6 +772,7 @@ pub async fn publish_update_product(hash: String, patch: Value) -> std::result::
 
 #[tauri::command]
 pub async fn publish_withdraw_product(hash: String) -> std::result::Result<(), String> {
+    invalidate_published_index();
     withdraw_product(&hash).await.map_err(Into::into)
 }
 
@@ -649,6 +783,7 @@ pub async fn publish_list_datasets(hash: String) -> std::result::Result<Value, S
 
 #[tauri::command]
 pub async fn publish_remove_dataset(hash: String, dataset_id: String) -> std::result::Result<(), String> {
+    invalidate_published_index();
     remove_dataset(&hash, &dataset_id).await.map_err(Into::into)
 }
 
@@ -670,6 +805,7 @@ pub async fn publish_file(
     relative_path: String,
     table: Option<String>,
 ) -> std::result::Result<Published, String> {
+    invalidate_published_index();
     let ext = ext_of(&relative_path);
     let result = match kind_of(&ext) {
         "tabular" => publish_tabular(&app, &hash, &folder_path, &relative_path, table).await,

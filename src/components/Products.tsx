@@ -413,7 +413,9 @@ function ProductPanel({
   };
 
   const localFolders = (config?.watched_folders ?? []).map((f) => f.path).filter((p) => !isRemoteUrl(p));
-  const apiBase = (config?.cloud.api_url ?? '').replace(/\/$/, '');
+  // Public product page on the storefront. Staging api hosts map to the
+  // production storefront; good enough until the storefront has one.
+  const storefront = 'https://sery.link';
 
   return (
     <div className="space-y-6">
@@ -429,11 +431,11 @@ function ProductPanel({
               <button
                 className="inline-flex items-center gap-1 hover:text-slate-800 dark:hover:text-slate-100"
                 onClick={async () => {
-                  await navigator.clipboard.writeText(`${apiBase}/v1/products/${product.hash}`);
+                  await navigator.clipboard.writeText(`${storefront}/p/${product.hash}`);
                   setCopied(true);
                   setTimeout(() => setCopied(false), 1500);
                 }}
-                title="Copy the product URL buyers and agents use"
+                title="Copy the public product page URL"
               >
                 {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                 {copied ? 'Copied' : 'Copy URL'}
