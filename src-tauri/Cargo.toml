@@ -54,6 +54,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # already low on disk — see commands::gdrive_watch_folder.
 fs4 = "0.8"
 futures = "0.3"
+# Streams a Parquet snapshot to the presigned upload URL without reading it
+# into memory (publish.rs). A dataset can be gigabytes.
+tokio-util = { version = "0.7", features = ["io"] }
 # scankit wraps walkdir + size-cap + exclude-glob filtering into one
 # Scanner type — see scanner.rs for the call site. The previous code
 # was inline walkdir + ad-hoc filters, identical to v0.0 of scankit

@@ -969,3 +969,84 @@ mod chunk_tests {
         }
     }
 }
+
+// ── files.snapshot ─────────────────────────────────────────────────────────
+
+pub struct SnapshotFileCommand;
+
+#[async_trait]
+impl AgentCommand for SnapshotFileCommand {
+    fn name(&self) -> &'static str { "files.snapshot" }
+    fn description(&self) -> &'static str {
+        "Convert a tabular file to Parquet and upload it to a presigned URL, so the \
+         cloud can serve it while this machine is off. Only runs for data the \
+         publisher has put up for sale."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query_path": { "type": "string", "description": "Absolute path to the tabular file (CSV/TSV/Excel/Parquet/JSON)" },
+                "upload_url": { "type": "string", "description": "Presigned PUT URL to upload the Parquet to" }
+            },
+            "required": ["query_path", "upload_url"]
+        })
+    }
+
+    async fn execute(&self, ctx: Ctx) -> Result<Value, String> {
+        let upload_url = ctx.args["upload_url"].as_str().ok_or("missing upload_url")?.to_string();
+        let (folder_path, relative_path) = resolve_path(&ctx.args)?;
+        let source = format!("{}/{}", folder_path.trim_end_matches('/'), relative_path);
+
+        let already_parquet = std::path::Path::new(&source)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| e.eq_ignore_ascii_case("parquet"))
+            .unwrap_or(false);
+
+        // Upload Parquet as-is; convert anything else. When we convert we
+        // must not clobber or delete a file the user already had, so note
+        // whether the output existed beforehand.
+        // convert_to_parquet picks a non-colliding destination, so anything
+        // it produces is ours to delete afterwards — we never touch a file
+        // the publisher already had.
+        let (upload_path, converted) = if already_parquet {
+            (source.clone(), false)
+        } else {
+            let _ = ctx.progress.send(crate::agent_rpc::registry::Progress {
+                data: json!({ "stage": "converting" }),
+            }).await;
+
+            let result = crate::commands::convert_to_parquet(folder_path.clone(), relative_path.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+            (result.output_path, true)
+        };
+
+        let progress = ctx.progress.clone();
+        let uploaded = crate::publish::upload_stream(
+            std::path::Path::new(&upload_path),
+            &upload_url,
+            move |sent, total| {
+                let _ = progress.try_send(crate::agent_rpc::registry::Progress {
+                    data: json!({ "stage": "uploading", "sent": sent, "size_bytes": total }),
+                });
+            },
+        )
+        .await;
+
+        // Remove the intermediate Parquet only when this command created it.
+        // Left behind it would be picked up by the file watcher as a new
+        // dataset, and a snapshot should not mutate the publisher's folder.
+        if converted {
+            let _ = tokio::fs::remove_file(&upload_path).await;
+        }
+        let size_bytes = uploaded.map_err(|e| e.to_string())?;
+
+        Ok(json!({
+            "source":      source,
+            "size_bytes":  size_bytes,
+            "converted":   converted,
+        }))
+    }
+}

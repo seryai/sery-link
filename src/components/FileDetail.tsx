@@ -26,6 +26,7 @@ import {
   Loader2,
   Search,
   SquareArrowOutUpRight,
+  Store,
 } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useToast } from './Toast';
@@ -256,6 +257,25 @@ export function FileDetail() {
                     );
                   }}
                 />
+              )}
+            {/* Sell — opens Products with this file preselected. Only
+                local files: publishing reads the file to convert it. */}
+            {!isRemoteUrl(folderPath) &&
+              dataset &&
+              (fileCategory(dataset.file_format) === 'tabular' ||
+                fileCategory(dataset.file_format) === 'document') && (
+                <button
+                  onClick={() =>
+                    navigate(
+                      `/products?folder=${encodeURIComponent(folderPath)}&file=${encodeURIComponent(relativePath)}`,
+                    )
+                  }
+                  title="Publish this file as a product buyers can query. A copy is hosted by Sery; your file stays here."
+                  className="inline-flex items-center gap-1.5 rounded-md border border-purple-300 bg-purple-50 px-3 py-1.5 text-sm font-medium text-purple-800 hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-900/30 dark:text-purple-100 dark:hover:bg-purple-900/50"
+                >
+                  <Store className="h-3.5 w-3.5" />
+                  Sell
+                </button>
               )}
             {dataset && fileCategory(dataset.file_format) === 'tabular' && (
               <CopySqlButton filePath={

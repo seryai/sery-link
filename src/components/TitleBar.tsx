@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Bell, History, LayoutGrid, Plus, Settings } from 'lucide-react';
+import { Bell, History, LayoutGrid, Plus, Settings, Store } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { ConnectModal } from './ConnectModal';
 
@@ -78,6 +78,13 @@ export function TitleBar() {
           </TitleBtn>
           <TitleBtn onClick={() => setAddSourceOpen(true)} label="New source">
             <Plus className="h-4 w-4" />
+          </TitleBtn>
+          <TitleBtn
+            onClick={() => navigate('/products')}
+            label="Products"
+            active={isActive('/products')}
+          >
+            <Store className="h-4 w-4" />
           </TitleBtn>
           <TitleBtn
             onClick={() => navigate('/history')}

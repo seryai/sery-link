@@ -58,6 +58,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "url",
  "urlencoding",
  "uuid",
