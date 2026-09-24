@@ -89,6 +89,7 @@ pub static REGISTRY: Lazy<CommandRegistry> = Lazy::new(|| {
     r.register(super::commands::files::RichMetadataCommand);
     r.register(super::commands::files::RescanDatasetCommand);
     r.register(super::commands::files::ChunkDocumentCommand);
+    r.register(super::commands::files::SnapshotFileCommand);
 
     // sql.*
     r.register(super::commands::sql::ExecSqlCommand);
