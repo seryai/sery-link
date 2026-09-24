@@ -26,6 +26,7 @@ import { SearchPage } from './components/SearchPage';
 import { History } from './components/History';
 import { Privacy } from './components/Privacy';
 import { Settings } from './components/Settings';
+import { Products } from './components/Products';
 import { Notifications } from './components/Notifications';
 import { Recipes } from './components/Recipes';
 import { WorkspaceKeyRevokedModal } from './components/WorkspaceKeyRevokedModal';
@@ -219,6 +220,7 @@ function AppInner() {
             <Route path="/results" element={<Navigate to="/history" replace />} />
             <Route path="/recipes" element={<Recipes />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/products" element={<Products />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/privacy" element={<Privacy />} />
             <Route path="/db/:sourceId" element={<DatabaseDetail />} />

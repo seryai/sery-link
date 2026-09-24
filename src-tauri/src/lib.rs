@@ -35,6 +35,7 @@ mod relationship_detector;
 mod remote;
 mod remote_creds;
 mod preview_cache;
+mod publish;
 mod scan_cache;
 mod scanner;
 mod sftp;
@@ -316,6 +317,14 @@ pub fn run() {
             commands::profile_dataset,
             commands::read_dataset_rows,
             commands::convert_to_parquet,
+            publish::publish_list_products,
+            publish::publish_create_product,
+            publish::publish_update_product,
+            publish::publish_withdraw_product,
+            publish::publish_list_datasets,
+            publish::publish_remove_dataset,
+            publish::publish_precheck,
+            publish::publish_file,
             commands::get_cached_folder_metadata,
             commands::rescan_folder,
             commands::list_catch_up_folders,

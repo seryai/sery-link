@@ -485,3 +485,15 @@ export interface DbSshConfig {
   key_path?: string;
   key_passphrase?: string;
 }
+
+/** Emitted by publish.rs while a file is converted, uploaded and bound to
+ *  a product. `stage` walks precheck → converting → uploading →
+ *  completing (or ingesting, for documents) → done | error. */
+export interface PublishProgressPayload {
+  product_hash: string;
+  relative_path: string;
+  stage: 'precheck' | 'converting' | 'uploading' | 'completing' | 'ingesting' | 'done' | 'error';
+  done_bytes: number;
+  total_bytes: number;
+  detail: string | null;
+}
